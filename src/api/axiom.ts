@@ -9,10 +9,12 @@ import {
   AxiomEngineError,
 } from '../engine/axiomEngine.js';
 import { AXIOM_BLOCKS } from '../types/blocks.js';
+import { testOpenAI } from '../services/openaiClient.js';
 
 const AxiomBodySchema = z.object({
   sessionId: z.string().min(8).optional(),
-  userMessage: z.string().min(1),
+  userMessage: z.string().min(1).optional(),
+  test: z.boolean().optional(),
 });
 
 export async function registerAxiomRoutes(app: FastifyInstance) {
@@ -26,6 +28,22 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
       return reply.code(400).send({
         error: 'BAD_REQUEST',
         details: parsed.error.flatten(),
+      });
+    }
+
+    // Test OpenAI temporaire
+    if (parsed.data.test === true) {
+      const openaiResponse = await testOpenAI();
+      return reply.send({
+        ok: true,
+        openaiResponse,
+      });
+    }
+
+    if (!parsed.data.userMessage) {
+      return reply.code(400).send({
+        error: 'BAD_REQUEST',
+        message: 'userMessage is required when test is not true',
       });
     }
 
