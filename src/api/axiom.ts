@@ -4,12 +4,12 @@ import { sessionStore } from '../store/sessionStore.js';
 import { v4 as uuidv4 } from 'uuid';
 import {
   advanceBlock,
-  setWaitingGo,
   startMatching,
   AxiomEngineError,
 } from '../engine/axiomEngine.js';
 import { AXIOM_BLOCKS } from '../types/blocks.js';
 import { testOpenAI } from '../services/openaiClient.js';
+import { executeProfilPrompt } from '../services/axiomExecutor.js';
 
 const AxiomBodySchema = z.object({
   sessionId: z.string().min(8).optional(),
@@ -37,13 +37,6 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
       return reply.send({
         ok: true,
         openaiResponse,
-      });
-    }
-
-    if (!parsed.data.userMessage) {
-      return reply.code(400).send({
-        error: 'BAD_REQUEST',
-        message: 'userMessage is required when test is not true',
       });
     }
 
@@ -75,16 +68,20 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
       }
     }
 
+    // Exécuter le prompt PROFIL si state === collecting
+    if (session.state === 'collecting') {
+      const aiResponse = await executeProfilPrompt(session, parsed.data.userMessage);
+      return reply.send({
+        sessionId: session.sessionId,
+        currentBlock: session.currentBlock,
+        state: session.state,
+        response: aiResponse,
+      });
+    }
+
     // Appliquer les transitions selon l'état actuel
     try {
-      if (session.state === 'collecting') {
-        // L'utilisateur a terminé de répondre au bloc actuel
-        session = setWaitingGo(session);
-        app.log.info(
-          { sessionId: session.sessionId, currentBlock: session.currentBlock },
-          'Transition: collecting → waiting_go',
-        );
-      } else if (session.state === 'waiting_go') {
+      if (session.state === 'waiting_go') {
         if (session.currentBlock < AXIOM_BLOCKS.MAX) {
           // Avancer au bloc suivant
           session = advanceBlock(session);
