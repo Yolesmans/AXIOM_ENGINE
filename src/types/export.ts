@@ -12,7 +12,7 @@ export interface LiveTrackingRow {
   email: string;
   axiomStarted: 'oui' | 'non';
   currentBlock: number;
-  axiomState: 'collecting' | 'waiting_go' | 'matching';
+  axiomState: 'identity' | 'collecting' | 'waiting_go' | 'matching';
   axiomCompleted: 'oui' | 'non';
   matchingAvailable: 'oui' | 'non';
   lastActivity: Date;

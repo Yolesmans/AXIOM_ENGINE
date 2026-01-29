@@ -4,6 +4,7 @@ export interface CandidateIdentity {
   firstName: string;
   lastName: string;
   email: string;
+  completedAt: Date | null;
 }
 
 export interface CandidateSession {

@@ -7,16 +7,23 @@ class CandidateStore {
   create(
     candidateId: string,
     tenantId: string,
-    identity: CandidateIdentity,
+    identity?: Partial<CandidateIdentity>,
   ): AxiomCandidate {
     const now = new Date();
+    const hasIdentity = identity?.firstName && identity?.lastName && identity?.email;
+    
     const candidate: AxiomCandidate = {
       candidateId,
       tenantId,
-      identity,
+      identity: {
+        firstName: identity?.firstName || '',
+        lastName: identity?.lastName || '',
+        email: identity?.email || '',
+        completedAt: hasIdentity ? now : null,
+      },
       session: {
         currentBlock: 1,
-        state: 'collecting',
+        state: hasIdentity ? 'collecting' : 'identity',
         startedAt: now,
         lastActivityAt: now,
       },
@@ -26,6 +33,32 @@ class CandidateStore {
 
     this.candidates.set(candidateId, candidate);
     return candidate;
+  }
+
+  updateIdentity(
+    candidateId: string,
+    identity: CandidateIdentity,
+  ): AxiomCandidate | undefined {
+    const candidate = this.candidates.get(candidateId);
+    if (!candidate) {
+      return undefined;
+    }
+
+    const updated: AxiomCandidate = {
+      ...candidate,
+      identity: {
+        ...identity,
+        completedAt: new Date(),
+      },
+      session: {
+        ...candidate.session,
+        state: candidate.session.state === 'identity' ? 'collecting' : candidate.session.state,
+        lastActivityAt: new Date(),
+      },
+    };
+
+    this.candidates.set(candidateId, updated);
+    return updated;
   }
 
   get(candidateId: string): AxiomCandidate | undefined {

@@ -11,12 +11,21 @@ import { AXIOM_BLOCKS } from '../types/blocks.js';
 import { testOpenAI } from '../services/openaiClient.js';
 import { executeProfilPrompt } from '../services/axiomExecutor.js';
 import { candidateToSession, updateCandidateFromSession } from '../utils/candidateAdapter.js';
+import { IdentitySchema } from '../validators/identity.js';
+import { toLiveTrackingRow } from '../services/exportService.js';
 
 const AxiomBodySchema = z.object({
   tenantId: z.string().min(1),
   sessionId: z.string().min(8).optional(),
   userMessage: z.string().min(1).optional(),
   test: z.boolean().optional(),
+  identity: z
+    .object({
+      firstName: z.string().min(1),
+      lastName: z.string().min(1),
+      email: z.string().email(),
+    })
+    .optional(),
 });
 
 export async function registerAxiomRoutes(app: FastifyInstance) {
@@ -42,27 +51,14 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
       });
     }
 
-    const { tenantId, sessionId: providedSessionId } = parsed.data;
+    const { tenantId, sessionId: providedSessionId, identity: providedIdentity } = parsed.data;
 
-    // TODO: Étape 7.2 - Récupérer l'identité du candidat
-    // Pour l'instant, on utilise des valeurs par défaut pour la compatibilité
     let candidate;
     if (!providedSessionId) {
-      // Créer un nouveau candidat
+      // CAS 1 : Nouvelle session
       const candidateId = uuidv4();
-      candidate = candidateStore.create(
-        candidateId,
-        tenantId,
-        {
-          firstName: 'Unknown',
-          lastName: 'Unknown',
-          email: 'unknown@example.com',
-        },
-      );
-      app.log.info(
-        { candidateId, tenantId },
-        'Nouveau candidat AXIOM créé',
-      );
+      candidate = candidateStore.create(candidateId, tenantId);
+      app.log.info({ candidateId, tenantId }, 'Nouveau candidat AXIOM créé');
     } else {
       // Charger le candidat existant
       candidate = candidateStore.get(providedSessionId);
@@ -72,15 +68,7 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
           'Candidat non trouvé, création d\'un nouveau candidat',
         );
         const candidateId = uuidv4();
-        candidate = candidateStore.create(
-          candidateId,
-          tenantId,
-          {
-            firstName: 'Unknown',
-            lastName: 'Unknown',
-            email: 'unknown@example.com',
-          },
-        );
+        candidate = candidateStore.create(candidateId, tenantId);
       } else {
         // Vérifier l'isolation tenant
         if (candidate.tenantId !== tenantId) {
@@ -96,8 +84,81 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
       }
     }
 
+    // CAS 2 : Réception identité valide
+    if (providedIdentity && candidate.session.state === 'identity') {
+      const identityValidation = IdentitySchema.safeParse(providedIdentity);
+      if (!identityValidation.success) {
+        return reply.code(400).send({
+          error: 'INVALID_IDENTITY',
+          message: 'Avant de commencer AXIOM, j\'ai besoin de :\n- ton prénom\n- ton nom\n- ton adresse email',
+          details: identityValidation.error.flatten(),
+        });
+      }
+
+      candidate = candidateStore.updateIdentity(candidate.candidateId, {
+        firstName: identityValidation.data.firstName,
+        lastName: identityValidation.data.lastName,
+        email: identityValidation.data.email,
+        completedAt: new Date(),
+      });
+
+      if (!candidate) {
+        return reply.code(500).send({
+          error: 'INTERNAL_ERROR',
+          message: 'Failed to update identity',
+        });
+      }
+
+      app.log.info(
+        { candidateId: candidate.candidateId, tenantId },
+        'Identité candidat enregistrée, passage à collecting',
+      );
+
+      // Mettre à jour le suivi live
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const trackingRow = toLiveTrackingRow(candidate);
+        // TODO: Appeler googleSheetsService.updateLiveTracking(tenantId, trackingRow)
+      } catch (error) {
+        app.log.warn({ error }, 'Failed to update live tracking');
+      }
+
+      // Lancer AXIOM_PROFIL normalement
+      const session = candidateToSession(candidate);
+      const aiResponse = await executeProfilPrompt(session, undefined);
+      
+      candidateStore.updateSession(candidate.candidateId, {});
+
+      return reply.send({
+        sessionId: candidate.candidateId,
+        currentBlock: candidate.session.currentBlock,
+        state: candidate.session.state,
+        response: aiResponse,
+      });
+    }
+
+    // CAS 3 : Tentative AXIOM sans identité complète
+    if (candidate.session.state === 'identity') {
+      return reply.send({
+        sessionId: candidate.candidateId,
+        currentBlock: candidate.session.currentBlock,
+        state: candidate.session.state,
+        response: 'Avant de commencer AXIOM, j\'ai besoin de :\n- ton prénom\n- ton nom\n- ton adresse email',
+      });
+    }
+
     // Convertir en session pour compatibilité avec le moteur existant
     const session = candidateToSession(candidate);
+
+    // Vérifier que l'identité est complète avant toute exécution AXIOM
+    if (!candidate.identity.completedAt) {
+      return reply.send({
+        sessionId: candidate.candidateId,
+        currentBlock: candidate.session.currentBlock,
+        state: 'identity',
+        response: 'Avant de commencer AXIOM, j\'ai besoin de :\n- ton prénom\n- ton nom\n- ton adresse email',
+      });
+    }
 
     // Exécuter le prompt PROFIL si state === collecting
     if (candidate.session.state === 'collecting') {
@@ -105,6 +166,15 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
       
       // Mettre à jour l'activité
       candidateStore.updateSession(candidate.candidateId, {});
+
+      // Mettre à jour le suivi live
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const trackingRow = toLiveTrackingRow(candidate);
+        // TODO: Appeler googleSheetsService.updateLiveTracking(tenantId, trackingRow)
+      } catch (error) {
+        app.log.warn({ error }, 'Failed to update live tracking');
+      }
 
       return reply.send({
         sessionId: candidate.candidateId,
