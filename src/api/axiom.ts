@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { FastifyInstance } from 'fastify';
-import { sessionStore } from '../store/sessionStore.js';
+import { candidateStore } from '../store/sessionStore.js';
 import { v4 as uuidv4 } from 'uuid';
 import {
   advanceBlock,
@@ -10,8 +10,10 @@ import {
 import { AXIOM_BLOCKS } from '../types/blocks.js';
 import { testOpenAI } from '../services/openaiClient.js';
 import { executeProfilPrompt } from '../services/axiomExecutor.js';
+import { candidateToSession, updateCandidateFromSession } from '../utils/candidateAdapter.js';
 
 const AxiomBodySchema = z.object({
+  tenantId: z.string().min(1),
   sessionId: z.string().min(8).optional(),
   userMessage: z.string().min(1).optional(),
   test: z.boolean().optional(),
@@ -40,75 +42,117 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
       });
     }
 
-    const { sessionId: providedSessionId } = parsed.data;
+    const { tenantId, sessionId: providedSessionId } = parsed.data;
 
-    let session;
+    // TODO: Étape 7.2 - Récupérer l'identité du candidat
+    // Pour l'instant, on utilise des valeurs par défaut pour la compatibilité
+    let candidate;
     if (!providedSessionId) {
-      // Créer une nouvelle session
-      const newSessionId = uuidv4();
-      session = sessionStore.create(newSessionId);
+      // Créer un nouveau candidat
+      const candidateId = uuidv4();
+      candidate = candidateStore.create(
+        candidateId,
+        tenantId,
+        {
+          firstName: 'Unknown',
+          lastName: 'Unknown',
+          email: 'unknown@example.com',
+        },
+      );
       app.log.info(
-        { sessionId: newSessionId },
-        'Nouvelle session AXIOM créée',
+        { candidateId, tenantId },
+        'Nouveau candidat AXIOM créé',
       );
     } else {
-      // Charger la session existante
-      session = sessionStore.get(providedSessionId);
-      if (!session) {
+      // Charger le candidat existant
+      candidate = candidateStore.get(providedSessionId);
+      if (!candidate) {
         app.log.warn(
-          { sessionId: providedSessionId },
-          'Session non trouvée, création d\'une nouvelle session',
+          { candidateId: providedSessionId, tenantId },
+          'Candidat non trouvé, création d\'un nouveau candidat',
         );
-        session = sessionStore.create(providedSessionId);
+        const candidateId = uuidv4();
+        candidate = candidateStore.create(
+          candidateId,
+          tenantId,
+          {
+            firstName: 'Unknown',
+            lastName: 'Unknown',
+            email: 'unknown@example.com',
+          },
+        );
       } else {
+        // Vérifier l'isolation tenant
+        if (candidate.tenantId !== tenantId) {
+          return reply.code(403).send({
+            error: 'TENANT_MISMATCH',
+            message: 'Candidate does not belong to this tenant',
+          });
+        }
         app.log.info(
-          { sessionId: providedSessionId, state: session.state, currentBlock: session.currentBlock },
-          'Session chargée',
+          { candidateId: providedSessionId, tenantId, state: candidate.session.state, currentBlock: candidate.session.currentBlock },
+          'Candidat chargé',
         );
       }
     }
 
+    // Convertir en session pour compatibilité avec le moteur existant
+    const session = candidateToSession(candidate);
+
     // Exécuter le prompt PROFIL si state === collecting
-    if (session.state === 'collecting') {
+    if (candidate.session.state === 'collecting') {
       const aiResponse = await executeProfilPrompt(session, parsed.data.userMessage);
+      
+      // Mettre à jour l'activité
+      candidateStore.updateSession(candidate.candidateId, {});
+
       return reply.send({
-        sessionId: session.sessionId,
-        currentBlock: session.currentBlock,
-        state: session.state,
+        sessionId: candidate.candidateId,
+        currentBlock: candidate.session.currentBlock,
+        state: candidate.session.state,
         response: aiResponse,
       });
     }
 
     // Appliquer les transitions selon l'état actuel
     try {
-      if (session.state === 'waiting_go') {
-        if (session.currentBlock < AXIOM_BLOCKS.MAX) {
+      if (candidate.session.state === 'waiting_go') {
+        if (candidate.session.currentBlock < AXIOM_BLOCKS.MAX) {
           // Avancer au bloc suivant
-          session = advanceBlock(session);
+          const updatedSession = advanceBlock(session);
+          candidate = updateCandidateFromSession(candidate, updatedSession);
+          candidateStore.updateSession(candidate.candidateId, {
+            currentBlock: updatedSession.currentBlock,
+            state: updatedSession.state,
+          });
           app.log.info(
-            { sessionId: session.sessionId, currentBlock: session.currentBlock },
+            { candidateId: candidate.candidateId, currentBlock: candidate.session.currentBlock },
             'Transition: waiting_go → collecting (bloc suivant)',
           );
         } else {
           // Démarrer le matching (dernier bloc terminé)
-          session = startMatching(session);
+          const updatedSession = startMatching(session);
+          candidate = updateCandidateFromSession(candidate, updatedSession);
+          candidateStore.updateSession(candidate.candidateId, {
+            state: updatedSession.state,
+          });
           app.log.info(
-            { sessionId: session.sessionId },
+            { candidateId: candidate.candidateId },
             'Transition: waiting_go → matching',
           );
         }
-      } else if (session.state === 'matching') {
+      } else if (candidate.session.state === 'matching') {
         // État final, aucune transition possible
         app.log.info(
-          { sessionId: session.sessionId },
-          'Session en état matching (final)',
+          { candidateId: candidate.candidateId },
+          'Candidat en état matching (final)',
         );
       }
     } catch (error) {
       if (error instanceof AxiomEngineError) {
         app.log.warn(
           {
-            sessionId: session.sessionId,
+            candidateId: candidate.candidateId,
             error: error.code,
             message: error.message,
           },
@@ -119,9 +163,9 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
           code: error.code,
           message: error.message,
           session: {
-            sessionId: session.sessionId,
-            currentBlock: session.currentBlock,
-            state: session.state,
+            sessionId: candidate.candidateId,
+            currentBlock: candidate.session.currentBlock,
+            state: candidate.session.state,
           },
         });
       }
@@ -129,9 +173,9 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
     }
 
     return reply.send({
-      sessionId: session.sessionId,
-      currentBlock: session.currentBlock,
-      state: session.state,
+      sessionId: candidate.candidateId,
+      currentBlock: candidate.session.currentBlock,
+      state: candidate.session.state,
     });
   });
 }

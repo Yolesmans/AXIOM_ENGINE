@@ -1,6 +1,5 @@
 import type { AxiomSession } from '../types/session.js';
 import { AXIOM_BLOCKS, isValidBlockNumber } from '../types/blocks.js';
-import { sessionStore } from '../store/sessionStore.js';
 
 export class AxiomEngineError extends Error {
   constructor(
@@ -50,19 +49,12 @@ export function advanceBlock(session: AxiomSession): AxiomSession {
     );
   }
 
-  const updated = sessionStore.update(session.sessionId, {
+  return {
+    ...session,
     currentBlock: nextBlock,
     state: 'collecting',
-  });
-
-  if (!updated) {
-    throw new AxiomEngineError(
-      'Session introuvable lors de la mise à jour',
-      'SESSION_NOT_FOUND',
-    );
-  }
-
-  return updated;
+    updatedAt: new Date(),
+  };
 }
 
 /**
@@ -78,18 +70,11 @@ export function setWaitingGo(session: AxiomSession): AxiomSession {
     );
   }
 
-  const updated = sessionStore.update(session.sessionId, {
+  return {
+    ...session,
     state: 'waiting_go',
-  });
-
-  if (!updated) {
-    throw new AxiomEngineError(
-      'Session introuvable lors de la mise à jour',
-      'SESSION_NOT_FOUND',
-    );
-  }
-
-  return updated;
+    updatedAt: new Date(),
+  };
 }
 
 /**
@@ -112,16 +97,9 @@ export function startMatching(session: AxiomSession): AxiomSession {
     );
   }
 
-  const updated = sessionStore.update(session.sessionId, {
+  return {
+    ...session,
     state: 'matching',
-  });
-
-  if (!updated) {
-    throw new AxiomEngineError(
-      'Session introuvable lors de la mise à jour',
-      'SESSION_NOT_FOUND',
-    );
-  }
-
-  return updated;
+    updatedAt: new Date(),
+  };
 }

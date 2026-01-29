@@ -1,50 +1,99 @@
-import type { AxiomSession } from '../types/session.js';
+import type { AxiomCandidate, CandidateIdentity } from '../types/candidate.js';
+import type { AxiomState } from '../types/session.js';
 
-class SessionStore {
-  private sessions: Map<string, AxiomSession> = new Map();
+class CandidateStore {
+  private candidates: Map<string, AxiomCandidate> = new Map();
 
-  create(sessionId: string): AxiomSession {
+  create(
+    candidateId: string,
+    tenantId: string,
+    identity: CandidateIdentity,
+  ): AxiomCandidate {
     const now = new Date();
-    const session: AxiomSession = {
-      sessionId,
-      currentBlock: 1,
-      state: 'collecting',
+    const candidate: AxiomCandidate = {
+      candidateId,
+      tenantId,
+      identity,
+      session: {
+        currentBlock: 1,
+        state: 'collecting',
+        startedAt: now,
+        lastActivityAt: now,
+      },
       answers: {},
       blockSummaries: {},
-      createdAt: now,
-      updatedAt: now,
     };
 
-    this.sessions.set(sessionId, session);
-    return session;
+    this.candidates.set(candidateId, candidate);
+    return candidate;
   }
 
-  get(sessionId: string): AxiomSession | undefined {
-    return this.sessions.get(sessionId);
+  get(candidateId: string): AxiomCandidate | undefined {
+    return this.candidates.get(candidateId);
   }
 
-  update(
-    sessionId: string,
-    updates: Partial<Pick<AxiomSession, 'currentBlock' | 'state' | 'answers' | 'blockSummaries'>>,
-  ): AxiomSession | undefined {
-    const session = this.sessions.get(sessionId);
-    if (!session) {
+  getByTenant(tenantId: string): AxiomCandidate[] {
+    return Array.from(this.candidates.values()).filter(
+      (candidate) => candidate.tenantId === tenantId,
+    );
+  }
+
+  updateSession(
+    candidateId: string,
+    updates: Partial<{
+      currentBlock: number;
+      state: AxiomState;
+      completedAt: Date;
+    }>,
+  ): AxiomCandidate | undefined {
+    const candidate = this.candidates.get(candidateId);
+    if (!candidate) {
       return undefined;
     }
 
-    const updated: AxiomSession = {
-      ...session,
-      ...updates,
-      updatedAt: new Date(),
+    const updated: AxiomCandidate = {
+      ...candidate,
+      session: {
+        ...candidate.session,
+        ...updates,
+        lastActivityAt: new Date(),
+      },
     };
 
-    this.sessions.set(sessionId, updated);
+    this.candidates.set(candidateId, updated);
     return updated;
   }
 
-  exists(sessionId: string): boolean {
-    return this.sessions.has(sessionId);
+  updatePrivateData(
+    candidateId: string,
+    updates: Partial<{
+      answers: Record<string, unknown>;
+      blockSummaries: Record<string, unknown>;
+      finalProfile: Record<string, unknown>;
+      matchingResult: Record<string, unknown>;
+    }>,
+  ): AxiomCandidate | undefined {
+    const candidate = this.candidates.get(candidateId);
+    if (!candidate) {
+      return undefined;
+    }
+
+    const updated: AxiomCandidate = {
+      ...candidate,
+      ...updates,
+      session: {
+        ...candidate.session,
+        lastActivityAt: new Date(),
+      },
+    };
+
+    this.candidates.set(candidateId, updated);
+    return updated;
+  }
+
+  exists(candidateId: string): boolean {
+    return this.candidates.has(candidateId);
   }
 }
 
-export const sessionStore = new SessionStore();
+export const candidateStore = new CandidateStore();
