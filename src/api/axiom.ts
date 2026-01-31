@@ -145,7 +145,14 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
         const trackingRow = candidateToLiveTrackingRow(candidate);
         await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
       } catch (error) {
-        app.log.warn({ error }, 'Failed to update live tracking');
+        app.log.error({
+          tenantId,
+          posteId,
+          candidateId: candidate.candidateId,
+          errorMessage: error instanceof Error ? error.message : String(error),
+          errorStack: error instanceof Error ? error.stack : undefined,
+          googleResponse: (error as any)?.response?.data,
+        }, 'Failed to update live tracking');
       }
 
       return reply.send({
@@ -221,7 +228,14 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
         const trackingRow = candidateToLiveTrackingRow(candidate);
         await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
       } catch (error) {
-        app.log.warn({ error }, 'Failed to update live tracking');
+        app.log.error({
+          tenantId,
+          posteId,
+          candidateId: candidate.candidateId,
+          errorMessage: error instanceof Error ? error.message : String(error),
+          errorStack: error instanceof Error ? error.stack : undefined,
+          googleResponse: (error as any)?.response?.data,
+        }, 'Failed to update live tracking');
       }
 
       return reply.send({
@@ -245,7 +259,14 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
           const trackingRow = candidateToLiveTrackingRow(candidate);
           await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
         } catch (error) {
-          app.log.warn({ error }, 'Failed to update live tracking');
+          app.log.error({
+            tenantId,
+            posteId,
+            candidateId: candidate.candidateId,
+            errorMessage: error instanceof Error ? error.message : String(error),
+            errorStack: error instanceof Error ? error.stack : undefined,
+            googleResponse: (error as any)?.response?.data,
+          }, 'Failed to update live tracking');
         }
 
         return reply.send({
@@ -308,7 +329,14 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
         const trackingRow = candidateToLiveTrackingRow(candidate);
         await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
       } catch (error) {
-        app.log.warn({ error }, 'Failed to update live tracking');
+        app.log.error({
+          tenantId,
+          posteId,
+          candidateId: candidate.candidateId,
+          errorMessage: error instanceof Error ? error.message : String(error),
+          errorStack: error instanceof Error ? error.stack : undefined,
+          googleResponse: (error as any)?.response?.data,
+        }, 'Failed to update live tracking');
       }
 
       return reply.send({
@@ -360,7 +388,14 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
         const trackingRow = candidateToLiveTrackingRow(candidate);
         await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
       } catch (error) {
-        app.log.warn({ error }, 'Failed to update live tracking');
+        app.log.error({
+          tenantId,
+          posteId,
+          candidateId: candidate.candidateId,
+          errorMessage: error instanceof Error ? error.message : String(error),
+          errorStack: error instanceof Error ? error.stack : undefined,
+          googleResponse: (error as any)?.response?.data,
+        }, 'Failed to update live tracking');
       }
 
       return reply.send({

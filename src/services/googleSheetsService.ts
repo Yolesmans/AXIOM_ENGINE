@@ -2,8 +2,8 @@ import { google } from 'googleapis';
 import fs from 'fs';
 import type { AxiomCandidate } from '../types/candidate.js';
 import type { LiveTrackingRow } from '../types/liveTracking.js';
-import { getSpreadsheetIdForTenant } from '../store/tenantRegistry.js';
 import { getPostConfig } from '../store/postRegistry.js';
+import { env } from '../env.js';
 
 function getStatusLabel(state: LiveTrackingRow['state'], currentBlock: number | null): string {
   switch (state) {
@@ -411,8 +411,11 @@ class GoogleSheetsLiveTrackingService {
         throw new Error('Google Sheets not initialized');
       }
 
+      if (!env.GOOGLE_SHEETS_SPREADSHEET_ID) {
+        throw new Error('GOOGLE_SHEETS_SPREADSHEET_ID is not defined');
+      }
       const post = getPostConfig(tenantId, posteId);
-      const spreadsheetId = getSpreadsheetIdForTenant(tenantId);
+      const spreadsheetId = env.GOOGLE_SHEETS_SPREADSHEET_ID;
       await this.ensureSheetExists(spreadsheetId, post.label, tenantId, posteId);
 
       const statusAxiom = this.getStatusAxiomLabel(row.state);
@@ -448,14 +451,27 @@ class GoogleSheetsLiveTrackingService {
   }
 
   async upsertLiveTracking(tenantId: string, posteId: string, row: LiveTrackingRow): Promise<void> {
+    let spreadsheetId: string | undefined;
+    let sheetName: string | undefined;
+    let range: string | undefined;
     try {
       await this.initializeAuth();
       if (!this.sheets) {
         throw new Error('Google Sheets not initialized');
       }
 
+      if (!env.GOOGLE_SHEETS_SPREADSHEET_ID) {
+        throw new Error('GOOGLE_SHEETS_SPREADSHEET_ID is not defined');
+      }
       const post = getPostConfig(tenantId, posteId);
-      const spreadsheetId = getSpreadsheetIdForTenant(tenantId);
+      spreadsheetId = env.GOOGLE_SHEETS_SPREADSHEET_ID;
+      sheetName = post.label;
+      console.log('[GS] ensureSheetExists', {
+        spreadsheetId,
+        sheetName,
+        tenantId,
+        posteId,
+      });
       await this.ensureSheetExists(spreadsheetId, post.label, tenantId, posteId);
 
       const statusAxiom = this.getStatusAxiomLabel(row.state);
@@ -476,7 +492,8 @@ class GoogleSheetsLiveTrackingService {
         ],
       ];
 
-      const range = `${post.label}!A4:I`;
+      range = `${post.label}!A4:I`;
+      console.log('[GS] values.get', { range });
       const response = await this.sheets.spreadsheets.values.get({
         spreadsheetId,
         range,
@@ -488,15 +505,28 @@ class GoogleSheetsLiveTrackingService {
       );
 
       if (candidateIndex >= 0) {
+        const updateRange = `${post.label}!A${candidateIndex + 4}:I${candidateIndex + 4}`;
+        console.log('[GS] values.update', {
+          range: updateRange,
+          sheetName: post.label,
+          candidateId: row.candidateId,
+          email: row.email,
+        });
         await this.sheets.spreadsheets.values.update({
           spreadsheetId,
-          range: `${post.label}!A${candidateIndex + 4}:I${candidateIndex + 4}`,
+          range: updateRange,
           valueInputOption: 'RAW',
           requestBody: {
             values,
           },
         });
       } else {
+        console.log('[GS] values.append', {
+          range,
+          sheetName: post.label,
+          candidateId: row.candidateId,
+          email: row.email,
+        });
         await this.sheets.spreadsheets.values.append({
           spreadsheetId,
           range,
@@ -508,68 +538,17 @@ class GoogleSheetsLiveTrackingService {
         });
       }
     } catch (error) {
+      console.error('[GS] upsertLiveTracking error', {
+        spreadsheetId,
+        sheetName,
+        range,
+        errorMessage: error instanceof Error ? error.message : String(error),
+        errorStack: error instanceof Error ? error.stack : undefined,
+        googleResponse: (error as any)?.response?.data,
+      });
       throw new Error(`Failed to upsert live tracking: ${error}`);
     }
   }
 }
 
 export const googleSheetsLiveTrackingService = new GoogleSheetsLiveTrackingService();
-
-export async function createCompanySpreadsheetIfNotExists(params: {
-  tenantId: string;
-  companyName: string;
-  emailRH: string;
-}): Promise<{ spreadsheetId: string; url: string }> {
-  try {
-    const existingSpreadsheetId = getSpreadsheetIdForTenant(params.tenantId);
-    return {
-      spreadsheetId: existingSpreadsheetId,
-      url: `https://docs.google.com/spreadsheets/d/${existingSpreadsheetId}`,
-    };
-  } catch (e) {
-    // Tenant n'existe pas, créer le sheet
-  }
-
-  const credentialsPath = process.env.GOOGLE_SHEETS_CREDENTIALS;
-  if (!credentialsPath) {
-    throw new Error('GOOGLE_SHEETS_CREDENTIALS is not defined');
-  }
-
-  const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
-  const auth = google.auth.fromJSON(credentials) as any;
-  if (!auth) {
-    throw new Error('Failed to initialize Google Auth');
-  }
-  if ('scopes' in auth) {
-    (auth as { scopes: string[] }).scopes = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive'];
-  }
-  const sheets = google.sheets({ version: 'v4', auth });
-  const drive = google.drive({ version: 'v3', auth });
-
-  const spreadsheet = await sheets.spreadsheets.create({
-    requestBody: {
-      properties: {
-        title: `AXIOM — ${params.companyName}`,
-      },
-    },
-  });
-
-  const spreadsheetId = spreadsheet.data.spreadsheetId;
-  if (!spreadsheetId) {
-    throw new Error('Failed to create spreadsheet');
-  }
-
-  await drive.permissions.create({
-    fileId: spreadsheetId,
-    requestBody: {
-      role: 'writer',
-      type: 'user',
-      emailAddress: params.emailRH,
-    },
-  });
-
-  return {
-    spreadsheetId,
-    url: `https://docs.google.com/spreadsheets/d/${spreadsheetId}`,
-  };
-}
