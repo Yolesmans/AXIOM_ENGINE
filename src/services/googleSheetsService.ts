@@ -175,6 +175,20 @@ class GoogleSheetsLiveTrackingService {
         existingHeaders.every((h, i) => h === expectedHeaders[i]);
 
       if (!headersMatch) {
+        // Vérifier s'il y a des données après la ligne 3
+        const dataRange = `${sheetName}!A4:I`;
+        const dataResponse = await this.sheets.spreadsheets.values.get({
+          spreadsheetId,
+          range: dataRange,
+        });
+
+        const hasData = dataResponse.data.values && dataResponse.data.values.length > 0 && dataResponse.data.values.some((row) => row && row.some((cell) => cell && String(cell).trim() !== ''));
+
+        // Ne jamais réécrire les headers si des données existent
+        if (hasData) {
+          return;
+        }
+
         await this.sheets.spreadsheets.values.update({
           spreadsheetId,
           range: headerRange,
