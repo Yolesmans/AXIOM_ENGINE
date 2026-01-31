@@ -123,7 +123,7 @@ class CandidateStore {
     updates: Partial<{
       blockSummaries: Record<string, unknown>;
       finalProfile: Record<string, unknown>;
-      matchingResult: Record<string, unknown>;
+      matchingResult: MatchingResult | undefined;
     }>,
   ): AxiomCandidate | undefined {
     const candidate = this.candidates.get(candidateId);
