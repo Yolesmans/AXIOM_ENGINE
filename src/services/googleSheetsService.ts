@@ -59,13 +59,10 @@ class GoogleSheetsLiveTrackingService {
       return;
     }
 
-    const credentialsPath = process.env.GOOGLE_SHEETS_CREDENTIALS;
-    if (!credentialsPath) {
-      throw new Error('GOOGLE_SHEETS_CREDENTIALS is not defined');
-    }
-
     try {
-      const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
+      const credentials = process.env.GOOGLE_SHEETS_CREDENTIALS_JSON
+        ? JSON.parse(process.env.GOOGLE_SHEETS_CREDENTIALS_JSON)
+        : JSON.parse(fs.readFileSync(process.env.GOOGLE_SHEETS_CREDENTIALS!, 'utf8'));
       this.auth = google.auth.fromJSON(credentials);
       if (!this.auth) {
         throw new Error('Failed to initialize Google Auth');
