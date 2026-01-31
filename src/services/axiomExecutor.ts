@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import OpenAI from 'openai';
 import type { AxiomSession } from '../types/session.js';
+import type { AnswerRecord } from '../types/answer.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -23,33 +24,85 @@ async function loadPromptFile(filename: string): Promise<string> {
   return content;
 }
 
-function buildSessionContext(session: AxiomSession, userMessage?: string): string {
+function buildSessionContext(
+  session: AxiomSession,
+  answers: AnswerRecord[],
+): string {
   const context = [
     `SESSION CONTEXT:`,
     `- sessionId: ${session.sessionId}`,
     `- currentBlock: ${session.currentBlock}`,
     `- state: ${session.state}`,
-    `- answers: ${JSON.stringify(session.answers, null, 2)}`,
     `- blockSummaries: ${JSON.stringify(session.blockSummaries, null, 2)}`,
+    `- answers (ordre chronologique):`,
   ];
 
-  if (userMessage) {
-    context.push(`- userMessage: ${userMessage}`);
-  }
+  answers.forEach((answer, index) => {
+    context.push(`  ${index + 1}. [Bloc ${answer.block}] ${answer.message} (${answer.createdAt})`);
+  });
 
   return context.join('\n');
 }
 
 export async function executeProfilPrompt(
   session: AxiomSession,
-  userMessage?: string,
+  answers: AnswerRecord[],
 ): Promise<string> {
   const systemPrompt = await loadPromptFile('system/AXIOM_ENGINE.txt');
   const profilPrompt = await loadPromptFile('metier/AXIOM_PROFIL.txt');
 
-  const sessionContext = buildSessionContext(session, userMessage);
+  const sessionContext = buildSessionContext(session, answers);
 
   const userContent = `${profilPrompt}\n\n${sessionContext}`;
+
+  const response = await client.chat.completions.create({
+    model: 'gpt-4o-mini',
+    messages: [
+      {
+        role: 'system',
+        content: systemPrompt,
+      },
+      {
+        role: 'user',
+        content: userContent,
+      },
+    ],
+    temperature: 0.7,
+  });
+
+  const content = response.choices[0]?.message?.content;
+  if (!content) {
+    throw new Error('No response content from OpenAI');
+  }
+
+  return content;
+}
+
+export async function executeMatchingPrompt(params: {
+  tenantId: string;
+  posteId: string;
+  sessionId: string;
+  answers: AnswerRecord[];
+  finalProfileText: string;
+}): Promise<string> {
+  const systemPrompt = await loadPromptFile('system/AXIOM_ENGINE.txt');
+  const matchingPrompt = await loadPromptFile('metier/AXIOM_MATCHING.txt');
+
+  const context = [
+    `MATCHING CONTEXT:`,
+    `- tenantId: ${params.tenantId}`,
+    `- posteId: ${params.posteId}`,
+    `- sessionId: ${params.sessionId}`,
+    `- finalProfileText:`,
+    params.finalProfileText,
+    `- answers (ordre chronologique):`,
+  ];
+
+  params.answers.forEach((answer, index) => {
+    context.push(`  ${index + 1}. [Bloc ${answer.block}] ${answer.message} (${answer.createdAt})`);
+  });
+
+  const userContent = `${matchingPrompt}\n\n${context.join('\n')}`;
 
   const response = await client.chat.completions.create({
     model: 'gpt-4o-mini',

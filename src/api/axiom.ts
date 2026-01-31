@@ -9,16 +9,24 @@ import {
 } from '../engine/axiomEngine.js';
 import { AXIOM_BLOCKS } from '../types/blocks.js';
 import { testOpenAI } from '../services/openaiClient.js';
-import { executeProfilPrompt } from '../services/axiomExecutor.js';
+import { executeProfilPrompt, executeMatchingPrompt } from '../services/axiomExecutor.js';
 import { candidateToSession, updateCandidateFromSession } from '../utils/candidateAdapter.js';
 import { IdentitySchema } from '../validators/identity.js';
-import { toLiveTrackingRow } from '../services/exportService.js';
+import {
+  candidateToLiveTrackingRow,
+  googleSheetsLiveTrackingService,
+} from '../services/googleSheetsService.js';
+import type { AnswerRecord } from '../types/answer.js';
+import { getPostConfig } from '../store/postRegistry.js';
 
 const AxiomBodySchema = z.object({
   tenantId: z.string().min(1),
+  posteId: z.string().min(1),
   sessionId: z.string().min(8).optional(),
+  message: z.string().min(1).optional(),
   userMessage: z.string().min(1).optional(),
   test: z.boolean().optional(),
+  finish: z.boolean().optional(),
   identity: z
     .object({
       firstName: z.string().min(1),
@@ -51,7 +59,16 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
       });
     }
 
-    const { tenantId, sessionId: providedSessionId, identity: providedIdentity } = parsed.data;
+    const { tenantId, posteId, sessionId: providedSessionId, identity: providedIdentity } = parsed.data;
+
+    try {
+      getPostConfig(tenantId, posteId);
+    } catch (error) {
+      return reply.code(400).send({
+        error: 'INVALID_POSTE',
+        message: error instanceof Error ? error.message : 'Invalid posteId',
+      });
+    }
 
     let candidate;
     if (!providedSessionId) {
@@ -111,29 +128,31 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
 
       app.log.info(
         { candidateId: candidate.candidateId, tenantId },
-        'Identité candidat enregistrée, passage à collecting',
+        'Identité candidat enregistrée, passage à preamble',
       );
+
+      candidateStore.updateSession(candidate.candidateId, { state: 'preamble' });
+      candidate = candidateStore.get(candidate.candidateId);
+      if (!candidate) {
+        return reply.code(500).send({
+          error: 'INTERNAL_ERROR',
+          message: 'Failed to update session',
+        });
+      }
 
       // Mettre à jour le suivi live
       try {
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const trackingRow = toLiveTrackingRow(candidate);
-        // TODO: Appeler googleSheetsService.updateLiveTracking(tenantId, trackingRow)
+        const trackingRow = candidateToLiveTrackingRow(candidate);
+        await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
       } catch (error) {
         app.log.warn({ error }, 'Failed to update live tracking');
       }
 
-      // Lancer AXIOM_PROFIL normalement
-      const session = candidateToSession(candidate);
-      const aiResponse = await executeProfilPrompt(session, undefined);
-      
-      candidateStore.updateSession(candidate.candidateId, {});
-
       return reply.send({
         sessionId: candidate.candidateId,
         currentBlock: candidate.session.currentBlock,
-        state: candidate.session.state,
-        response: aiResponse,
+        state: 'preamble',
+        response: 'Avant de commencer AXIOM, une dernière chose.\n\nPréférez-vous que l\'on se tutoie ou que l\'on se vouvoie ?',
       });
     }
 
@@ -160,18 +179,186 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
       });
     }
 
+    // Gestion des messages en état preamble
+    if (candidate.session.state === 'preamble') {
+      const message = (parsed.data.message || parsed.data.userMessage || '').toLowerCase();
+      
+      let mode: 'tutoiement' | 'vouvoiement' | null = null;
+      
+      if (message.includes('tuto')) {
+        mode = 'tutoiement';
+      } else if (message.includes('vouvoi')) {
+        mode = 'vouvoiement';
+      }
+      
+      if (!mode) {
+        return reply.send({
+          sessionId: candidate.candidateId,
+          currentBlock: candidate.session.currentBlock,
+          state: 'preamble',
+          response: 'Merci de répondre par « tutoiement » ou « vouvoiement ».',
+        });
+      }
+      
+      candidateStore.setTonePreference(candidate.candidateId, mode);
+      candidateStore.updateSession(candidate.candidateId, { state: 'collecting', currentBlock: 1 });
+      candidate = candidateStore.get(candidate.candidateId);
+      if (!candidate) {
+        return reply.code(500).send({
+          error: 'INTERNAL_ERROR',
+          message: 'Failed to update session',
+        });
+      }
+
+      // Lancer AXIOM_PROFIL normalement
+      const sessionForProfil = candidateToSession(candidate);
+      const aiResponse = await executeProfilPrompt(sessionForProfil, candidate.answers);
+      
+      candidateStore.setFinalProfileText(candidate.candidateId, aiResponse);
+      candidateStore.updateSession(candidate.candidateId, {});
+
+      try {
+        const trackingRow = candidateToLiveTrackingRow(candidate);
+        await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+      } catch (error) {
+        app.log.warn({ error }, 'Failed to update live tracking');
+      }
+
+      return reply.send({
+        sessionId: candidate.candidateId,
+        currentBlock: 1,
+        state: 'collecting',
+        response: aiResponse,
+      });
+    }
+
+    // Implémenter finish (basculement vers waiting_go)
+    if (parsed.data.finish === true) {
+      if (candidate.session.state === 'collecting' && candidate.session.currentBlock === AXIOM_BLOCKS.MAX) {
+        candidateStore.updateSession(candidate.candidateId, { state: 'waiting_go' });
+        candidate = candidateStore.get(candidate.candidateId);
+        if (!candidate) {
+          return reply.code(500).send({ error: 'INTERNAL_ERROR', message: 'Failed to update session' });
+        }
+
+        try {
+          const trackingRow = candidateToLiveTrackingRow(candidate);
+          await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+        } catch (error) {
+          app.log.warn({ error }, 'Failed to update live tracking');
+        }
+
+        return reply.send({
+          sessionId: candidate.candidateId,
+          currentBlock: candidate.session.currentBlock,
+          state: 'waiting_go',
+          response: 'AXIOM est prêt pour le matching final.\n\nQuand vous êtes prêt, écrivez exactement : GO',
+        });
+      } else {
+        return reply.code(403).send({
+          error: 'FINISH_FORBIDDEN',
+          message: 'finish not allowed in current state/block',
+        });
+      }
+    }
+
+    // GO LOCK + matching dans waiting_go
+    if (candidate.session.state === 'waiting_go') {
+      const message = (parsed.data.message || parsed.data.userMessage || '').trim();
+      
+      if (message !== 'GO') {
+        return reply.send({
+          sessionId: candidate.candidateId,
+          currentBlock: candidate.session.currentBlock,
+          state: 'waiting_go',
+          response: 'AXIOM est prêt pour le matching final.\n\nQuand vous êtes prêt, écrivez exactement : GO',
+        });
+      }
+
+      const finalProfileText = candidate.finalProfileText ?? '';
+      if (finalProfileText.trim() === '') {
+        return reply.code(409).send({
+          error: 'PROFILE_MISSING',
+          message: 'Profil non disponible pour le matching (finalProfileText manquant).',
+        });
+      }
+
+      const fullText = await executeMatchingPrompt({
+        tenantId,
+        posteId,
+        sessionId: candidate.candidateId,
+        answers: candidate.answers,
+        finalProfileText,
+      });
+
+      const lignes = fullText.split('\n').map(l => l.trim()).filter(Boolean);
+      const verdict = (lignes[0] ?? '').slice(0, 80);
+      const summary = lignes.slice(0, 3).join(' ').slice(0, 240);
+      const createdAt = new Date().toISOString();
+      const result = { verdict, summary, fullText, createdAt };
+
+      candidateStore.setMatchingResult(candidate.candidateId, result);
+      candidateStore.updateSession(candidate.candidateId, { state: 'completed' });
+      candidate = candidateStore.get(candidate.candidateId);
+      if (!candidate) {
+        return reply.code(500).send({ error: 'INTERNAL_ERROR', message: 'Failed to update session' });
+      }
+
+      try {
+        const trackingRow = candidateToLiveTrackingRow(candidate);
+        await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+      } catch (error) {
+        app.log.warn({ error }, 'Failed to update live tracking');
+      }
+
+      return reply.send({
+        sessionId: candidate.candidateId,
+        currentBlock: candidate.session.currentBlock,
+        state: 'completed',
+        response: fullText,
+      });
+    }
+
     // Exécuter le prompt PROFIL si state === collecting
     if (candidate.session.state === 'collecting') {
-      const aiResponse = await executeProfilPrompt(session, parsed.data.userMessage);
+      const message = parsed.data.message || parsed.data.userMessage;
       
-      // Mettre à jour l'activité
+      if (message) {
+        // Créer un AnswerRecord
+        const answerRecord: AnswerRecord = {
+          block: candidate.session.currentBlock,
+          message,
+          createdAt: new Date().toISOString(),
+        };
+
+        // Stocker la réponse
+        const updatedCandidate = candidateStore.addAnswer(candidate.candidateId, answerRecord);
+        if (!updatedCandidate) {
+          return reply.code(500).send({
+            error: 'INTERNAL_ERROR',
+            message: 'Failed to store answer',
+          });
+        }
+        candidate = updatedCandidate;
+        // Mettre à jour la session pour refléter le candidat mis à jour
+        const updatedSession = candidateToSession(candidate);
+        session.currentBlock = updatedSession.currentBlock;
+        session.state = updatedSession.state;
+      }
+
+      // Relancer l'exécution du prompt PROFIL avec toutes les réponses
+      const aiResponse = await executeProfilPrompt(session, candidate.answers);
+      
+      // Capturer le texte final du profil
+      candidateStore.setFinalProfileText(candidate.candidateId, aiResponse);
+      
+      // Mettre à jour l'activité (session déjà mise à jour par addAnswer)
       candidateStore.updateSession(candidate.candidateId, {});
 
       // Mettre à jour le suivi live
       try {
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const trackingRow = toLiveTrackingRow(candidate);
-        // TODO: Appeler googleSheetsService.updateLiveTracking(tenantId, trackingRow)
+        const trackingRow = candidateToLiveTrackingRow(candidate);
+        await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
       } catch (error) {
         app.log.warn({ error }, 'Failed to update live tracking');
       }
@@ -184,63 +371,6 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
       });
     }
 
-    // Appliquer les transitions selon l'état actuel
-    try {
-      if (candidate.session.state === 'waiting_go') {
-        if (candidate.session.currentBlock < AXIOM_BLOCKS.MAX) {
-          // Avancer au bloc suivant
-          const updatedSession = advanceBlock(session);
-          candidate = updateCandidateFromSession(candidate, updatedSession);
-          candidateStore.updateSession(candidate.candidateId, {
-            currentBlock: updatedSession.currentBlock,
-            state: updatedSession.state,
-          });
-          app.log.info(
-            { candidateId: candidate.candidateId, currentBlock: candidate.session.currentBlock },
-            'Transition: waiting_go → collecting (bloc suivant)',
-          );
-        } else {
-          // Démarrer le matching (dernier bloc terminé)
-          const updatedSession = startMatching(session);
-          candidate = updateCandidateFromSession(candidate, updatedSession);
-          candidateStore.updateSession(candidate.candidateId, {
-            state: updatedSession.state,
-          });
-          app.log.info(
-            { candidateId: candidate.candidateId },
-            'Transition: waiting_go → matching',
-          );
-        }
-      } else if (candidate.session.state === 'matching') {
-        // État final, aucune transition possible
-        app.log.info(
-          { candidateId: candidate.candidateId },
-          'Candidat en état matching (final)',
-        );
-      }
-    } catch (error) {
-      if (error instanceof AxiomEngineError) {
-        app.log.warn(
-          {
-            candidateId: candidate.candidateId,
-            error: error.code,
-            message: error.message,
-          },
-          'Transition refusée par le moteur',
-        );
-        return reply.code(403).send({
-          error: 'TRANSITION_FORBIDDEN',
-          code: error.code,
-          message: error.message,
-          session: {
-            sessionId: candidate.candidateId,
-            currentBlock: candidate.session.currentBlock,
-            state: candidate.session.state,
-          },
-        });
-      }
-      throw error;
-    }
 
     return reply.send({
       sessionId: candidate.candidateId,

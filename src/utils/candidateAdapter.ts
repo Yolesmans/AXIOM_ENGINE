@@ -10,7 +10,7 @@ export function candidateToSession(candidate: AxiomCandidate): AxiomSession {
     sessionId: candidate.candidateId,
     currentBlock: candidate.session.currentBlock,
     state: candidate.session.state,
-    answers: candidate.answers,
+    answers: {} as Record<string, unknown>,
     blockSummaries: candidate.blockSummaries,
     createdAt: candidate.session.startedAt,
     updatedAt: candidate.session.lastActivityAt,
@@ -32,7 +32,6 @@ export function updateCandidateFromSession(
       state: session.state,
       lastActivityAt: session.updatedAt,
     },
-    answers: session.answers,
     blockSummaries: session.blockSummaries,
   };
 }

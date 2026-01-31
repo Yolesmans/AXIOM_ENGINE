@@ -1,5 +1,7 @@
 import type { AxiomCandidate, CandidateIdentity } from '../types/candidate.js';
 import type { AxiomState } from '../types/session.js';
+import type { AnswerRecord } from '../types/answer.js';
+import type { MatchingResult } from '../types/matching.js';
 
 class CandidateStore {
   private candidates: Map<string, AxiomCandidate> = new Map();
@@ -27,12 +29,31 @@ class CandidateStore {
         startedAt: now,
         lastActivityAt: now,
       },
-      answers: {},
+      answers: [],
       blockSummaries: {},
     };
 
     this.candidates.set(candidateId, candidate);
     return candidate;
+  }
+
+  addAnswer(candidateId: string, record: AnswerRecord): AxiomCandidate | undefined {
+    const candidate = this.candidates.get(candidateId);
+    if (!candidate) {
+      return undefined;
+    }
+
+    const updated: AxiomCandidate = {
+      ...candidate,
+      answers: [...candidate.answers, record],
+      session: {
+        ...candidate.session,
+        lastActivityAt: new Date(),
+      },
+    };
+
+    this.candidates.set(candidateId, updated);
+    return updated;
   }
 
   updateIdentity(
@@ -52,7 +73,7 @@ class CandidateStore {
       },
       session: {
         ...candidate.session,
-        state: candidate.session.state === 'identity' ? 'collecting' : candidate.session.state,
+        state: candidate.session.state === 'identity' ? 'preamble' : candidate.session.state,
         lastActivityAt: new Date(),
       },
     };
@@ -100,7 +121,6 @@ class CandidateStore {
   updatePrivateData(
     candidateId: string,
     updates: Partial<{
-      answers: Record<string, unknown>;
       blockSummaries: Record<string, unknown>;
       finalProfile: Record<string, unknown>;
       matchingResult: Record<string, unknown>;
@@ -126,6 +146,63 @@ class CandidateStore {
 
   exists(candidateId: string): boolean {
     return this.candidates.has(candidateId);
+  }
+
+  setFinalProfileText(candidateId: string, text: string): AxiomCandidate | undefined {
+    const candidate = this.candidates.get(candidateId);
+    if (!candidate) {
+      return undefined;
+    }
+
+    const updated: AxiomCandidate = {
+      ...candidate,
+      finalProfileText: text,
+      session: {
+        ...candidate.session,
+        lastActivityAt: new Date(),
+      },
+    };
+
+    this.candidates.set(candidateId, updated);
+    return updated;
+  }
+
+  setMatchingResult(candidateId: string, result: MatchingResult): AxiomCandidate | undefined {
+    const candidate = this.candidates.get(candidateId);
+    if (!candidate) {
+      return undefined;
+    }
+
+    const updated: AxiomCandidate = {
+      ...candidate,
+      matchingResult: result,
+      session: {
+        ...candidate.session,
+        lastActivityAt: new Date(),
+      },
+    };
+
+    this.candidates.set(candidateId, updated);
+    return updated;
+  }
+
+  setTonePreference(candidateId: string, preference: 'tutoiement' | 'vouvoiement'): AxiomCandidate | undefined {
+    const candidate = this.candidates.get(candidateId);
+    if (!candidate) {
+      return undefined;
+    }
+
+    const updated: AxiomCandidate = {
+      ...candidate,
+      tonePreference: preference,
+      session: {
+        ...candidate.session,
+        lastActivityAt: new Date(),
+      },
+    };
+
+    this.candidates.set(candidateId, updated);
+    return updated;
   }
 }
 

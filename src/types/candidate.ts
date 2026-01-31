@@ -1,4 +1,5 @@
 import type { AxiomState } from './session.js';
+import type { AnswerRecord } from './answer.js';
 
 export interface CandidateIdentity {
   firstName: string;
@@ -24,8 +25,10 @@ export interface AxiomCandidate {
   session: CandidateSession;
 
   // DONNÉES PRIVÉES - JAMAIS EXPOSÉES
-  answers: Record<string, unknown>;
+  answers: AnswerRecord[];
   blockSummaries: Record<string, unknown>;
   finalProfile?: Record<string, unknown>;
-  matchingResult?: Record<string, unknown>;
+  finalProfileText?: string;
+  matchingResult?: import('./matching.js').MatchingResult;
+  tonePreference?: 'tutoiement' | 'vouvoiement';
 }

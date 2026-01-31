@@ -1,4 +1,4 @@
-export type AxiomState = 'identity' | 'collecting' | 'waiting_go' | 'matching';
+export type AxiomState = 'identity' | 'preamble' | 'collecting' | 'waiting_go' | 'matching' | 'completed';
 
 export interface AxiomSession {
   sessionId: string;
