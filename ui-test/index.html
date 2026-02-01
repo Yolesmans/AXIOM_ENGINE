@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>REVELIOM</title>
+
+  <!-- CSS -->
+  <link rel="stylesheet" href="./style.css" />
+</head>
+
+<body>
+  <div id="app">
+    <header class="header">
+      <h1>REVELIOM</h1>
+      <p class="subtitle">Analyse de votre fonctionnement professionnel</p>
+    </header>
+
+    <main id="messages" class="messages"></main>
+
+    <div id="typing-indicator" class="typing hidden">
+      <span>REVELIOM réfléchit</span>
+      <span class="dots">
+        <span>.</span><span>.</span><span>.</span>
+      </span>
+    </div>
+
+    <form id="chat-form" class="input-area">
+      <input
+        id="user-input"
+        type="text"
+        placeholder="Tapez votre message…"
+        autocomplete="off"
+        required
+      />
+      <button type="submit">Envoyer</button>
+    </form>
+  </div>
+
+  <!-- JS -->
+  <script src="./app.js"></script>
+</body>
+</html>
