@@ -24,7 +24,7 @@ body {
   color: var(--color-text);
 }
 
-.container {
+#app {
   max-width: 480px;
   margin: 0 auto;
   height: 100vh;
@@ -107,37 +107,6 @@ body {
   white-space: pre-wrap;
 }
 
-.thinking {
-  padding: 0 16px 12px;
-}
-
-.thinking .message-bubble {
-  animation: none;
-}
-
-.thinking .dots {
-  display: inline-block;
-  margin-left: 2px;
-}
-
-.thinking .dots span {
-  display: inline-block;
-  color: var(--color-violet);
-  animation: dotBounce 1.4s ease-in-out infinite;
-  font-weight: bold;
-}
-
-.thinking .dots span:nth-child(1) {
-  animation-delay: 0s;
-}
-
-.thinking .dots span:nth-child(2) {
-  animation-delay: 0.2s;
-}
-
-.thinking .dots span:nth-child(3) {
-  animation-delay: 0.4s;
-}
 
 @keyframes dotBounce {
   0%, 60%, 100% {
@@ -150,7 +119,7 @@ body {
   }
 }
 
-.input-container {
+.input-area {
   display: flex;
   gap: 10px;
   padding: 16px;
@@ -158,7 +127,7 @@ body {
   border-top: 1px solid var(--color-border);
 }
 
-#messageInput {
+#user-input {
   flex: 1;
   padding: 14px 18px;
   border: 1px solid var(--color-border);
@@ -168,20 +137,21 @@ body {
   transition: all 0.2s;
   background-color: var(--color-white);
   color: var(--color-text);
+  font-family: inherit;
 }
 
-#messageInput:focus {
+#user-input:focus {
   border-color: var(--color-violet);
   box-shadow: 0 0 0 3px var(--color-violet-light);
 }
 
-#messageInput:disabled {
+#user-input:disabled {
   background-color: #F5F5F5;
   cursor: not-allowed;
   color: var(--color-text-light);
 }
 
-#sendButton {
+.input-area button {
   padding: 14px 28px;
   background-color: var(--color-violet);
   color: white;
@@ -194,22 +164,59 @@ body {
   white-space: nowrap;
 }
 
-#sendButton:hover:not(:disabled) {
+.input-area button:hover:not(:disabled) {
   background-color: var(--color-violet-dark);
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(108, 77, 255, 0.3);
 }
 
-#sendButton:active:not(:disabled) {
+.input-area button:active:not(:disabled) {
   transform: translateY(0);
 }
 
-#sendButton:disabled {
+.input-area button:disabled {
   background-color: #E0E0E0;
   color: #999;
   cursor: not-allowed;
   transform: none;
   box-shadow: none;
+}
+
+.typing {
+  padding: 0 16px 12px;
+}
+
+.typing.hidden {
+  display: none;
+}
+
+.typing span {
+  color: var(--color-violet);
+  font-size: 14px;
+}
+
+.typing .dots {
+  display: inline-block;
+  margin-left: 2px;
+}
+
+.typing .dots span {
+  display: inline-block;
+  color: var(--color-violet);
+  animation: dotBounce 1.4s ease-in-out infinite;
+  font-weight: bold;
+}
+
+.typing .dots span:nth-child(1) {
+  animation-delay: 0s;
+}
+
+.typing .dots span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.typing .dots span:nth-child(3) {
+  animation-delay: 0.4s;
 }
 
 /* Scrollbar personnalisée */
@@ -228,4 +235,61 @@ body {
 
 .messages::-webkit-scrollbar-thumb:hover {
   background: #B0B0B0;
+}
+
+/* Formulaire d'identité */
+.identity-form-container {
+  max-width: 75%;
+  align-self: flex-start;
+}
+
+.identity-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  background-color: var(--color-white);
+  border: 1px solid var(--color-violet);
+  border-radius: 20px;
+  box-shadow: 0 2px 8px var(--color-shadow);
+}
+
+.identity-form input {
+  padding: 12px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  font-size: 15px;
+  outline: none;
+  transition: all 0.2s;
+  background-color: var(--color-white);
+  color: var(--color-text);
+  font-family: inherit;
+}
+
+.identity-form input:focus {
+  border-color: var(--color-violet);
+  box-shadow: 0 0 0 3px var(--color-violet-light);
+}
+
+.identity-form button {
+  padding: 12px 24px;
+  background-color: var(--color-violet);
+  color: white;
+  border: none;
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-top: 4px;
+}
+
+.identity-form button:hover {
+  background-color: var(--color-violet-dark);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(108, 77, 255, 0.3);
+}
+
+.identity-form button:active {
+  transform: translateY(0);
 }

@@ -6,6 +6,7 @@ let sessionId = null;
 let tenantId = null;
 let posteId = null;
 let isWaiting = false;
+let currentState = null;
 
 // Éléments DOM
 const messagesContainer = document.getElementById('messages');
@@ -36,9 +37,16 @@ window.addEventListener('DOMContentLoaded', async () => {
       if (data.sessionId) {
         sessionId = data.sessionId;
         localStorage.setItem('reveliom_sessionId', sessionId);
+        currentState = data.state;
 
         if (data.response) {
           showMessage(data.response, 'reveliom');
+        }
+
+        // Si state === "identity", afficher le formulaire d'identité
+        if (data.state === 'identity') {
+          showIdentityForm();
+          return;
         }
       }
     } catch (error) {
@@ -48,6 +56,110 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   enableInput();
 });
+
+// Afficher le formulaire d'identité
+function showIdentityForm() {
+  const formDiv = document.createElement('div');
+  formDiv.className = 'identity-form-container';
+  formDiv.innerHTML = `
+    <form id="identity-form" class="identity-form">
+      <input
+        type="text"
+        id="identity-firstname"
+        placeholder="Prénom"
+        required
+        autocomplete="given-name"
+      />
+      <input
+        type="text"
+        id="identity-lastname"
+        placeholder="Nom"
+        required
+        autocomplete="family-name"
+      />
+      <input
+        type="email"
+        id="identity-email"
+        placeholder="Email"
+        required
+        autocomplete="email"
+      />
+      <button type="submit">Continuer</button>
+    </form>
+  `;
+
+  messagesContainer.appendChild(formDiv);
+  scrollToBottom();
+
+  // Gestionnaire pour le formulaire d'identité
+  const identityForm = document.getElementById('identity-form');
+  identityForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const firstName = document.getElementById('identity-firstname').value.trim();
+    const lastName = document.getElementById('identity-lastname').value.trim();
+    const email = document.getElementById('identity-email').value.trim();
+
+    if (!firstName || !lastName || !email) {
+      return;
+    }
+
+    // Construire le message au format demandé
+    const identityMessage = `Prénom: ${firstName}\nNom: ${lastName}\nEmail: ${email}`;
+
+    // Masquer le formulaire
+    formDiv.style.display = 'none';
+
+    // Afficher le message utilisateur
+    showMessage(identityMessage, 'user');
+
+    // Désactiver l'input
+    disableInput();
+
+    // Afficher l'indicateur de réflexion
+    showTyping();
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/axiom`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          tenantId: tenantId,
+          posteId: posteId,
+          sessionId: sessionId,
+          message: identityMessage,
+        }),
+      });
+
+      const data = await response.json();
+
+      // Masquer l'indicateur de réflexion
+      hideTyping();
+
+      if (data.response) {
+        showMessage(data.response, 'reveliom');
+      }
+
+      // Mettre à jour sessionId et state si fournis
+      if (data.sessionId && data.sessionId !== sessionId) {
+        sessionId = data.sessionId;
+        localStorage.setItem('reveliom_sessionId', sessionId);
+      }
+      if (data.state) {
+        currentState = data.state;
+      }
+
+      // Réactiver l'input pour continuer en mode chat normal
+      enableInput();
+    } catch (error) {
+      hideTyping();
+      console.error('Erreur:', error);
+      enableInput();
+    }
+  });
+}
 
 // Afficher un message dans la zone de chat
 function showMessage(text, type) {
@@ -135,6 +247,9 @@ async function sendMessage(e) {
     if (data.sessionId && data.sessionId !== sessionId) {
       sessionId = data.sessionId;
       localStorage.setItem('reveliom_sessionId', sessionId);
+    }
+    if (data.state) {
+      currentState = data.state;
     }
   } catch (error) {
     hideTyping();
