@@ -25,6 +25,9 @@ window.addEventListener('DOMContentLoaded', async () => {
     return;
   }
 
+  // Masquer le chat par défaut
+  disableChat();
+
   // Récupérer sessionId depuis localStorage ou créer une nouvelle session
   sessionId = localStorage.getItem('reveliom_sessionId');
 
@@ -47,11 +50,11 @@ window.addEventListener('DOMContentLoaded', async () => {
         // Si state === "identity", afficher le formulaire d'identité
         if (data.state === 'identity') {
           showIdentityForm();
-          disableChat();
           return;
         }
 
         // Sinon, activer le chat
+        enableChat();
         enableInput();
       }
     } catch (error) {
@@ -59,25 +62,29 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
   } else {
     // Session existante : activer le chat directement
-    // (on suppose que l'identité a déjà été collectée)
+    enableChat();
     enableInput();
   }
 });
 
 // Désactiver le chat (masquer le formulaire)
 function disableChat() {
-  chatForm.style.display = 'none';
+  if (chatForm) {
+    chatForm.style.display = 'none';
+  }
 }
 
 // Activer le chat (afficher le formulaire)
 function enableChat() {
-  chatForm.style.display = 'flex';
+  if (chatForm) {
+    chatForm.style.display = 'flex';
+  }
 }
 
 // Afficher le formulaire d'identité
 function showIdentityForm() {
   // Vérifier si le formulaire existe déjà
-  if (document.getElementById('identity-form')) {
+  if (document.getElementById('identity-form-container')) {
     return;
   }
 
@@ -116,80 +123,81 @@ function showIdentityForm() {
 
   // Gestionnaire pour le formulaire d'identité
   const identityForm = document.getElementById('identity-form');
-  identityForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
+  if (identityForm) {
+    identityForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
 
-    const firstName = document.getElementById('identity-firstname').value.trim();
-    const lastName = document.getElementById('identity-lastname').value.trim();
-    const email = document.getElementById('identity-email').value.trim();
+      const firstName = document.getElementById('identity-firstname').value.trim();
+      const lastName = document.getElementById('identity-lastname').value.trim();
+      const email = document.getElementById('identity-email').value.trim();
 
-    if (!firstName || !lastName || !email) {
-      return;
-    }
-
-    // Construire le message au format demandé
-    const identityMessage = `Prénom: ${firstName}\nNom: ${lastName}\nEmail: ${email}`;
-
-    // Masquer le formulaire d'identité
-    formDiv.style.display = 'none';
-
-    // Afficher le message utilisateur
-    showMessage(identityMessage, 'user');
-
-    // Désactiver l'input
-    disableInput();
-
-    // Afficher l'indicateur de réflexion
-    showTyping();
-
-    try {
-      const response = await fetch(`${API_BASE_URL}/axiom`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          tenantId: tenantId,
-          posteId: posteId,
-          sessionId: sessionId,
-          message: identityMessage,
-        }),
-      });
-
-      const data = await response.json();
-
-      // Masquer l'indicateur de réflexion
-      hideTyping();
-
-      // Mettre à jour sessionId et state si fournis
-      if (data.sessionId && data.sessionId !== sessionId) {
-        sessionId = data.sessionId;
-        localStorage.setItem('reveliom_sessionId', sessionId);
-      }
-      if (data.state) {
-        currentState = data.state;
+      if (!firstName || !lastName || !email) {
+        return;
       }
 
-      // Afficher UNIQUEMENT la réponse du moteur
-      if (data.response) {
-        showMessage(data.response, 'reveliom');
-      }
+      // Construire le message au format demandé
+      const identityMessage = `Prénom: ${firstName}\nNom: ${lastName}\nEmail: ${email}`;
 
-      // Si on n'est plus en state "identity", activer le chat normal
-      if (data.state !== 'identity') {
-        enableChat();
+      // Masquer le formulaire d'identité
+      formDiv.style.display = 'none';
+
+      // Afficher le message utilisateur
+      showMessage(identityMessage, 'user');
+
+      // Désactiver l'input
+      disableInput();
+
+      // Afficher l'indicateur de réflexion
+      showTyping();
+
+      try {
+        const response = await fetch(`${API_BASE_URL}/axiom`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            tenantId: tenantId,
+            posteId: posteId,
+            sessionId: sessionId,
+            message: identityMessage,
+          }),
+        });
+
+        const data = await response.json();
+
+        // Masquer l'indicateur de réflexion
+        hideTyping();
+
+        // Mettre à jour sessionId et state si fournis
+        if (data.sessionId && data.sessionId !== sessionId) {
+          sessionId = data.sessionId;
+          localStorage.setItem('reveliom_sessionId', sessionId);
+        }
+        if (data.state) {
+          currentState = data.state;
+        }
+
+        // Afficher UNIQUEMENT la réponse du moteur
+        if (data.response) {
+          showMessage(data.response, 'reveliom');
+        }
+
+        // Si on n'est plus en state "identity", activer le chat normal
+        if (data.state !== 'identity') {
+          enableChat();
+          enableInput();
+        } else {
+          // Si toujours en identity, réafficher le formulaire
+          formDiv.style.display = 'block';
+        }
+      } catch (error) {
+        hideTyping();
+        console.error('Erreur:', error);
         enableInput();
-      } else {
-        // Si toujours en identity, réafficher le formulaire
-        showIdentityForm();
-        disableChat();
       }
-    } catch (error) {
-      hideTyping();
-      console.error('Erreur:', error);
-      enableInput();
-    }
-  });
+    });
+  }
 }
 
 // Afficher un message dans la zone de chat
@@ -212,22 +220,30 @@ function scrollToBottom() {
 
 // Afficher/masquer l'indicateur de frappe
 function showTyping() {
-  typingIndicator.classList.remove('hidden');
-  scrollToBottom();
+  if (typingIndicator) {
+    typingIndicator.classList.remove('hidden');
+    scrollToBottom();
+  }
 }
 
 function hideTyping() {
-  typingIndicator.classList.add('hidden');
+  if (typingIndicator) {
+    typingIndicator.classList.add('hidden');
+  }
 }
 
 // Activer/désactiver l'input
 function enableInput() {
-  userInput.disabled = false;
+  if (userInput) {
+    userInput.disabled = false;
+  }
   isWaiting = false;
 }
 
 function disableInput() {
-  userInput.disabled = true;
+  if (userInput) {
+    userInput.disabled = true;
+  }
   isWaiting = true;
 }
 
@@ -292,4 +308,6 @@ async function sendMessage(e) {
 }
 
 // Gestionnaire d'événement pour le formulaire
-chatForm.addEventListener('submit', sendMessage);
+if (chatForm) {
+  chatForm.addEventListener('submit', sendMessage);
+}
