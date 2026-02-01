@@ -39,28 +39,52 @@ window.addEventListener('DOMContentLoaded', async () => {
         localStorage.setItem('reveliom_sessionId', sessionId);
         currentState = data.state;
 
+        // Si state === "identity", afficher UNIQUEMENT le formulaire d'identité
+        if (data.state === 'identity') {
+          if (data.response) {
+            showMessage(data.response, 'reveliom');
+          }
+          showIdentityForm();
+          disableChat();
+          return;
+        }
+
+        // Sinon, afficher le message et activer le chat
         if (data.response) {
           showMessage(data.response, 'reveliom');
         }
-
-        // Si state === "identity", afficher le formulaire d'identité
-        if (data.state === 'identity') {
-          showIdentityForm();
-          return;
-        }
+        enableInput();
       }
     } catch (error) {
       console.error('Erreur:', error);
     }
+  } else {
+    // Session existante : activer le chat directement
+    // (on suppose que l'identité a déjà été collectée)
+    enableInput();
   }
-
-  enableInput();
 });
+
+// Désactiver le chat (masquer le formulaire)
+function disableChat() {
+  chatForm.style.display = 'none';
+}
+
+// Activer le chat (afficher le formulaire)
+function enableChat() {
+  chatForm.style.display = 'flex';
+}
 
 // Afficher le formulaire d'identité
 function showIdentityForm() {
+  // Vérifier si le formulaire existe déjà
+  if (document.getElementById('identity-form')) {
+    return;
+  }
+
   const formDiv = document.createElement('div');
   formDiv.className = 'identity-form-container';
+  formDiv.id = 'identity-form-container';
   formDiv.innerHTML = `
     <form id="identity-form" class="identity-form">
       <input
@@ -107,7 +131,7 @@ function showIdentityForm() {
     // Construire le message au format demandé
     const identityMessage = `Prénom: ${firstName}\nNom: ${lastName}\nEmail: ${email}`;
 
-    // Masquer le formulaire
+    // Masquer le formulaire d'identité
     formDiv.style.display = 'none';
 
     // Afficher le message utilisateur
@@ -138,10 +162,6 @@ function showIdentityForm() {
       // Masquer l'indicateur de réflexion
       hideTyping();
 
-      if (data.response) {
-        showMessage(data.response, 'reveliom');
-      }
-
       // Mettre à jour sessionId et state si fournis
       if (data.sessionId && data.sessionId !== sessionId) {
         sessionId = data.sessionId;
@@ -151,8 +171,20 @@ function showIdentityForm() {
         currentState = data.state;
       }
 
-      // Réactiver l'input pour continuer en mode chat normal
-      enableInput();
+      // Afficher UNIQUEMENT la réponse du moteur
+      if (data.response) {
+        showMessage(data.response, 'reveliom');
+      }
+
+      // Si on n'est plus en state "identity", activer le chat normal
+      if (data.state !== 'identity') {
+        enableChat();
+        enableInput();
+      } else {
+        // Si toujours en identity, réafficher le formulaire
+        showIdentityForm();
+        disableChat();
+      }
     } catch (error) {
       hideTyping();
       console.error('Erreur:', error);
