@@ -39,20 +39,19 @@ window.addEventListener('DOMContentLoaded', async () => {
         localStorage.setItem('reveliom_sessionId', sessionId);
         currentState = data.state;
 
-        // Si state === "identity", afficher UNIQUEMENT le formulaire d'identité
+        // Afficher IMMEDIATEMENT le message de l'API
+        if (data.response) {
+          showMessage(data.response, 'reveliom');
+        }
+
+        // Si state === "identity", afficher le formulaire d'identité
         if (data.state === 'identity') {
-          if (data.response) {
-            showMessage(data.response, 'reveliom');
-          }
           showIdentityForm();
           disableChat();
           return;
         }
 
-        // Sinon, afficher le message et activer le chat
-        if (data.response) {
-          showMessage(data.response, 'reveliom');
-        }
+        // Sinon, activer le chat
         enableInput();
       }
     } catch (error) {
