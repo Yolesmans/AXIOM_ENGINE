@@ -12,8 +12,13 @@
   },
   "include": ["src/**/*.ts", "api/**/*.ts"],
   "exclude": [
+    "node_modules",
+    "dist",
     "src/services/adminSheetService.ts",
     "src/services/provisioningService.ts",
-    "src/services/exportService.ts"
+    "src/services/exportService.ts",
+    "src/config/**",
+    "**/*.test.ts",
+    "**/*.spec.ts"
   ]
 }
