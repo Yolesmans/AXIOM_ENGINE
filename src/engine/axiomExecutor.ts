@@ -5,6 +5,7 @@ import { dirname } from 'path';
 import { callOpenAI } from '../services/openaiClient.js';
 import type { AxiomCandidate } from '../types/candidate.js';
 import type { AnswerRecord } from '../types/answer.js';
+import { candidateStore } from '../store/sessionStore.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -132,6 +133,18 @@ export async function executeAxiom(
   }
 
   let autoContinue = false;
+
+  // 🔒 ÉTAPE 2 — PERSISTENCE DE L'ÉTAT AXIOM (OBLIGATOIRE)
+  // L'état de la discussion DOIT être sauvegardé à CHAQUE appel
+
+  if (candidate?.session) {
+    candidateStore.updateUIState(candidate.candidateId, {
+      step: state.step,
+      lastQuestion: state.lastQuestion,
+      tutoiement: state.tutoiement,
+      identityDone: ui.identityDone,
+    });
+  }
 
   return {
     response: aiText,
