@@ -3,11 +3,8 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/index.js",
-    "lint": "eslint .",
-    "format": "prettier --write ."
+    "start": "npm run build && node dist/index.js"
   },
   "keywords": [],
   "author": "",
