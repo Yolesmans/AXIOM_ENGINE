@@ -50,6 +50,31 @@ export async function executeAxiom(
     tutoiement: ui.tutoiement,
   };
 
+  // 🔒 TRANSITION TUTOIEMENT / VOUVOIEMENT — DOIT ÊTRE AVANT callOpenAI
+  if (state.step === STEP_01_TUTOVOU && userMessage) {
+    const lower = userMessage.toLowerCase();
+
+    if (
+      lower.includes('tutoi') ||
+      lower.includes('tutoie') ||
+      lower.includes('tutoy')
+    ) {
+      state.tutoiement = 'tutoiement';
+      state.step = STEP_02_PREAMBULE;
+      state.lastQuestion = null;
+    }
+
+    if (
+      lower.includes('vouvoi') ||
+      lower.includes('vouvoie') ||
+      lower.includes('vouvoy')
+    ) {
+      state.tutoiement = 'vouvoiement';
+      state.step = STEP_02_PREAMBULE;
+      state.lastQuestion = null;
+    }
+  }
+
   // Construire l'historique des messages
   const messages: Array<{ role: string; content: string }> = [];
   
@@ -98,19 +123,8 @@ export async function executeAxiom(
     state.lastQuestion = aiText;
   }
 
-  // Mise à jour du step selon la progression
-  if (state.step === STEP_01_TUTOVOU && userMessage) {
-    const lower = userMessage.toLowerCase();
-    if (lower.includes('tutoi') || lower.includes('tutoie') || lower.includes('tutoy')) {
-      state.tutoiement = 'tutoiement';
-      state.step = STEP_02_PREAMBULE;
-      state.lastQuestion = null;
-    } else if (lower.includes('vouvoi') || lower.includes('vouvoie') || lower.includes('vouvoy')) {
-      state.tutoiement = 'vouvoiement';
-      state.step = STEP_02_PREAMBULE;
-      state.lastQuestion = null;
-    }
-  } else if (state.step === STEP_02_PREAMBULE && !expectsAnswer) {
+  // Mise à jour du step selon la progression (préambule → bloc 1)
+  if (state.step === STEP_02_PREAMBULE && !expectsAnswer) {
     // Préambule affiché (pas de question), passer au Bloc 1
     state.step = STEP_03_BLOC1;
     state.lastQuestion = null;
