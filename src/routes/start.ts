@@ -52,6 +52,14 @@ export async function registerStartRoute(app: FastifyInstance) {
           message: 'Failed to create candidate',
         });
       }
+      // 🔒 GARANTIE ÉTAT UI — OBLIGATOIRE (TS + RUNTIME)
+      if (!candidate.session.ui) {
+        candidate.session.ui = {
+          step: STEP_00_IDENTITY,
+          lastQuestion: null,
+          identityDone: false,
+        };
+      }
     } else {
       // Session existante
       finalSessionId = sessionId;
@@ -72,22 +80,23 @@ export async function registerStartRoute(app: FastifyInstance) {
             message: 'Failed to create candidate',
           });
         }
+        // 🔒 GARANTIE ÉTAT UI — OBLIGATOIRE (TS + RUNTIME)
+        if (!candidate.session.ui) {
+          candidate.session.ui = {
+            step: STEP_00_IDENTITY,
+            lastQuestion: null,
+            identityDone: false,
+          };
+        }
       }
 
       // S'assurer que le state UI existe
       if (!candidate.session.ui) {
-        candidateStore.updateUIState(finalSessionId, {
+        candidate.session.ui = {
           step: candidate.identity.completedAt ? STEP_01_TUTOVOU : STEP_00_IDENTITY,
           lastQuestion: null,
           identityDone: !!candidate.identity.completedAt,
-        });
-        candidate = candidateStore.get(finalSessionId);
-        if (!candidate) {
-          return reply.code(500).send({
-            error: 'INTERNAL_ERROR',
-            message: 'Failed to initialize UI state',
-          });
-        }
+        };
       }
 
       // Si identityDone === true, utiliser l'orchestrateur pour obtenir la réponse
