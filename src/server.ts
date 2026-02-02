@@ -16,9 +16,11 @@ export function buildServer() {
     logger: true,
   });
 
+  // 🔒 CORS — MVP (OBLIGATOIRE POUR LE FRONT)
   app.register(cors, {
     origin: '*',
     methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-session-id'],
   });
 
   registerStartRoute(app);
