@@ -1,12 +1,13 @@
 import 'dotenv/config';
 import { buildServer } from './server.js';
-import { env } from './env.js';
 
 const app = buildServer();
 
-const port = process.env.PORT ? Number(process.env.PORT) : 3000;
+const PORT = process.env.PORT || 3000;
 
-app.listen({ port, host: '0.0.0.0' }).catch((err) => {
+app.listen({ port: Number(PORT), host: '0.0.0.0' }, () => {
+  console.log(`Server listening on port ${PORT}`);
+}).catch((err) => {
   console.error(err);
   process.exit(1);
 });
