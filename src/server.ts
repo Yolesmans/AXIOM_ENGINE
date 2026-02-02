@@ -23,6 +23,16 @@ export function buildServer() {
     allowedHeaders: ['Content-Type', 'Authorization', 'x-session-id'],
   });
 
+  // Route GET /health
+  app.get('/health', async () => {
+    return { status: 'ok' };
+  });
+
+  // Route POST /api/start
+  app.post('/api/start', async () => {
+    return { started: true };
+  });
+
   registerStartRoute(app);
   registerAxiomRoutes(app);
 
