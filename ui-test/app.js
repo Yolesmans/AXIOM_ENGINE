@@ -7,6 +7,20 @@ let tenantId = null;
 let posteId = null;
 let isWaiting = false;
 
+// Fonction pour ajouter un message
+function addMessage(role, text) {
+  const messagesContainer = document.getElementById('messages');
+  if (!messagesContainer) return;
+
+  const messageDiv = document.createElement('div');
+  messageDiv.className = `message-bubble message-${role === 'assistant' ? 'reveliom' : 'user'}`;
+  const textP = document.createElement('p');
+  textP.textContent = text || '';
+  messageDiv.appendChild(textP);
+  messagesContainer.appendChild(messageDiv);
+  messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
+
 // Initialisation au chargement
 window.addEventListener('DOMContentLoaded', async () => {
   // Vérifier que #app existe
@@ -43,26 +57,14 @@ window.addEventListener('DOMContentLoaded', async () => {
         sessionId = data.sessionId;
         localStorage.setItem('reveliom_sessionId', sessionId);
 
-        // Récupérer le message de l'API
-        const responseText = data.response || '';
-        
-        // Injecter IMMEDIATEMENT le message dans la zone messages
-        const messagesContainer = document.getElementById('messages');
-        if (messagesContainer && responseText) {
-          // Afficher le message REVELIOM AVANT toute interaction
-          const messageDiv = document.createElement('div');
-          messageDiv.className = 'message-bubble message-reveliom';
-          const textP = document.createElement('p');
-          textP.textContent = responseText;
-          messageDiv.appendChild(textP);
-          messagesContainer.appendChild(messageDiv);
+        // AFFICHER IMMÉDIATEMENT le message AVANT toute condition
+        addMessage('assistant', data.response);
 
-          // Scroll vers le bas pour voir le message
-          messagesContainer.scrollTop = messagesContainer.scrollHeight;
-
-          // Si state === "identity", afficher le formulaire d'identité APRÈS le message
-          if (data.state === 'identity') {
-            // Injecter explicitement le formulaire d'identité
+        // ENSUITE SEULEMENT, gérer le state
+        if (data.state === 'identity') {
+          // Afficher le formulaire d'identité SOUS le message
+          const messagesContainer = document.getElementById('messages');
+          if (messagesContainer) {
             const formDiv = document.createElement('div');
             formDiv.className = 'identity-form-container';
             formDiv.id = 'identity-form-container';
@@ -113,12 +115,7 @@ window.addEventListener('DOMContentLoaded', async () => {
                 const identityMessage = `Prénom: ${firstName}\nNom: ${lastName}\nEmail: ${email}`;
 
                 // Afficher le message utilisateur
-                const userMessageDiv = document.createElement('div');
-                userMessageDiv.className = 'message-bubble message-user';
-                const userTextP = document.createElement('p');
-                userTextP.textContent = identityMessage;
-                userMessageDiv.appendChild(userTextP);
-                messagesContainer.appendChild(userMessageDiv);
+                addMessage('user', identityMessage);
 
                 // Masquer le formulaire d'identité
                 formDiv.style.display = 'none';
@@ -158,12 +155,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 
                   // Afficher la réponse du moteur
                   if (data.response) {
-                    const responseDiv = document.createElement('div');
-                    responseDiv.className = 'message-bubble message-reveliom';
-                    const responseTextP = document.createElement('p');
-                    responseTextP.textContent = data.response;
-                    responseDiv.appendChild(responseTextP);
-                    messagesContainer.appendChild(responseDiv);
+                    addMessage('assistant', data.response);
                   }
 
                   // Si on n'est plus en state "identity", activer le chat normal
@@ -184,15 +176,15 @@ window.addEventListener('DOMContentLoaded', async () => {
                 }
               });
             }
-          } else {
-            // Si pas en state "identity", activer le chat après affichage du message
-            if (chatForm) {
-              chatForm.style.display = 'flex';
-            }
-            const userInput = document.getElementById('user-input');
-            if (userInput) {
-              userInput.disabled = false;
-            }
+          }
+        } else {
+          // Si pas en state "identity", activer le chat
+          if (chatForm) {
+            chatForm.style.display = 'flex';
+          }
+          const userInput = document.getElementById('user-input');
+          if (userInput) {
+            userInput.disabled = false;
           }
         }
       }
@@ -219,73 +211,60 @@ window.addEventListener('DOMContentLoaded', async () => {
           return;
         }
 
-        const messagesContainer = document.getElementById('messages');
-        if (messagesContainer) {
-          // Afficher le message de l'utilisateur
-          const msgDiv = document.createElement('div');
-          msgDiv.className = 'message-bubble message-user';
-          const msgTextP = document.createElement('p');
-          msgTextP.textContent = message;
-          msgDiv.appendChild(msgTextP);
-          messagesContainer.appendChild(msgDiv);
-          userInput.value = '';
+        // Afficher le message de l'utilisateur
+        addMessage('user', message);
+        userInput.value = '';
 
-          // Désactiver l'input
-          userInput.disabled = true;
-          isWaiting = true;
+        // Désactiver l'input
+        userInput.disabled = true;
+        isWaiting = true;
 
-          // Afficher l'indicateur de réflexion
-          const typingIndicator = document.getElementById('typing-indicator');
-          if (typingIndicator) {
-            typingIndicator.classList.remove('hidden');
-          }
-
-          try {
-            const response = await fetch(`${API_BASE_URL}/axiom`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({
-                tenantId: tenantId,
-                posteId: posteId,
-                sessionId: sessionId,
-                message: message,
-              }),
-            });
-
-            const data = await response.json();
-
-            // Masquer l'indicateur de réflexion
-            if (typingIndicator) {
-              typingIndicator.classList.add('hidden');
-            }
-
-            if (data.response) {
-              const responseDiv = document.createElement('div');
-              responseDiv.className = 'message-bubble message-reveliom';
-              const responseTextP = document.createElement('p');
-              responseTextP.textContent = data.response;
-              responseDiv.appendChild(responseTextP);
-              messagesContainer.appendChild(responseDiv);
-            }
-
-            // Mettre à jour sessionId si fourni
-            if (data.sessionId && data.sessionId !== sessionId) {
-              sessionId = data.sessionId;
-              localStorage.setItem('reveliom_sessionId', sessionId);
-            }
-          } catch (error) {
-            if (typingIndicator) {
-              typingIndicator.classList.add('hidden');
-            }
-            console.error('Erreur:', error);
-          }
-
-          // Réactiver l'input
-          userInput.disabled = false;
-          isWaiting = false;
+        // Afficher l'indicateur de réflexion
+        const typingIndicator = document.getElementById('typing-indicator');
+        if (typingIndicator) {
+          typingIndicator.classList.remove('hidden');
         }
+
+        try {
+          const response = await fetch(`${API_BASE_URL}/axiom`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              tenantId: tenantId,
+              posteId: posteId,
+              sessionId: sessionId,
+              message: message,
+            }),
+          });
+
+          const data = await response.json();
+
+          // Masquer l'indicateur de réflexion
+          if (typingIndicator) {
+            typingIndicator.classList.add('hidden');
+          }
+
+          if (data.response) {
+            addMessage('assistant', data.response);
+          }
+
+          // Mettre à jour sessionId si fourni
+          if (data.sessionId && data.sessionId !== sessionId) {
+            sessionId = data.sessionId;
+            localStorage.setItem('reveliom_sessionId', sessionId);
+          }
+        } catch (error) {
+          if (typingIndicator) {
+            typingIndicator.classList.add('hidden');
+          }
+          console.error('Erreur:', error);
+        }
+
+        // Réactiver l'input
+        userInput.disabled = false;
+        isWaiting = false;
       });
     }
   }
