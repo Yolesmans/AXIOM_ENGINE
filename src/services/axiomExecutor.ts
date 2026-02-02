@@ -47,6 +47,7 @@ function buildSessionContext(
 export async function executeProfilPrompt(
   session: AxiomSession,
   answers: AnswerRecord[],
+  systemDirective?: string,
 ): Promise<string> {
   const systemPrompt = await loadPromptFile('system/AXIOM_ENGINE.txt');
   const profilPrompt = await loadPromptFile('metier/AXIOM_PROFIL.txt');
@@ -54,13 +55,18 @@ export async function executeProfilPrompt(
   const sessionContext = buildSessionContext(session, answers);
 
   const userContent = `${profilPrompt}\n\n${sessionContext}`;
+  
+  // Construire le system prompt avec directive si fournie
+  const fullSystemPrompt = systemDirective 
+    ? `${systemPrompt}\n\n${systemDirective}`
+    : systemPrompt;
 
   const response = await client.chat.completions.create({
     model: 'gpt-4o-mini',
     messages: [
       {
         role: 'system',
-        content: systemPrompt,
+        content: fullSystemPrompt,
       },
       {
         role: 'user',
@@ -86,6 +92,7 @@ export async function executeMatchingPrompt(params: {
   sessionId: string;
   answers: AnswerRecord[];
   finalProfileText: string;
+  systemDirective?: string;
 }): Promise<string> {
   const systemPrompt = await loadPromptFile('system/AXIOM_ENGINE.txt');
   const matchingPrompt = await loadPromptFile('metier/AXIOM_MATCHING.txt');
@@ -105,13 +112,18 @@ export async function executeMatchingPrompt(params: {
   });
 
   const userContent = `${matchingPrompt}\n\n${context.join('\n')}`;
+  
+  // Construire le system prompt avec directive si fournie
+  const fullSystemPrompt = params.systemDirective 
+    ? `${systemPrompt}\n\n${params.systemDirective}`
+    : systemPrompt;
 
   const response = await client.chat.completions.create({
     model: 'gpt-4o-mini',
     messages: [
       {
         role: 'system',
-        content: systemPrompt,
+        content: fullSystemPrompt,
       },
       {
         role: 'user',

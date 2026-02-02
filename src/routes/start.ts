@@ -38,7 +38,12 @@ export async function registerStartRoute(app: FastifyInstance) {
       // Nouvelle session
       finalSessionId = uuidv4();
       candidate = candidateStore.create(finalSessionId, tenant);
-      sessions.set(finalSessionId, { identityDone: false });
+      sessions.set(finalSessionId, {
+        identityDone: false,
+        vouvoiement: null,
+        lastQuestion: null,
+        lastAssistant: null,
+      });
     } else {
       // Session existante
       finalSessionId = sessionId;
@@ -47,7 +52,12 @@ export async function registerStartRoute(app: FastifyInstance) {
       if (!sessionData) {
         // Session inconnue, créer une nouvelle
         candidate = candidateStore.create(finalSessionId, tenant);
-        sessions.set(finalSessionId, { identityDone: false });
+        sessions.set(finalSessionId, {
+          identityDone: false,
+          vouvoiement: null,
+          lastQuestion: null,
+          lastAssistant: null,
+        });
       } else {
         // Charger le candidat existant
         candidate = candidateStore.get(finalSessionId);
@@ -55,15 +65,14 @@ export async function registerStartRoute(app: FastifyInstance) {
           candidate = candidateStore.create(finalSessionId, tenant);
         }
 
-        // Si identityDone === true, répondre avec state conversation
+        // Si identityDone === true, répondre avec state "chat"
         if (sessionData.identityDone) {
+          const responseText = sessionData.lastAssistant || sessionData.lastQuestion || 'Bienvenue de retour !';
           return reply.send({
             sessionId: finalSessionId,
-            state: candidate.session.state === 'identity' ? 'preamble' : candidate.session.state,
+            state: 'chat',
             currentBlock: candidate.session.currentBlock,
-            response: candidate.session.state === 'identity' 
-              ? 'Avant de commencer AXIOM, une dernière chose.\n\nPréférez-vous que l\'on se tutoie ou que l\'on se vouvoie ?'
-              : 'Bienvenue de retour !',
+            response: responseText,
           });
         }
       }

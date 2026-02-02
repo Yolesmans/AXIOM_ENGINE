@@ -3,8 +3,13 @@ import cors from '@fastify/cors';
 import { registerAxiomRoutes } from './api/axiom.js';
 import { registerStartRoute } from './routes/start.js';
 
-// Map de sessions en mémoire pour gérer identityDone
-export const sessions = new Map<string, { identityDone: boolean }>();
+// Map de sessions en mémoire pour gérer identityDone, vouvoiement, lastQuestion, lastAssistant
+export const sessions = new Map<string, {
+  identityDone: boolean;
+  vouvoiement: 'tutoiement' | 'vouvoiement' | null;
+  lastQuestion: string | null;
+  lastAssistant: string | null;
+}>();
 
 export function buildServer() {
   const app = Fastify({

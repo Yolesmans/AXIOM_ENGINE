@@ -37,6 +37,26 @@ const AxiomBodySchema = z.object({
     .optional(),
 });
 
+// Fonction pour extraire la dernière question d'un texte
+function extractLastQuestion(text: string): string | null {
+  if (!text || text.trim() === '') {
+    return null;
+  }
+  
+  // Prendre les 400 derniers caractères
+  const last400 = text.slice(-400);
+  
+  // Chercher la dernière ligne contenant "?"
+  const lines = last400.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i].includes('?')) {
+      return lines[i].trim();
+    }
+  }
+  
+  return null;
+}
+
 export async function registerAxiomRoutes(app: FastifyInstance) {
   app.get('/health', async () => {
     return { ok: true };
@@ -69,6 +89,18 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
         error: 'MISSING_SESSION_ID',
         message: 'sessionId requis (header x-session-id ou body)',
       });
+    }
+
+    // Charger ou initialiser session
+    let sessionData = sessions.get(sessionId);
+    if (!sessionData) {
+      sessionData = {
+        identityDone: false,
+        vouvoiement: null,
+        lastQuestion: null,
+        lastAssistant: null,
+      };
+      sessions.set(sessionId, sessionData);
     }
 
     try {
@@ -123,7 +155,8 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
       }
 
       // Marquer identityDone = true
-      sessions.set(sessionId, { identityDone: true });
+      sessionData.identityDone = true;
+      sessions.set(sessionId, sessionData);
 
       // Passer à preamble
       candidateStore.updateSession(candidate.candidateId, { state: 'preamble' });
@@ -152,6 +185,7 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
 
       // EXÉCUTER IMMÉDIATEMENT LE PROMPT AXIOM (sauter preamble)
       candidateStore.setTonePreference(candidate.candidateId, 'tutoiement');
+      sessionData.vouvoiement = 'tutoiement';
       candidateStore.updateSession(candidate.candidateId, { state: 'collecting', currentBlock: 1 });
       candidate = candidateStore.get(candidate.candidateId);
       if (!candidate) {
@@ -161,23 +195,34 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
         });
       }
 
+      // Directive système obligatoire
+      const systemDirective = 'RÈGLE ABSOLUE: Tu exécutes STRICTEMENT le protocole AXIOM fourni. Tu ne produis JAMAIS de texte hors protocole. À chaque message, tu dois produire UNIQUEMENT la prochaine sortie autorisée par le protocole (question suivante, transition de bloc, miroir interprétatif autorisé, ou texte obligatoire). INTERDICTION d\'improviser, de résumer, de commenter le système, de sauter un bloc. Si l\'état est ambigu, tu rejoues la dernière question valide exactement.';
+
       // Lancer AXIOM_PROFIL normalement (prompt complet relu à chaque appel)
       const sessionForProfil = candidateToSession(candidate);
       let aiResponse: string;
       try {
-        aiResponse = await executeProfilPrompt(sessionForProfil, candidate.answers);
-        // FALLBACK : forcer une réponse si vide
+        aiResponse = await executeProfilPrompt(sessionForProfil, candidate.answers, systemDirective);
+        // Si réponse vide, utiliser lastQuestion
         if (!aiResponse || aiResponse.trim() === '') {
-          aiResponse = 'Très bien. Continuons.';
+          aiResponse = sessionData.lastQuestion || 'Très bien. Continuons.';
         }
       } catch (error) {
         app.log.error({
           candidateId: candidate.candidateId,
           errorMessage: error instanceof Error ? error.message : String(error),
         }, 'Error executing profil prompt');
-        // FALLBACK : réponse obligatoire même en cas d'erreur
-        aiResponse = 'Très bien. Continuons.';
+        // Si erreur, utiliser lastQuestion
+        aiResponse = sessionData.lastQuestion || 'Très bien. Continuons.';
       }
+      
+      // Extraire et sauvegarder lastQuestion
+      const extractedQuestion = extractLastQuestion(aiResponse);
+      if (extractedQuestion) {
+        sessionData.lastQuestion = extractedQuestion;
+      }
+      sessionData.lastAssistant = aiResponse;
+      sessions.set(sessionId, sessionData);
       
       candidateStore.setFinalProfileText(candidate.candidateId, aiResponse);
       candidateStore.updateSession(candidate.candidateId, {});
@@ -216,7 +261,13 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
       );
       candidate = candidateStore.create(sessionId, tenantId);
       if (!sessions.has(sessionId)) {
-        sessions.set(sessionId, { identityDone: false });
+        sessions.set(sessionId, {
+          identityDone: false,
+          vouvoiement: null,
+          lastQuestion: null,
+          lastAssistant: null,
+        });
+        sessionData = sessions.get(sessionId)!;
       }
     } else {
       // Vérifier l'isolation tenant
@@ -262,6 +313,10 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
         'Identité candidat enregistrée, passage à preamble',
       );
 
+      // Marquer identityDone = true
+      sessionData.identityDone = true;
+      sessions.set(sessionId, sessionData);
+
       candidateStore.updateSession(candidate.candidateId, { state: 'preamble' });
       candidate = candidateStore.get(candidate.candidateId);
       if (!candidate) {
@@ -286,11 +341,16 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
         }, 'Failed to update live tracking');
       }
 
+      const preambleResponse = 'Avant de commencer AXIOM, une dernière chose.\n\nPréférez-vous que l\'on se tutoie ou que l\'on se vouvoie ?';
+      sessionData.lastAssistant = preambleResponse;
+      sessionData.lastQuestion = preambleResponse;
+      sessions.set(sessionId, sessionData);
+
       return reply.send({
         sessionId: candidate.candidateId,
         currentBlock: candidate.session.currentBlock,
         state: 'preamble',
-        response: 'Avant de commencer AXIOM, une dernière chose.\n\nPréférez-vous que l\'on se tutoie ou que l\'on se vouvoie ?',
+        response: preambleResponse,
       });
     }
 
@@ -330,13 +390,18 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
       }
       
       if (!mode) {
+        const fallbackResponse = sessionData.lastQuestion || 'Merci de répondre par « tutoiement » ou « vouvoiement ».';
         return reply.send({
           sessionId: candidate.candidateId,
           currentBlock: candidate.session.currentBlock,
           state: 'preamble',
-          response: 'Merci de répondre par « tutoiement » ou « vouvoiement ».',
+          response: fallbackResponse,
         });
       }
+      
+      // Mettre à jour vouvoiement dans sessions
+      sessionData.vouvoiement = mode;
+      sessions.set(sessionId, sessionData);
       
       candidateStore.setTonePreference(candidate.candidateId, mode);
       candidateStore.updateSession(candidate.candidateId, { state: 'collecting', currentBlock: 1 });
@@ -348,23 +413,34 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
         });
       }
 
+      // Directive système obligatoire
+      const systemDirective = 'RÈGLE ABSOLUE: Tu exécutes STRICTEMENT le protocole AXIOM fourni. Tu ne produis JAMAIS de texte hors protocole. À chaque message, tu dois produire UNIQUEMENT la prochaine sortie autorisée par le protocole (question suivante, transition de bloc, miroir interprétatif autorisé, ou texte obligatoire). INTERDICTION d\'improviser, de résumer, de commenter le système, de sauter un bloc. Si l\'état est ambigu, tu rejoues la dernière question valide exactement.';
+
       // Lancer AXIOM_PROFIL normalement (prompt complet relu à chaque appel)
       const sessionForProfil = candidateToSession(candidate);
       let aiResponse: string;
       try {
-        aiResponse = await executeProfilPrompt(sessionForProfil, candidate.answers);
-        // FALLBACK : forcer une réponse si vide
+        aiResponse = await executeProfilPrompt(sessionForProfil, candidate.answers, systemDirective);
+        // Si réponse vide, utiliser lastQuestion
         if (!aiResponse || aiResponse.trim() === '') {
-          aiResponse = 'Très bien. Continuons.';
+          aiResponse = sessionData.lastQuestion || 'Dis-moi simplement : tu préfères qu\'on se tutoie ou qu\'on se vouvoie ?';
         }
       } catch (error) {
         app.log.error({
           candidateId: candidate.candidateId,
           errorMessage: error instanceof Error ? error.message : String(error),
         }, 'Error executing profil prompt');
-        // FALLBACK : réponse obligatoire même en cas d'erreur
-        aiResponse = 'Très bien. Continuons.';
+        // Si erreur, utiliser lastQuestion
+        aiResponse = sessionData.lastQuestion || 'Dis-moi simplement : tu préfères qu\'on se tutoie ou qu\'on se vouvoie ?';
       }
+      
+      // Extraire et sauvegarder lastQuestion
+      const extractedQuestion = extractLastQuestion(aiResponse);
+      if (extractedQuestion) {
+        sessionData.lastQuestion = extractedQuestion;
+      }
+      sessionData.lastAssistant = aiResponse;
+      sessions.set(sessionId, sessionData);
       
       candidateStore.setFinalProfileText(candidate.candidateId, aiResponse);
       candidateStore.updateSession(candidate.candidateId, {});
@@ -417,11 +493,16 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
           }, 'Failed to update live tracking');
         }
 
+        const waitingGoResponse = 'AXIOM est prêt pour le matching final.\n\nQuand vous êtes prêt, écrivez exactement : GO';
+        sessionData.lastAssistant = waitingGoResponse;
+        sessionData.lastQuestion = waitingGoResponse;
+        sessions.set(sessionId, sessionData);
+
         return reply.send({
           sessionId: candidate.candidateId,
           currentBlock: candidate.session.currentBlock,
           state: 'waiting_go',
-          response: 'AXIOM est prêt pour le matching final.\n\nQuand vous êtes prêt, écrivez exactement : GO',
+          response: waitingGoResponse,
         });
       } else {
         return reply.code(403).send({
@@ -436,11 +517,12 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
       const message = (parsed.data.message || parsed.data.userMessage || '').trim();
       
       if (message !== 'GO') {
+        const waitingGoResponse = sessionData.lastQuestion || 'AXIOM est prêt pour le matching final.\n\nQuand vous êtes prêt, écrivez exactement : GO';
         return reply.send({
           sessionId: candidate.candidateId,
           currentBlock: candidate.session.currentBlock,
           state: 'waiting_go',
-          response: 'AXIOM est prêt pour le matching final.\n\nQuand vous êtes prêt, écrivez exactement : GO',
+          response: waitingGoResponse,
         });
       }
 
@@ -452,6 +534,9 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
         });
       }
 
+      // Directive système obligatoire
+      const systemDirective = 'RÈGLE ABSOLUE: Tu exécutes STRICTEMENT le protocole AXIOM fourni. Tu ne produis JAMAIS de texte hors protocole. À chaque message, tu dois produire UNIQUEMENT la prochaine sortie autorisée par le protocole (question suivante, transition de bloc, miroir interprétatif autorisé, ou texte obligatoire). INTERDICTION d\'improviser, de résumer, de commenter le système, de sauter un bloc. Si l\'état est ambigu, tu rejoues la dernière question valide exactement.';
+
       let fullText: string;
       try {
         fullText = await executeMatchingPrompt({
@@ -460,19 +545,24 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
           sessionId: candidate.candidateId,
           answers: candidate.answers,
           finalProfileText,
+          systemDirective,
         });
-        // FALLBACK : forcer une réponse si vide
+        // Si réponse vide, utiliser lastQuestion
         if (!fullText || fullText.trim() === '') {
-          fullText = 'Très bien. Continuons.';
+          fullText = sessionData.lastQuestion || 'Très bien. Continuons.';
         }
       } catch (error) {
         app.log.error({
           candidateId: candidate.candidateId,
           errorMessage: error instanceof Error ? error.message : String(error),
         }, 'Error executing matching prompt');
-        // FALLBACK : réponse obligatoire même en cas d'erreur
-        fullText = 'Très bien. Continuons.';
+        // Si erreur, utiliser lastQuestion
+        fullText = sessionData.lastQuestion || 'Très bien. Continuons.';
       }
+      
+      // Mettre à jour lastAssistant
+      sessionData.lastAssistant = fullText;
+      sessions.set(sessionId, sessionData);
 
       const lignes = fullText.split('\n').map(l => l.trim()).filter(Boolean);
       const verdict = (lignes[0] ?? '').slice(0, 80);
@@ -502,7 +592,7 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
       }
 
       // VALIDATION FINALE : garantir que response n'est jamais vide
-      const finalResponse = fullText && fullText.trim() !== '' ? fullText : 'Très bien. Continuons.';
+      const finalResponse = fullText && fullText.trim() !== '' ? fullText : (sessionData.lastQuestion || 'Très bien. Continuons.');
       
       return reply.send({
         sessionId: candidate.candidateId,
@@ -539,23 +629,34 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
         session.state = updatedSession.state;
       }
 
+      // Directive système obligatoire
+      const systemDirective = 'RÈGLE ABSOLUE: Tu exécutes STRICTEMENT le protocole AXIOM fourni. Tu ne produis JAMAIS de texte hors protocole. À chaque message, tu dois produire UNIQUEMENT la prochaine sortie autorisée par le protocole (question suivante, transition de bloc, miroir interprétatif autorisé, ou texte obligatoire). INTERDICTION d\'improviser, de résumer, de commenter le système, de sauter un bloc. Si l\'état est ambigu, tu rejoues la dernière question valide exactement.';
+
       // Relancer l'exécution du prompt PROFIL avec toutes les réponses
       // Le prompt complet est relu à chaque appel (ChatGPT-like)
       let aiResponse: string;
       try {
-        aiResponse = await executeProfilPrompt(session, candidate.answers);
-        // FALLBACK : forcer une réponse si vide
+        aiResponse = await executeProfilPrompt(session, candidate.answers, systemDirective);
+        // Si réponse vide, utiliser lastQuestion
         if (!aiResponse || aiResponse.trim() === '') {
-          aiResponse = 'Très bien. Continuons.';
+          aiResponse = sessionData.lastQuestion || 'Très bien. Continuons.';
         }
       } catch (error) {
         app.log.error({
           candidateId: candidate.candidateId,
           errorMessage: error instanceof Error ? error.message : String(error),
         }, 'Error executing profil prompt');
-        // FALLBACK : réponse obligatoire même en cas d'erreur
-        aiResponse = 'Très bien. Continuons.';
+        // Si erreur, utiliser lastQuestion
+        aiResponse = sessionData.lastQuestion || 'Très bien. Continuons.';
       }
+      
+      // Extraire et sauvegarder lastQuestion
+      const extractedQuestion = extractLastQuestion(aiResponse);
+      if (extractedQuestion) {
+        sessionData.lastQuestion = extractedQuestion;
+      }
+      sessionData.lastAssistant = aiResponse;
+      sessions.set(sessionId, sessionData);
       
       // Capturer le texte final du profil
       candidateStore.setFinalProfileText(candidate.candidateId, aiResponse);
@@ -591,12 +692,13 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
     }
 
     // FALLBACK : réponse obligatoire pour tout autre cas
-    // AUCUN retour sans response textuelle visible
+    // Utiliser lastQuestion si disponible, sinon fallback générique
+    const fallbackResponse = sessionData.lastQuestion || 'Très bien. Continuons.';
     return reply.send({
       sessionId: candidate.candidateId,
       currentBlock: candidate.session.currentBlock,
       state: candidate.session.state,
-      response: 'Très bien. Continuons.',
+      response: fallbackResponse,
     });
   });
 }
