@@ -397,19 +397,20 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
         candidateStore.setTonePreference(candidate.candidateId, result.tutoiement);
       }
 
-      // Déterminer le state et currentBlock pour la réponse
+      // Déterminer le state et currentBlock pour la réponse selon le step
       let responseState: string = candidate.session.state;
       let currentBlock = candidate.session.currentBlock;
       
       if (result.step === STEP_03_BLOC1) {
+        // On passe en collecting avec le Bloc 1
         responseState = 'collecting';
-        if (candidate.session.currentBlock === 1 && candidate.session.state === 'preamble') {
-          currentBlock = 1;
-          candidateStore.updateSession(candidate.candidateId, { state: 'collecting', currentBlock: 1 });
-        }
+        currentBlock = 1;
+        candidateStore.updateSession(candidate.candidateId, { state: 'collecting', currentBlock: 1 });
       } else if (result.step === STEP_02_PREAMBULE) {
+        // Préambule affiché, on reste en preamble mais le step va passer à BLOC_1_Q1 au prochain appel
         responseState = 'preamble';
       } else if (result.step === STEP_01_TUTOVOU) {
+        // Question tutoiement/vouvoiement
         responseState = 'preamble';
       }
 

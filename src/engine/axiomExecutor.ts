@@ -11,18 +11,66 @@ export const STEP_03_BLOC1 = 'STEP_03_BLOC1';
 export const STEP_99_MATCHING = 'STEP_99_MATCHING';
 
 // Texte fixe pour tutoiement/vouvoiement (doit correspondre au prompt)
-const TUTOVOU_QUESTION = 'Avant de commencer AXIOM, une dernière chose.\n\nPréférez-vous que l\'on se tutoie ou que l\'on se vouvoie ?';
+const TUTOVOU_QUESTION = 'Bienvenue dans AXIOM.\nOn va découvrir qui tu es vraiment — pas ce qu\'il y a sur ton CV.\nPromis : je ne te juge pas. Je veux juste comprendre comment tu fonctionnes.\n\nOn commence tranquille.\nDis-moi : tu préfères qu\'on se tutoie ou qu\'on se vouvoie pour cette discussion ?';
+
+// Préambule métier (texte fixe, tiré du prompt)
+const PREAMBULE_METIER = `Avant de commencer vraiment, je te pose simplement le cadre.
+
+Le métier concerné est celui de courtier en énergie.
+
+Il consiste à accompagner des entreprises dans la gestion de leurs contrats d'électricité et de gaz :
+	•	analyse de l'existant,
+	•	renégociation auprès des fournisseurs,
+	•	sécurisation des prix,
+	•	suivi dans la durée.
+
+Le client final ne paie rien directement.
+La rémunération est versée par les fournisseurs, à la signature et sur la durée du contrat.
+
+Il n'y a aucune garantie.
+Certains gagnent peu. D'autres gagnent très bien.
+
+La différence ne vient :
+	•	ni du marché,
+	•	ni du produit,
+	•	ni de la chance,
+mais de la constance, de l'autonomie, et de la capacité à tenir dans un cadre exigeant.
+
+⸻
+
+C'est précisément pour ça qu'AXIOM existe.
+
+AXIOM n'est :
+	•	ni un test,
+	•	ni un jugement,
+	•	ni une sélection déguisée.
+
+Il n'est pas là pour te vendre ce métier, ni pour te faire entrer dans une case.
+
+Son rôle est simple :
+prendre le temps de comprendre comment tu fonctionnes réellement dans le travail,
+et te donner une lecture lucide de ce que ce cadre exige au quotidien.
+
+Pour certains profils, c'est un terrain d'expression très fort.
+Pour d'autres, tout aussi solides, d'autres environnements sont simplement plus cohérents.
+
+AXIOM est là pour apporter de la clarté :
+	•	sans pression,
+	•	sans promesse,
+	•	sans te pousser dans une direction.`;
 
 // Directive système obligatoire
-const SYSTEM_DIRECTIVE = 'RÈGLE ABSOLUE: Tu exécutes STRICTEMENT le protocole AXIOM fourni. Tu ne produis JAMAIS de texte hors protocole. À chaque message, tu dois produire UNIQUEMENT la prochaine sortie autorisée par le protocole (question suivante, transition de bloc, miroir interprétatif autorisé, ou texte obligatoire). INTERDICTION d\'improviser, de résumer, de commenter le système, de sauter un bloc. Si l\'état est ambigu, tu rejoues la dernière question valide exactement. Si la réponse utilisateur est invalide, tu reposes la même question sans avancer.';
+const SYSTEM_DIRECTIVE = 'RÈGLE ABSOLUE: Tu exécutes STRICTEMENT le protocole AXIOM fourni. Tu ne produis JAMAIS de texte hors protocole. À chaque message, tu dois produire UNIQUEMENT la prochaine sortie autorisée par le protocole (question suivante, transition de bloc, miroir interprétatif autorisé, ou texte obligatoire). INTERDICTION d\'improviser, de résumer, de commenter le système, de sauter un bloc. Si l\'état est ambigu, tu rejoues la dernière question valide exactement. Si la réponse utilisateur est invalide, tu reposes la même question sans avancer. INTERDICTION de reposer une étape déjà validée.';
 
-// Validation sémantique minimale
+// Validation sémantique minimale (accepte orthographe imparfaite, synonymes, formulations naturelles)
 function validateTutoiementVouvoiement(message: string): 'tutoiement' | 'vouvoiement' | null {
   const lower = message.toLowerCase();
-  if (lower.includes('tutoi') || lower.includes('tutoie')) {
+  // Tutoiement : accepter tutoi, tutoie, tutoyer, tutoiement, on se tutoie, etc.
+  if (lower.includes('tutoi') || lower.includes('tutoie') || lower.includes('tutoy')) {
     return 'tutoiement';
   }
-  if (lower.includes('vouvoi') || lower.includes('vouvoie')) {
+  // Vouvoiement : accepter vouvoi, vouvoie, vouvoyer, vouvoiement, on se vouvoie, etc.
+  if (lower.includes('vouvoi') || lower.includes('vouvoie') || lower.includes('vouvoy')) {
     return 'vouvoiement';
   }
   return null;
@@ -66,12 +114,9 @@ function ensureUIState(candidate: AxiomCandidate): AxiomCandidate {
 function buildExecutionDirective(step: string, lastQuestion: string | null): string {
   let directive = SYSTEM_DIRECTIVE;
   
-  if (step === STEP_01_TUTOVOU) {
-    directive += '\n\nÉTAT ACTUEL: Tu dois poser la question tutoiement/vouvoiement. Si la réponse utilisateur est valide (contient "tutoi" ou "vouvoi"), tu passes au préambule métier complet. Si invalide, tu reposes la même question.';
-  } else if (step === STEP_02_PREAMBULE) {
-    directive += '\n\nÉTAT ACTUEL: Tu dois afficher le préambule métier complet (une seule fois). Après l\'avoir affiché, tu passes à la première question du Bloc 1.';
-  } else if (step === STEP_03_BLOC1) {
-    directive += `\n\nÉTAT ACTUEL: Tu es dans les blocs AXIOM. Tu dois produire la prochaine sortie autorisée par le protocole.${lastQuestion ? ` Si la réponse utilisateur est invalide, tu reposes cette question: "${lastQuestion}"` : ''}`;
+  if (step === STEP_03_BLOC1) {
+    directive += `\n\nÉTAT ACTUEL: state.step = BLOC_1_Q1. Tu dois produire UNIQUEMENT la première question du Bloc 1 (Énergie & moteurs internes) au format A/B/C sur lignes séparées, selon le protocole AXIOM.${lastQuestion ? ` Si la réponse utilisateur est invalide, tu reposes cette question: "${lastQuestion}"` : ' C\'est la première question du Bloc 1, donc tu dois la poser maintenant.'}`;
+    directive += '\n\nINTERDICTION de reposer la question tutoiement/vouvoiement ou le préambule métier. Ces étapes sont déjà validées.';
   }
   
   return directive;
@@ -107,6 +152,7 @@ export async function executeAxiom(
   // STEP_01_TUTOVOU : validation tutoiement/vouvoiement
   if (currentStep === STEP_01_TUTOVOU) {
     if (!userMessage) {
+      // Pas de message utilisateur, poser la question tutoiement/vouvoiement
       return {
         response: TUTOVOU_QUESTION,
         step: STEP_01_TUTOVOU,
@@ -116,37 +162,49 @@ export async function executeAxiom(
 
     const validation = validateTutoiementVouvoiement(userMessage);
     if (!validation) {
-      // Réponse invalide, reposer la question
+      // Réponse invalide, reposer EXACTEMENT la même question
       return {
-        response: 'Merci de répondre par « tutoiement » ou « vouvoiement ».',
+        response: TUTOVOU_QUESTION,
         step: STEP_01_TUTOVOU,
         lastQuestion: TUTOVOU_QUESTION,
       };
     }
 
-    // Réponse valide, passer au préambule
+    // Réponse valide, AVANCER au préambule métier
     tutoiement = validation;
     currentStep = STEP_02_PREAMBULE;
     lastQuestion = null;
+    
+    // Retourner immédiatement le préambule métier (texte fixe, pas besoin d'OpenAI)
+    return {
+      response: PREAMBULE_METIER,
+      step: STEP_02_PREAMBULE,
+      lastQuestion: null,
+      tutoiement,
+    };
   }
 
-  // STEP_02_PREAMBULE : afficher le préambule métier (une seule fois)
+  // STEP_02_PREAMBULE : afficher le préambule métier (une seule fois, déjà fait)
+  // Si on arrive ici, c'est qu'on vient de l'afficher, on passe à BLOC_1_Q1
   if (currentStep === STEP_02_PREAMBULE) {
-    // Le préambule sera généré par OpenAI avec le prompt complet
-    // On passe directement à STEP_03_BLOC1 après
-    const directive = buildExecutionDirective(STEP_02_PREAMBULE, null);
+    // Le préambule a déjà été affiché, passer à BLOC_1_Q1
+    currentStep = STEP_03_BLOC1;
+    lastQuestion = null;
+    
+    // Utiliser OpenAI pour générer la première question du Bloc 1
+    const directive = buildExecutionDirective(STEP_03_BLOC1, null);
     const session = candidateToSession(updatedCandidate);
     
     let aiResponse: string;
     try {
       aiResponse = await executeProfilPrompt(session, updatedCandidate.answers, directive);
       if (!aiResponse || aiResponse.trim() === '') {
-        // Fallback : utiliser le texte de démarrage du prompt
-        aiResponse = TUTOVOU_QUESTION;
+        // Fallback : rejouer la question attendue
+        aiResponse = 'Très bien. Commençons par le Bloc 1 : Énergie & moteurs internes.';
       }
     } catch (error) {
-      // En cas d'erreur, rejouer lastQuestion ou texte de démarrage
-      aiResponse = lastQuestion || TUTOVOU_QUESTION;
+      // En cas d'erreur, rejouer la question attendue
+      aiResponse = 'Très bien. Commençons par le Bloc 1 : Énergie & moteurs internes.';
     }
 
     // Extraire la dernière question si présente
@@ -155,12 +213,9 @@ export async function executeAxiom(
       lastQuestion = extractedQuestion;
     }
 
-    // Passer à STEP_03_BLOC1 après affichage du préambule
-    currentStep = STEP_03_BLOC1;
-
     return {
       response: aiResponse,
-      step: currentStep,
+      step: STEP_03_BLOC1,
       lastQuestion,
       tutoiement,
     };
@@ -169,15 +224,40 @@ export async function executeAxiom(
   // STEP_03_BLOC1+ : laisser le LLM dérouler avec le prompt complet
   if (currentStep === STEP_03_BLOC1) {
     if (!userMessage) {
-      // Pas de message utilisateur, rejouer lastQuestion
+      // Pas de message utilisateur, rejouer lastQuestion ou poser la première question du Bloc 1
+      if (lastQuestion) {
+        return {
+          response: lastQuestion,
+          step: STEP_03_BLOC1,
+          lastQuestion,
+          tutoiement,
+        };
+      }
+      
+      // Pas de lastQuestion, générer la première question du Bloc 1
+      const directive = buildExecutionDirective(STEP_03_BLOC1, null);
+      const session = candidateToSession(updatedCandidate);
+      
+      let aiResponse: string;
+      try {
+        aiResponse = await executeProfilPrompt(session, updatedCandidate.answers, directive);
+        if (!aiResponse || aiResponse.trim() === '') {
+          aiResponse = 'Très bien. Commençons par le Bloc 1 : Énergie & moteurs internes.';
+        }
+      } catch (error) {
+        aiResponse = 'Très bien. Commençons par le Bloc 1 : Énergie & moteurs internes.';
+      }
+
+      const extractedQuestion = extractLastQuestion(aiResponse);
       return {
-        response: lastQuestion || 'Très bien. Continuons.',
-        step: currentStep,
-        lastQuestion,
+        response: aiResponse,
+        step: STEP_03_BLOC1,
+        lastQuestion: extractedQuestion,
         tutoiement,
       };
     }
 
+    // Message utilisateur présent, analyser et avancer dans le protocole
     const directive = buildExecutionDirective(STEP_03_BLOC1, lastQuestion);
     const session = candidateToSession(updatedCandidate);
     
@@ -185,7 +265,7 @@ export async function executeAxiom(
     try {
       aiResponse = await executeProfilPrompt(session, updatedCandidate.answers, directive);
       if (!aiResponse || aiResponse.trim() === '') {
-        // Fallback : rejouer lastQuestion
+        // Fallback : rejouer lastQuestion si existe, sinon question par défaut
         aiResponse = lastQuestion || 'Très bien. Continuons.';
       }
     } catch (error) {
@@ -201,7 +281,7 @@ export async function executeAxiom(
 
     return {
       response: aiResponse,
-      step: currentStep,
+      step: STEP_03_BLOC1,
       lastQuestion,
       tutoiement,
     };
