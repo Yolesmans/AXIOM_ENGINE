@@ -30,6 +30,7 @@ export interface ExecuteAxiomResult {
   lastQuestion: string | null;
   tutoiement?: 'tutoiement' | 'vouvoiement';
   expectsAnswer: boolean;
+  autoContinue: boolean;
 }
 
 export async function executeAxiom(
@@ -115,12 +116,20 @@ export async function executeAxiom(
     state.lastQuestion = null;
   }
 
+  let autoContinue = false;
+
+  // 🔁 SIGNAL D'ENCHAÎNEMENT (APRÈS affichage)
+  if (state.step === STEP_02_PREAMBULE && !expectsAnswer) {
+    autoContinue = true;
+  }
+
   return {
     response: aiText,
     expectsAnswer,
     step: state.step,
     lastQuestion: state.lastQuestion,
     tutoiement: state.tutoiement,
+    autoContinue,
   };
 }
 
