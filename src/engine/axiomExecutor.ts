@@ -123,19 +123,15 @@ export async function executeAxiom(
     state.lastQuestion = aiText;
   }
 
-  // Mise à jour du step selon la progression (préambule → bloc 1)
+  // 🔒 ÉTAPE 1 — FIN DU PRÉAMBULE → PASSAGE AU BLOC 1
+  // Le front relance /axiom quand expectsAnswer === false
+
   if (state.step === STEP_02_PREAMBULE && !expectsAnswer) {
-    // Préambule affiché (pas de question), passer au Bloc 1
     state.step = STEP_03_BLOC1;
     state.lastQuestion = null;
   }
 
   let autoContinue = false;
-
-  // 🔁 SIGNAL D'ENCHAÎNEMENT (APRÈS affichage)
-  if (state.step === STEP_02_PREAMBULE && !expectsAnswer) {
-    autoContinue = true;
-  }
 
   return {
     response: aiText,
