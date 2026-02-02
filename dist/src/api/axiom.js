@@ -1,13 +1,13 @@
 import { z } from 'zod';
 import { candidateStore } from '../store/sessionStore.js';
-import { v4 as uuidv4 } from 'uuid';
 import { AXIOM_BLOCKS } from '../types/blocks.js';
 import { testOpenAI } from '../services/openaiClient.js';
-import { executeProfilPrompt, executeMatchingPrompt } from '../services/axiomExecutor.js';
-import { candidateToSession } from '../utils/candidateAdapter.js';
+import { executeMatchingPrompt } from '../services/axiomExecutor.js';
 import { IdentitySchema } from '../validators/identity.js';
 import { candidateToLiveTrackingRow, googleSheetsLiveTrackingService, } from '../services/googleSheetsService.js';
 import { getPostConfig } from '../store/postRegistry.js';
+import { sessions } from '../server.js';
+import { executeAxiom, STEP_01_TUTOVOU, STEP_02_PREAMBULE, STEP_03_BLOC1 } from '../engine/axiomExecutor.js';
 const AxiomBodySchema = z.object({
     tenantId: z.string().min(1),
     posteId: z.string().min(1),
@@ -24,6 +24,22 @@ const AxiomBodySchema = z.object({
     })
         .optional(),
 });
+// Fonction pour extraire la dernière question d'un texte
+function extractLastQuestion(text) {
+    if (!text || text.trim() === '') {
+        return null;
+    }
+    // Prendre les 400 derniers caractères
+    const last400 = text.slice(-400);
+    // Chercher la dernière ligne contenant "?"
+    const lines = last400.split('\n');
+    for (let i = lines.length - 1; i >= 0; i--) {
+        if (lines[i].includes('?')) {
+            return lines[i].trim();
+        }
+    }
+    return null;
+}
 export async function registerAxiomRoutes(app) {
     app.get('/health', async () => {
         return { ok: true };
@@ -44,7 +60,26 @@ export async function registerAxiomRoutes(app) {
                 openaiResponse,
             });
         }
-        const { tenantId, posteId, sessionId: providedSessionId, identity: providedIdentity } = parsed.data;
+        const { tenantId, posteId, sessionId: providedSessionId, identity: providedIdentity, message: userMessage } = parsed.data;
+        // Exiger sessionId (header ou body)
+        const sessionId = req.headers['x-session-id'] || providedSessionId;
+        if (!sessionId) {
+            return reply.code(400).send({
+                error: 'MISSING_SESSION_ID',
+                message: 'sessionId requis (header x-session-id ou body)',
+            });
+        }
+        // Charger ou initialiser session
+        let sessionData = sessions.get(sessionId);
+        if (!sessionData) {
+            sessionData = {
+                identityDone: false,
+                vouvoiement: null,
+                lastQuestion: null,
+                lastAssistant: null,
+            };
+            sessions.set(sessionId, sessionData);
+        }
         try {
             getPostConfig(tenantId, posteId);
         }
@@ -54,33 +89,131 @@ export async function registerAxiomRoutes(app) {
                 message: error instanceof Error ? error.message : 'Invalid posteId',
             });
         }
-        let candidate;
-        if (!providedSessionId) {
-            // CAS 1 : Nouvelle session
-            const candidateId = uuidv4();
-            candidate = candidateStore.create(candidateId, tenantId);
-            app.log.info({ candidateId, tenantId }, 'Nouveau candidat AXIOM créé');
+        // Détecter si le message contient prénom + nom + email
+        const messageText = userMessage || '';
+        const prenomMatch = messageText.match(/Prénom:\s*(.+)/i);
+        const nomMatch = messageText.match(/Nom:\s*(.+)/i);
+        const emailMatch = messageText.match(/Email:\s*(.+)/i);
+        if (prenomMatch && nomMatch && emailMatch) {
+            // Message contient identité complète
+            const firstName = prenomMatch[1].trim();
+            const lastName = nomMatch[1].trim();
+            const email = emailMatch[1].trim();
+            // Valider l'identité
+            const identityValidation = IdentitySchema.safeParse({ firstName, lastName, email });
+            if (!identityValidation.success) {
+                return reply.code(400).send({
+                    error: 'INVALID_IDENTITY',
+                    message: 'Avant de commencer AXIOM, j\'ai besoin de :\n- ton prénom\n- ton nom\n- ton adresse email',
+                });
+            }
+            // Charger ou créer le candidat
+            let candidate = candidateStore.get(sessionId);
+            if (!candidate) {
+                candidate = candidateStore.create(sessionId, tenantId);
+            }
+            // Mettre à jour l'identité
+            candidate = candidateStore.updateIdentity(candidate.candidateId, {
+                firstName: identityValidation.data.firstName,
+                lastName: identityValidation.data.lastName,
+                email: identityValidation.data.email,
+                completedAt: new Date(),
+            });
+            if (!candidate) {
+                return reply.code(500).send({
+                    error: 'INTERNAL_ERROR',
+                    message: 'Failed to update identity',
+                });
+            }
+            // Mettre à jour le state UI : identityDone = true, step = STEP_01_TUTOVOU
+            candidateStore.updateUIState(candidate.candidateId, {
+                identityDone: true,
+                step: STEP_01_TUTOVOU,
+            });
+            candidate = candidateStore.get(candidate.candidateId);
+            if (!candidate) {
+                return reply.code(500).send({
+                    error: 'INTERNAL_ERROR',
+                    message: 'Failed to update UI state',
+                });
+            }
+            // Mettre à jour le suivi live
+            try {
+                const trackingRow = candidateToLiveTrackingRow(candidate);
+                await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+            }
+            catch (error) {
+                app.log.error({
+                    tenantId,
+                    posteId,
+                    candidateId: candidate.candidateId,
+                    errorMessage: error instanceof Error ? error.message : String(error),
+                    errorStack: error instanceof Error ? error.stack : undefined,
+                    googleResponse: error?.response?.data,
+                }, 'Failed to update live tracking');
+            }
+            // Utiliser l'orchestrateur pour obtenir la réponse
+            const result = await executeAxiom(candidate, null);
+            // Persister le state UI
+            candidateStore.updateUIState(candidate.candidateId, {
+                step: result.step,
+                lastQuestion: result.lastQuestion,
+                tutoiement: result.tutoiement,
+            });
+            // Mettre à jour le tone preference si défini
+            if (result.tutoiement) {
+                candidateStore.setTonePreference(candidate.candidateId, result.tutoiement);
+            }
+            // Déterminer le state pour la réponse
+            let responseState = 'preamble';
+            if (result.step === STEP_03_BLOC1) {
+                responseState = 'collecting';
+                candidateStore.updateSession(candidate.candidateId, { state: 'collecting', currentBlock: 1 });
+            }
+            else if (result.step === STEP_01_TUTOVOU) {
+                responseState = 'preamble';
+                candidateStore.updateSession(candidate.candidateId, { state: 'preamble' });
+            }
+            candidate = candidateStore.get(candidate.candidateId);
+            if (!candidate) {
+                return reply.code(500).send({
+                    error: 'INTERNAL_ERROR',
+                    message: 'Failed to update session',
+                });
+            }
+            return reply.send({
+                sessionId: candidate.candidateId,
+                currentBlock: candidate.session.currentBlock,
+                state: responseState,
+                response: result.response,
+            });
+        }
+        // Charger le candidat existant
+        let candidate = candidateStore.get(sessionId);
+        if (!candidate) {
+            app.log.warn({ candidateId: sessionId, tenantId }, 'Candidat non trouvé, création d\'un nouveau candidat');
+            candidate = candidateStore.create(sessionId, tenantId);
+            if (!sessions.has(sessionId)) {
+                sessions.set(sessionId, {
+                    identityDone: false,
+                    vouvoiement: null,
+                    lastQuestion: null,
+                    lastAssistant: null,
+                });
+                sessionData = sessions.get(sessionId);
+            }
         }
         else {
-            // Charger le candidat existant
-            candidate = candidateStore.get(providedSessionId);
-            if (!candidate) {
-                app.log.warn({ candidateId: providedSessionId, tenantId }, 'Candidat non trouvé, création d\'un nouveau candidat');
-                const candidateId = uuidv4();
-                candidate = candidateStore.create(candidateId, tenantId);
+            // Vérifier l'isolation tenant
+            if (candidate.tenantId !== tenantId) {
+                return reply.code(403).send({
+                    error: 'TENANT_MISMATCH',
+                    message: 'Candidate does not belong to this tenant',
+                });
             }
-            else {
-                // Vérifier l'isolation tenant
-                if (candidate.tenantId !== tenantId) {
-                    return reply.code(403).send({
-                        error: 'TENANT_MISMATCH',
-                        message: 'Candidate does not belong to this tenant',
-                    });
-                }
-                app.log.info({ candidateId: providedSessionId, tenantId, state: candidate.session.state, currentBlock: candidate.session.currentBlock }, 'Candidat chargé');
-            }
+            app.log.info({ candidateId: sessionId, tenantId, state: candidate.session.state, currentBlock: candidate.session.currentBlock }, 'Candidat chargé');
         }
-        // CAS 2 : Réception identité valide
+        // CAS 2 : Réception identité valide via providedIdentity
         if (providedIdentity && candidate.session.state === 'identity') {
             const identityValidation = IdentitySchema.safeParse(providedIdentity);
             if (!identityValidation.success) {
@@ -102,13 +235,137 @@ export async function registerAxiomRoutes(app) {
                     message: 'Failed to update identity',
                 });
             }
-            app.log.info({ candidateId: candidate.candidateId, tenantId }, 'Identité candidat enregistrée, passage à preamble');
+            // Mettre à jour le state UI : identityDone = true, step = STEP_01_TUTOVOU
+            candidateStore.updateUIState(candidate.candidateId, {
+                identityDone: true,
+                step: STEP_01_TUTOVOU,
+            });
+            candidate = candidateStore.get(candidate.candidateId);
+            if (!candidate) {
+                return reply.code(500).send({
+                    error: 'INTERNAL_ERROR',
+                    message: 'Failed to update UI state',
+                });
+            }
+            // Mettre à jour le suivi live
+            try {
+                const trackingRow = candidateToLiveTrackingRow(candidate);
+                await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+            }
+            catch (error) {
+                app.log.error({
+                    tenantId,
+                    posteId,
+                    candidateId: candidate.candidateId,
+                    errorMessage: error instanceof Error ? error.message : String(error),
+                    errorStack: error instanceof Error ? error.stack : undefined,
+                    googleResponse: error?.response?.data,
+                }, 'Failed to update live tracking');
+            }
+            // Utiliser l'orchestrateur pour obtenir la réponse
+            const result = await executeAxiom(candidate, null);
+            // Persister le state UI
+            candidateStore.updateUIState(candidate.candidateId, {
+                step: result.step,
+                lastQuestion: result.lastQuestion,
+                tutoiement: result.tutoiement,
+            });
             candidateStore.updateSession(candidate.candidateId, { state: 'preamble' });
             candidate = candidateStore.get(candidate.candidateId);
             if (!candidate) {
                 return reply.code(500).send({
                     error: 'INTERNAL_ERROR',
                     message: 'Failed to update session',
+                });
+            }
+            return reply.send({
+                sessionId: candidate.candidateId,
+                currentBlock: candidate.session.currentBlock,
+                state: 'preamble',
+                response: result.response,
+            });
+        }
+        // CAS 3 : Tentative AXIOM sans identité complète
+        if (candidate.session.state === 'identity' || !candidate.identity.completedAt) {
+            return reply.send({
+                sessionId: candidate.candidateId,
+                currentBlock: candidate.session.currentBlock,
+                state: 'identity',
+                response: 'Avant de commencer AXIOM, j\'ai besoin de :\n- ton prénom\n- ton nom\n- ton adresse email',
+            });
+        }
+        // Utiliser l'orchestrateur pour tous les autres cas (preamble, collecting, etc.)
+        // S'assurer que le state UI existe
+        if (!candidate.session.ui) {
+            candidateStore.updateUIState(candidate.candidateId, {
+                step: candidate.session.state === 'preamble' ? STEP_01_TUTOVOU : STEP_03_BLOC1,
+                lastQuestion: null,
+                identityDone: true,
+            });
+            candidate = candidateStore.get(candidate.candidateId);
+            if (!candidate) {
+                return reply.code(500).send({
+                    error: 'INTERNAL_ERROR',
+                    message: 'Failed to initialize UI state',
+                });
+            }
+        }
+        // Gestion des messages en état preamble ou collecting - utiliser l'orchestrateur
+        if (candidate.session.state === 'preamble' || candidate.session.state === 'collecting') {
+            const userMessageText = userMessage || '';
+            // Si on est en collecting, stocker la réponse comme AnswerRecord
+            if (candidate.session.state === 'collecting' && userMessageText) {
+                const answerRecord = {
+                    block: candidate.session.currentBlock,
+                    message: userMessageText,
+                    createdAt: new Date().toISOString(),
+                };
+                candidate = candidateStore.addAnswer(candidate.candidateId, answerRecord);
+                if (!candidate) {
+                    return reply.code(500).send({
+                        error: 'INTERNAL_ERROR',
+                        message: 'Failed to store answer',
+                    });
+                }
+            }
+            // Utiliser l'orchestrateur
+            const result = await executeAxiom(candidate, userMessageText);
+            // Persister le state UI
+            candidateStore.updateUIState(candidate.candidateId, {
+                step: result.step,
+                lastQuestion: result.lastQuestion,
+                tutoiement: result.tutoiement,
+            });
+            // Mettre à jour le tone preference si défini
+            if (result.tutoiement) {
+                candidateStore.setTonePreference(candidate.candidateId, result.tutoiement);
+            }
+            // Déterminer le state et currentBlock pour la réponse selon le step
+            let responseState = candidate.session.state;
+            let currentBlock = candidate.session.currentBlock;
+            if (result.step === STEP_03_BLOC1) {
+                // On passe en collecting avec le Bloc 1
+                responseState = 'collecting';
+                currentBlock = 1;
+                candidateStore.updateSession(candidate.candidateId, { state: 'collecting', currentBlock: 1 });
+            }
+            else if (result.step === STEP_02_PREAMBULE) {
+                // Préambule affiché, on reste en preamble mais le step va passer à BLOC_1_Q1 au prochain appel
+                responseState = 'preamble';
+            }
+            else if (result.step === STEP_01_TUTOVOU) {
+                // Question tutoiement/vouvoiement
+                responseState = 'preamble';
+            }
+            // Stocker finalProfileText si on est en collecting
+            if (responseState === 'collecting' && result.response) {
+                candidateStore.setFinalProfileText(candidate.candidateId, result.response);
+            }
+            candidate = candidateStore.get(candidate.candidateId);
+            if (!candidate) {
+                return reply.code(500).send({
+                    error: 'INTERNAL_ERROR',
+                    message: 'Failed to update candidate',
                 });
             }
             // Mettre à jour le suivi live
@@ -128,87 +385,17 @@ export async function registerAxiomRoutes(app) {
             }
             return reply.send({
                 sessionId: candidate.candidateId,
-                currentBlock: candidate.session.currentBlock,
-                state: 'preamble',
-                response: 'Avant de commencer AXIOM, une dernière chose.\n\nPréférez-vous que l\'on se tutoie ou que l\'on se vouvoie ?',
-            });
-        }
-        // CAS 3 : Tentative AXIOM sans identité complète
-        if (candidate.session.state === 'identity') {
-            return reply.send({
-                sessionId: candidate.candidateId,
-                currentBlock: candidate.session.currentBlock,
-                state: candidate.session.state,
-                response: 'Avant de commencer AXIOM, j\'ai besoin de :\n- ton prénom\n- ton nom\n- ton adresse email',
-            });
-        }
-        // Convertir en session pour compatibilité avec le moteur existant
-        const session = candidateToSession(candidate);
-        // Vérifier que l'identité est complète avant toute exécution AXIOM
-        if (!candidate.identity.completedAt) {
-            return reply.send({
-                sessionId: candidate.candidateId,
-                currentBlock: candidate.session.currentBlock,
-                state: 'identity',
-                response: 'Avant de commencer AXIOM, j\'ai besoin de :\n- ton prénom\n- ton nom\n- ton adresse email',
-            });
-        }
-        // Gestion des messages en état preamble
-        if (candidate.session.state === 'preamble') {
-            const message = (parsed.data.message || parsed.data.userMessage || '').toLowerCase();
-            let mode = null;
-            if (message.includes('tuto')) {
-                mode = 'tutoiement';
-            }
-            else if (message.includes('vouvoi')) {
-                mode = 'vouvoiement';
-            }
-            if (!mode) {
-                return reply.send({
-                    sessionId: candidate.candidateId,
-                    currentBlock: candidate.session.currentBlock,
-                    state: 'preamble',
-                    response: 'Merci de répondre par « tutoiement » ou « vouvoiement ».',
-                });
-            }
-            candidateStore.setTonePreference(candidate.candidateId, mode);
-            candidateStore.updateSession(candidate.candidateId, { state: 'collecting', currentBlock: 1 });
-            candidate = candidateStore.get(candidate.candidateId);
-            if (!candidate) {
-                return reply.code(500).send({
-                    error: 'INTERNAL_ERROR',
-                    message: 'Failed to update session',
-                });
-            }
-            // Lancer AXIOM_PROFIL normalement
-            const sessionForProfil = candidateToSession(candidate);
-            const aiResponse = await executeProfilPrompt(sessionForProfil, candidate.answers);
-            candidateStore.setFinalProfileText(candidate.candidateId, aiResponse);
-            candidateStore.updateSession(candidate.candidateId, {});
-            try {
-                const trackingRow = candidateToLiveTrackingRow(candidate);
-                await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
-            }
-            catch (error) {
-                app.log.error({
-                    tenantId,
-                    posteId,
-                    candidateId: candidate.candidateId,
-                    errorMessage: error instanceof Error ? error.message : String(error),
-                    errorStack: error instanceof Error ? error.stack : undefined,
-                    googleResponse: error?.response?.data,
-                }, 'Failed to update live tracking');
-            }
-            return reply.send({
-                sessionId: candidate.candidateId,
-                currentBlock: 1,
-                state: 'collecting',
-                response: aiResponse,
+                currentBlock: currentBlock,
+                state: responseState,
+                response: result.response,
+                expectsAnswer: result.expectsAnswer,
+                autoContinue: result.autoContinue,
             });
         }
         // Implémenter finish (basculement vers waiting_go)
         if (parsed.data.finish === true) {
-            if (candidate.session.state === 'collecting' && candidate.session.currentBlock === AXIOM_BLOCKS.MAX) {
+            const isCollecting = (candidate.session.ui?.step === STEP_03_BLOC1) || candidate.session.state === 'collecting';
+            if (isCollecting && candidate.session.currentBlock === AXIOM_BLOCKS.MAX) {
                 candidateStore.updateSession(candidate.candidateId, { state: 'waiting_go' });
                 candidate = candidateStore.get(candidate.candidateId);
                 if (!candidate) {
@@ -228,11 +415,15 @@ export async function registerAxiomRoutes(app) {
                         googleResponse: error?.response?.data,
                     }, 'Failed to update live tracking');
                 }
+                const waitingGoResponse = 'AXIOM est prêt pour le matching final.\n\nQuand vous êtes prêt, écrivez exactement : GO';
+                sessionData.lastAssistant = waitingGoResponse;
+                sessionData.lastQuestion = waitingGoResponse;
+                sessions.set(sessionId, sessionData);
                 return reply.send({
                     sessionId: candidate.candidateId,
                     currentBlock: candidate.session.currentBlock,
                     state: 'waiting_go',
-                    response: 'AXIOM est prêt pour le matching final.\n\nQuand vous êtes prêt, écrivez exactement : GO',
+                    response: waitingGoResponse,
                 });
             }
             else {
@@ -246,11 +437,12 @@ export async function registerAxiomRoutes(app) {
         if (candidate.session.state === 'waiting_go') {
             const message = (parsed.data.message || parsed.data.userMessage || '').trim();
             if (message !== 'GO') {
+                const waitingGoResponse = sessionData.lastQuestion || 'AXIOM est prêt pour le matching final.\n\nQuand vous êtes prêt, écrivez exactement : GO';
                 return reply.send({
                     sessionId: candidate.candidateId,
                     currentBlock: candidate.session.currentBlock,
                     state: 'waiting_go',
-                    response: 'AXIOM est prêt pour le matching final.\n\nQuand vous êtes prêt, écrivez exactement : GO',
+                    response: waitingGoResponse,
                 });
             }
             const finalProfileText = candidate.finalProfileText ?? '';
@@ -260,13 +452,34 @@ export async function registerAxiomRoutes(app) {
                     message: 'Profil non disponible pour le matching (finalProfileText manquant).',
                 });
             }
-            const fullText = await executeMatchingPrompt({
-                tenantId,
-                posteId,
-                sessionId: candidate.candidateId,
-                answers: candidate.answers,
-                finalProfileText,
-            });
+            // Directive système obligatoire
+            const systemDirective = 'RÈGLE ABSOLUE: Tu exécutes STRICTEMENT le protocole AXIOM fourni. Tu ne produis JAMAIS de texte hors protocole. À chaque message, tu dois produire UNIQUEMENT la prochaine sortie autorisée par le protocole (question suivante, transition de bloc, miroir interprétatif autorisé, ou texte obligatoire). INTERDICTION d\'improviser, de résumer, de commenter le système, de sauter un bloc. Si l\'état est ambigu, tu rejoues la dernière question valide exactement.';
+            let fullText;
+            try {
+                fullText = await executeMatchingPrompt({
+                    tenantId,
+                    posteId,
+                    sessionId: candidate.candidateId,
+                    answers: candidate.answers,
+                    finalProfileText,
+                    systemDirective,
+                });
+                // Si réponse vide, utiliser lastQuestion
+                if (!fullText || fullText.trim() === '') {
+                    fullText = sessionData.lastQuestion || 'Très bien. Continuons.';
+                }
+            }
+            catch (error) {
+                app.log.error({
+                    candidateId: candidate.candidateId,
+                    errorMessage: error instanceof Error ? error.message : String(error),
+                }, 'Error executing matching prompt');
+                // Si erreur, utiliser lastQuestion
+                fullText = sessionData.lastQuestion || 'Très bien. Continuons.';
+            }
+            // Mettre à jour lastAssistant
+            sessionData.lastAssistant = fullText;
+            sessions.set(sessionId, sessionData);
             const lignes = fullText.split('\n').map(l => l.trim()).filter(Boolean);
             const verdict = (lignes[0] ?? '').slice(0, 80);
             const summary = lignes.slice(0, 3).join(' ').slice(0, 240);
@@ -292,69 +505,23 @@ export async function registerAxiomRoutes(app) {
                     googleResponse: error?.response?.data,
                 }, 'Failed to update live tracking');
             }
+            // VALIDATION FINALE : garantir que response n'est jamais vide
+            const finalResponse = fullText && fullText.trim() !== '' ? fullText : (sessionData.lastQuestion || 'Très bien. Continuons.');
             return reply.send({
                 sessionId: candidate.candidateId,
                 currentBlock: candidate.session.currentBlock,
                 state: 'completed',
-                response: fullText,
+                response: finalResponse,
             });
         }
-        // Exécuter le prompt PROFIL si state === collecting
-        if (candidate.session.state === 'collecting') {
-            const message = parsed.data.message || parsed.data.userMessage;
-            if (message) {
-                // Créer un AnswerRecord
-                const answerRecord = {
-                    block: candidate.session.currentBlock,
-                    message,
-                    createdAt: new Date().toISOString(),
-                };
-                // Stocker la réponse
-                const updatedCandidate = candidateStore.addAnswer(candidate.candidateId, answerRecord);
-                if (!updatedCandidate) {
-                    return reply.code(500).send({
-                        error: 'INTERNAL_ERROR',
-                        message: 'Failed to store answer',
-                    });
-                }
-                candidate = updatedCandidate;
-                // Mettre à jour la session pour refléter le candidat mis à jour
-                const updatedSession = candidateToSession(candidate);
-                session.currentBlock = updatedSession.currentBlock;
-                session.state = updatedSession.state;
-            }
-            // Relancer l'exécution du prompt PROFIL avec toutes les réponses
-            const aiResponse = await executeProfilPrompt(session, candidate.answers);
-            // Capturer le texte final du profil
-            candidateStore.setFinalProfileText(candidate.candidateId, aiResponse);
-            // Mettre à jour l'activité (session déjà mise à jour par addAnswer)
-            candidateStore.updateSession(candidate.candidateId, {});
-            // Mettre à jour le suivi live
-            try {
-                const trackingRow = candidateToLiveTrackingRow(candidate);
-                await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
-            }
-            catch (error) {
-                app.log.error({
-                    tenantId,
-                    posteId,
-                    candidateId: candidate.candidateId,
-                    errorMessage: error instanceof Error ? error.message : String(error),
-                    errorStack: error instanceof Error ? error.stack : undefined,
-                    googleResponse: error?.response?.data,
-                }, 'Failed to update live tracking');
-            }
-            return reply.send({
-                sessionId: candidate.candidateId,
-                currentBlock: candidate.session.currentBlock,
-                state: candidate.session.state,
-                response: aiResponse,
-            });
-        }
+        // FALLBACK : réponse obligatoire pour tout autre cas
+        // Utiliser lastQuestion si disponible, sinon fallback générique
+        const fallbackResponse = sessionData.lastQuestion || 'Très bien. Continuons.';
         return reply.send({
             sessionId: candidate.candidateId,
             currentBlock: candidate.session.currentBlock,
             state: candidate.session.state,
+            response: fallbackResponse,
         });
     });
 }

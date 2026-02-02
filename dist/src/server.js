@@ -1,9 +1,26 @@
 import Fastify from 'fastify';
+import cors from '@fastify/cors';
 import { registerAxiomRoutes } from './api/axiom.js';
 import { registerStartRoute } from './routes/start.js';
+// Map de sessions en mémoire pour gérer identityDone, vouvoiement, lastQuestion, lastAssistant
+export const sessions = new Map();
 export function buildServer() {
     const app = Fastify({
         logger: true,
+    });
+    // 🔒 CORS — MVP (OBLIGATOIRE POUR LE FRONT)
+    app.register(cors, {
+        origin: '*',
+        methods: ['GET', 'POST', 'OPTIONS'],
+        allowedHeaders: ['Content-Type', 'Authorization', 'x-session-id'],
+    });
+    // Route GET /health
+    app.get('/health', async () => {
+        return { status: 'ok' };
+    });
+    // Route POST /api/start
+    app.post('/api/start', async () => {
+        return { started: true };
     });
     registerStartRoute(app);
     registerAxiomRoutes(app);

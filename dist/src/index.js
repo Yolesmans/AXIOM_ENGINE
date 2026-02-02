@@ -1,13 +1,12 @@
-import 'dotenv/config';
-import { buildServer } from './server.js';
-import { env } from './env.js';
-const app = buildServer();
-// 🔹 Mode local uniquement
-if (process.env.NODE_ENV !== 'production') {
-    app.listen({ port: env.PORT, host: '0.0.0.0' }).catch((err) => {
-        app.log.error(err);
-        process.exit(1);
-    });
-}
-// 🔹 Export pour Vercel (serverless)
-export default app;
+import express from "express";
+const app = express();
+app.get("/", (req, res) => {
+    res.status(200).send("AXIOM ENGINE ONLINE");
+});
+app.get("/health", (req, res) => {
+    res.json({ status: "ok" });
+});
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server listening on port ${PORT}`);
+});

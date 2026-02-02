@@ -149,5 +149,29 @@ class CandidateStore {
         this.candidates.set(candidateId, updated);
         return updated;
     }
+    updateUIState(candidateId, uiUpdates) {
+        const candidate = this.candidates.get(candidateId);
+        if (!candidate) {
+            return undefined;
+        }
+        const currentUI = candidate.session.ui || {
+            step: candidate.identity.completedAt ? 'STEP_01_TUTOVOU' : 'STEP_00_IDENTITY',
+            lastQuestion: null,
+            identityDone: !!candidate.identity.completedAt,
+        };
+        const updated = {
+            ...candidate,
+            session: {
+                ...candidate.session,
+                ui: {
+                    ...currentUI,
+                    ...uiUpdates,
+                },
+                lastActivityAt: new Date(),
+            },
+        };
+        this.candidates.set(candidateId, updated);
+        return updated;
+    }
 }
 export const candidateStore = new CandidateStore();

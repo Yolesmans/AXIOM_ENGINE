@@ -22,3 +22,18 @@ export async function testOpenAI() {
     }
     return content.trim();
 }
+export async function callOpenAI(params) {
+    const response = await client.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: params.messages.map((msg) => ({
+            role: msg.role,
+            content: msg.content,
+        })),
+        temperature: 0.7,
+    });
+    const content = response.choices[0]?.message?.content;
+    if (!content) {
+        throw new Error('No response content from OpenAI');
+    }
+    return content.trim();
+}
