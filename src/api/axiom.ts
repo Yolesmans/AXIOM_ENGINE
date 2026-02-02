@@ -161,9 +161,23 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
         });
       }
 
-      // Lancer AXIOM_PROFIL normalement
+      // Lancer AXIOM_PROFIL normalement (prompt complet relu à chaque appel)
       const sessionForProfil = candidateToSession(candidate);
-      const aiResponse = await executeProfilPrompt(sessionForProfil, candidate.answers);
+      let aiResponse: string;
+      try {
+        aiResponse = await executeProfilPrompt(sessionForProfil, candidate.answers);
+        // FALLBACK : forcer une réponse si vide
+        if (!aiResponse || aiResponse.trim() === '') {
+          aiResponse = 'Très bien. Continuons.';
+        }
+      } catch (error) {
+        app.log.error({
+          candidateId: candidate.candidateId,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        }, 'Error executing profil prompt');
+        // FALLBACK : réponse obligatoire même en cas d'erreur
+        aiResponse = 'Très bien. Continuons.';
+      }
       
       candidateStore.setFinalProfileText(candidate.candidateId, aiResponse);
       candidateStore.updateSession(candidate.candidateId, {});
@@ -331,9 +345,23 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
         });
       }
 
-      // Lancer AXIOM_PROFIL normalement
+      // Lancer AXIOM_PROFIL normalement (prompt complet relu à chaque appel)
       const sessionForProfil = candidateToSession(candidate);
-      const aiResponse = await executeProfilPrompt(sessionForProfil, candidate.answers);
+      let aiResponse: string;
+      try {
+        aiResponse = await executeProfilPrompt(sessionForProfil, candidate.answers);
+        // FALLBACK : forcer une réponse si vide
+        if (!aiResponse || aiResponse.trim() === '') {
+          aiResponse = 'Très bien. Continuons.';
+        }
+      } catch (error) {
+        app.log.error({
+          candidateId: candidate.candidateId,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        }, 'Error executing profil prompt');
+        // FALLBACK : réponse obligatoire même en cas d'erreur
+        aiResponse = 'Très bien. Continuons.';
+      }
       
       candidateStore.setFinalProfileText(candidate.candidateId, aiResponse);
       candidateStore.updateSession(candidate.candidateId, {});
@@ -418,13 +446,27 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
         });
       }
 
-      const fullText = await executeMatchingPrompt({
-        tenantId,
-        posteId,
-        sessionId: candidate.candidateId,
-        answers: candidate.answers,
-        finalProfileText,
-      });
+      let fullText: string;
+      try {
+        fullText = await executeMatchingPrompt({
+          tenantId,
+          posteId,
+          sessionId: candidate.candidateId,
+          answers: candidate.answers,
+          finalProfileText,
+        });
+        // FALLBACK : forcer une réponse si vide
+        if (!fullText || fullText.trim() === '') {
+          fullText = 'Très bien. Continuons.';
+        }
+      } catch (error) {
+        app.log.error({
+          candidateId: candidate.candidateId,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        }, 'Error executing matching prompt');
+        // FALLBACK : réponse obligatoire même en cas d'erreur
+        fullText = 'Très bien. Continuons.';
+      }
 
       const lignes = fullText.split('\n').map(l => l.trim()).filter(Boolean);
       const verdict = (lignes[0] ?? '').slice(0, 80);
@@ -489,7 +531,22 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
       }
 
       // Relancer l'exécution du prompt PROFIL avec toutes les réponses
-      const aiResponse = await executeProfilPrompt(session, candidate.answers);
+      // Le prompt complet est relu à chaque appel (ChatGPT-like)
+      let aiResponse: string;
+      try {
+        aiResponse = await executeProfilPrompt(session, candidate.answers);
+        // FALLBACK : forcer une réponse si vide
+        if (!aiResponse || aiResponse.trim() === '') {
+          aiResponse = 'Très bien. Continuons.';
+        }
+      } catch (error) {
+        app.log.error({
+          candidateId: candidate.candidateId,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        }, 'Error executing profil prompt');
+        // FALLBACK : réponse obligatoire même en cas d'erreur
+        aiResponse = 'Très bien. Continuons.';
+      }
       
       // Capturer le texte final du profil
       candidateStore.setFinalProfileText(candidate.candidateId, aiResponse);
@@ -512,6 +569,7 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
         }, 'Failed to update live tracking');
       }
 
+      // UN MESSAGE UTILISATEUR = UNE RÉPONSE AXIOM (toujours)
       return reply.send({
         sessionId: candidate.candidateId,
         currentBlock: candidate.session.currentBlock,
@@ -520,11 +578,12 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
       });
     }
 
-
+    // FALLBACK : réponse obligatoire pour tout autre cas
     return reply.send({
       sessionId: candidate.candidateId,
       currentBlock: candidate.session.currentBlock,
       state: candidate.session.state,
+      response: 'Très bien. Continuons.',
     });
   });
 }

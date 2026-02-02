@@ -71,8 +71,10 @@ export async function executeProfilPrompt(
   });
 
   const content = response.choices[0]?.message?.content;
-  if (!content) {
-    throw new Error('No response content from OpenAI');
+  
+  // FALLBACK OBLIGATOIRE : forcer une réponse si vide
+  if (!content || content.trim() === '') {
+    return 'Très bien. Continuons.';
   }
 
   return content;
@@ -120,8 +122,10 @@ export async function executeMatchingPrompt(params: {
   });
 
   const content = response.choices[0]?.message?.content;
-  if (!content) {
-    throw new Error('No response content from OpenAI');
+  
+  // FALLBACK OBLIGATOIRE : forcer une réponse si vide
+  if (!content || content.trim() === '') {
+    return 'Très bien. Continuons.';
   }
 
   return content;
