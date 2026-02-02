@@ -18,6 +18,7 @@ import {
 } from '../services/googleSheetsService.js';
 import type { AnswerRecord } from '../types/answer.js';
 import { getPostConfig } from '../store/postRegistry.js';
+import { sessions } from '../server.js';
 
 const AxiomBodySchema = z.object({
   tenantId: z.string().min(1),
@@ -59,7 +60,16 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
       });
     }
 
-    const { tenantId, posteId, sessionId: providedSessionId, identity: providedIdentity } = parsed.data;
+    const { tenantId, posteId, sessionId: providedSessionId, identity: providedIdentity, message: userMessage } = parsed.data;
+
+    // Exiger sessionId (header ou body)
+    const sessionId = (req.headers['x-session-id'] as string) || providedSessionId;
+    if (!sessionId) {
+      return reply.code(400).send({
+        error: 'MISSING_SESSION_ID',
+        message: 'sessionId requis (header x-session-id ou body)',
+      });
+    }
 
     try {
       getPostConfig(tenantId, posteId);
@@ -70,35 +80,139 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
       });
     }
 
-    let candidate;
-    if (!providedSessionId) {
-      // CAS 1 : Nouvelle session
-      const candidateId = uuidv4();
-      candidate = candidateStore.create(candidateId, tenantId);
-      app.log.info({ candidateId, tenantId }, 'Nouveau candidat AXIOM créé');
-    } else {
-      // Charger le candidat existant
-      candidate = candidateStore.get(providedSessionId);
-      if (!candidate) {
-        app.log.warn(
-          { candidateId: providedSessionId, tenantId },
-          'Candidat non trouvé, création d\'un nouveau candidat',
-        );
-        const candidateId = uuidv4();
-        candidate = candidateStore.create(candidateId, tenantId);
-      } else {
-        // Vérifier l'isolation tenant
-        if (candidate.tenantId !== tenantId) {
-          return reply.code(403).send({
-            error: 'TENANT_MISMATCH',
-            message: 'Candidate does not belong to this tenant',
-          });
-        }
-        app.log.info(
-          { candidateId: providedSessionId, tenantId, state: candidate.session.state, currentBlock: candidate.session.currentBlock },
-          'Candidat chargé',
-        );
+    // Détecter si le message contient prénom + nom + email
+    const messageText = userMessage || '';
+    const prenomMatch = messageText.match(/Prénom:\s*(.+)/i);
+    const nomMatch = messageText.match(/Nom:\s*(.+)/i);
+    const emailMatch = messageText.match(/Email:\s*(.+)/i);
+
+    if (prenomMatch && nomMatch && emailMatch) {
+      // Message contient identité complète
+      const firstName = prenomMatch[1].trim();
+      const lastName = nomMatch[1].trim();
+      const email = emailMatch[1].trim();
+
+      // Valider l'identité
+      const identityValidation = IdentitySchema.safeParse({ firstName, lastName, email });
+      if (!identityValidation.success) {
+        return reply.code(400).send({
+          error: 'INVALID_IDENTITY',
+          message: 'Avant de commencer AXIOM, j\'ai besoin de :\n- ton prénom\n- ton nom\n- ton adresse email',
+        });
       }
+
+      // Charger ou créer le candidat
+      let candidate = candidateStore.get(sessionId);
+      if (!candidate) {
+        candidate = candidateStore.create(sessionId, tenantId);
+      }
+
+      // Mettre à jour l'identité
+      candidate = candidateStore.updateIdentity(candidate.candidateId, {
+        firstName: identityValidation.data.firstName,
+        lastName: identityValidation.data.lastName,
+        email: identityValidation.data.email,
+        completedAt: new Date(),
+      });
+
+      if (!candidate) {
+        return reply.code(500).send({
+          error: 'INTERNAL_ERROR',
+          message: 'Failed to update identity',
+        });
+      }
+
+      // Marquer identityDone = true
+      sessions.set(sessionId, { identityDone: true });
+
+      // Passer à preamble
+      candidateStore.updateSession(candidate.candidateId, { state: 'preamble' });
+      candidate = candidateStore.get(candidate.candidateId);
+      if (!candidate) {
+        return reply.code(500).send({
+          error: 'INTERNAL_ERROR',
+          message: 'Failed to update session',
+        });
+      }
+
+      // Mettre à jour le suivi live
+      try {
+        const trackingRow = candidateToLiveTrackingRow(candidate);
+        await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+      } catch (error) {
+        app.log.error({
+          tenantId,
+          posteId,
+          candidateId: candidate.candidateId,
+          errorMessage: error instanceof Error ? error.message : String(error),
+          errorStack: error instanceof Error ? error.stack : undefined,
+          googleResponse: (error as any)?.response?.data,
+        }, 'Failed to update live tracking');
+      }
+
+      // EXÉCUTER IMMÉDIATEMENT LE PROMPT AXIOM (sauter preamble)
+      candidateStore.setTonePreference(candidate.candidateId, 'tutoiement');
+      candidateStore.updateSession(candidate.candidateId, { state: 'collecting', currentBlock: 1 });
+      candidate = candidateStore.get(candidate.candidateId);
+      if (!candidate) {
+        return reply.code(500).send({
+          error: 'INTERNAL_ERROR',
+          message: 'Failed to update session',
+        });
+      }
+
+      // Lancer AXIOM_PROFIL normalement
+      const sessionForProfil = candidateToSession(candidate);
+      const aiResponse = await executeProfilPrompt(sessionForProfil, candidate.answers);
+      
+      candidateStore.setFinalProfileText(candidate.candidateId, aiResponse);
+      candidateStore.updateSession(candidate.candidateId, {});
+
+      try {
+        const trackingRow = candidateToLiveTrackingRow(candidate);
+        await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+      } catch (error) {
+        app.log.error({
+          tenantId,
+          posteId,
+          candidateId: candidate.candidateId,
+          errorMessage: error instanceof Error ? error.message : String(error),
+          errorStack: error instanceof Error ? error.stack : undefined,
+          googleResponse: (error as any)?.response?.data,
+        }, 'Failed to update live tracking');
+      }
+
+      return reply.send({
+        sessionId: candidate.candidateId,
+        currentBlock: 1,
+        state: 'collecting',
+        response: aiResponse,
+      });
+    }
+
+    // Charger le candidat existant
+    let candidate = candidateStore.get(sessionId);
+    if (!candidate) {
+      app.log.warn(
+        { candidateId: sessionId, tenantId },
+        'Candidat non trouvé, création d\'un nouveau candidat',
+      );
+      candidate = candidateStore.create(sessionId, tenantId);
+      if (!sessions.has(sessionId)) {
+        sessions.set(sessionId, { identityDone: false });
+      }
+    } else {
+      // Vérifier l'isolation tenant
+      if (candidate.tenantId !== tenantId) {
+        return reply.code(403).send({
+          error: 'TENANT_MISMATCH',
+          message: 'Candidate does not belong to this tenant',
+        });
+      }
+      app.log.info(
+        { candidateId: sessionId, tenantId, state: candidate.session.state, currentBlock: candidate.session.currentBlock },
+        'Candidat chargé',
+      );
     }
 
     // CAS 2 : Réception identité valide
