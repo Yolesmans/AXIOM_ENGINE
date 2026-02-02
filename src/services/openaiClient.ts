@@ -27,3 +27,23 @@ export async function testOpenAI(): Promise<string> {
 
   return content.trim();
 }
+
+export async function callOpenAI(params: {
+  messages: Array<{ role: string; content: string }>;
+}): Promise<string> {
+  const response = await client.chat.completions.create({
+    model: 'gpt-4o-mini',
+    messages: params.messages.map((msg) => ({
+      role: msg.role as 'system' | 'user' | 'assistant',
+      content: msg.content,
+    })),
+    temperature: 0.7,
+  });
+
+  const content = response.choices[0]?.message?.content;
+  if (!content) {
+    throw new Error('No response content from OpenAI');
+  }
+
+  return content.trim();
+}

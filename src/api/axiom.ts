@@ -447,6 +447,7 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
         currentBlock: currentBlock,
         state: responseState,
         response: result.response,
+        expectsAnswer: result.expectsAnswer,
       });
     }
 
