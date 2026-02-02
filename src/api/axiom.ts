@@ -196,11 +196,14 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
         }, 'Failed to update live tracking');
       }
 
+      // VALIDATION FINALE : garantir que response n'est jamais vide
+      const finalResponse = aiResponse && aiResponse.trim() !== '' ? aiResponse : 'Très bien. Continuons.';
+      
       return reply.send({
         sessionId: candidate.candidateId,
         currentBlock: 1,
         state: 'collecting',
-        response: aiResponse,
+        response: finalResponse,
       });
     }
 
@@ -380,11 +383,14 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
         }, 'Failed to update live tracking');
       }
 
+      // VALIDATION FINALE : garantir que response n'est jamais vide
+      const finalResponse = aiResponse && aiResponse.trim() !== '' ? aiResponse : 'Très bien. Continuons.';
+      
       return reply.send({
         sessionId: candidate.candidateId,
         currentBlock: 1,
         state: 'collecting',
-        response: aiResponse,
+        response: finalResponse,
       });
     }
 
@@ -495,11 +501,14 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
         }, 'Failed to update live tracking');
       }
 
+      // VALIDATION FINALE : garantir que response n'est jamais vide
+      const finalResponse = fullText && fullText.trim() !== '' ? fullText : 'Très bien. Continuons.';
+      
       return reply.send({
         sessionId: candidate.candidateId,
         currentBlock: candidate.session.currentBlock,
         state: 'completed',
-        response: fullText,
+        response: finalResponse,
       });
     }
 
@@ -570,15 +579,19 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
       }
 
       // UN MESSAGE UTILISATEUR = UNE RÉPONSE AXIOM (toujours)
+      // VALIDATION FINALE : garantir que response n'est jamais vide
+      const finalResponse = aiResponse && aiResponse.trim() !== '' ? aiResponse : 'Très bien. Continuons.';
+      
       return reply.send({
         sessionId: candidate.candidateId,
         currentBlock: candidate.session.currentBlock,
         state: candidate.session.state,
-        response: aiResponse,
+        response: finalResponse,
       });
     }
 
     // FALLBACK : réponse obligatoire pour tout autre cas
+    // AUCUN retour sans response textuelle visible
     return reply.send({
       sessionId: candidate.candidateId,
       currentBlock: candidate.session.currentBlock,
