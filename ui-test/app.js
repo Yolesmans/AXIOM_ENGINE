@@ -6,6 +6,7 @@ let sessionId = null;
 let tenantId = null;
 let posteId = null;
 let isWaiting = false;
+let showStartButton = false;
 
 // Fonction pour obtenir la clé localStorage
 function getStorageKey() {
@@ -23,6 +24,122 @@ function addMessage(role, text) {
   textP.textContent = text || '';
   messageDiv.appendChild(textP);
   messagesContainer.appendChild(messageDiv);
+  messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
+
+// Fonction pour appeler l'API /axiom
+async function callAxiom(message) {
+  if (isWaiting || !sessionId) {
+    return;
+  }
+
+  isWaiting = true;
+
+  // Afficher l'indicateur de réflexion
+  const typingIndicator = document.getElementById('typing-indicator');
+  if (typingIndicator) {
+    typingIndicator.classList.remove('hidden');
+  }
+
+  // Masquer le bouton MVP s'il est visible
+  const startButtonContainer = document.getElementById('mvp-start-button-container');
+  if (startButtonContainer) {
+    startButtonContainer.classList.add('hidden');
+  }
+  showStartButton = false;
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/axiom`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-session-id': sessionId,
+      },
+      body: JSON.stringify({
+        tenantId: tenantId,
+        posteId: posteId,
+        sessionId: sessionId,
+        message: message,
+      }),
+    });
+
+    const data = await response.json();
+
+    // Masquer l'indicateur de réflexion
+    if (typingIndicator) {
+      typingIndicator.classList.add('hidden');
+    }
+
+    // Mettre à jour sessionId si fourni
+    if (data.sessionId && data.sessionId !== sessionId) {
+      sessionId = data.sessionId;
+      localStorage.setItem(getStorageKey(), sessionId);
+    }
+
+    // Afficher la réponse (toujours présente)
+    if (data.response) {
+      addMessage('assistant', data.response);
+    }
+
+    // Détection fin préambule → affichage bouton MVP
+    if (data.step === 'STEP_03_BLOC1' && data.expectsAnswer === false) {
+      showStartButton = true;
+      displayStartButton();
+    } else if (data.expectsAnswer === true) {
+      // Réafficher le champ de saisie si on attend une réponse
+      const chatForm = document.getElementById('chat-form');
+      if (chatForm) {
+        chatForm.style.display = 'flex';
+      }
+      const userInput = document.getElementById('user-input');
+      if (userInput) {
+        userInput.disabled = false;
+      }
+    }
+
+    return data;
+  } catch (error) {
+    if (typingIndicator) {
+      typingIndicator.classList.add('hidden');
+    }
+    console.error('Erreur:', error);
+    throw error;
+  } finally {
+    isWaiting = false;
+  }
+}
+
+// Fonction pour afficher le bouton MVP
+function displayStartButton() {
+  const messagesContainer = document.getElementById('messages');
+  if (!messagesContainer) return;
+
+  // Vérifier si le bouton existe déjà
+  let buttonContainer = document.getElementById('mvp-start-button-container');
+  if (!buttonContainer) {
+    buttonContainer = document.createElement('div');
+    buttonContainer.id = 'mvp-start-button-container';
+    buttonContainer.className = 'mvp-start-button';
+    messagesContainer.appendChild(buttonContainer);
+  }
+
+  buttonContainer.innerHTML = `
+    <button id="mvp-start-button" type="button">
+      👉 Je commence mon profil
+    </button>
+  `;
+
+  buttonContainer.classList.remove('hidden');
+
+  // Gestionnaire de clic
+  const startButton = document.getElementById('mvp-start-button');
+  if (startButton) {
+    startButton.addEventListener('click', async () => {
+      startButton.disabled = true;
+      await callAxiom(null);
+    });
+  }
+
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
 
@@ -105,6 +222,16 @@ window.addEventListener('DOMContentLoaded', async () => {
         addMessage('assistant', data.response);
       }
 
+      // Détection fin préambule → affichage bouton MVP
+      if (data.step === 'STEP_03_BLOC1' && data.expectsAnswer === false) {
+        showStartButton = true;
+        displayStartButton();
+        // Masquer le champ de saisie
+        if (chatForm) {
+          chatForm.style.display = 'none';
+        }
+      }
+
       // ENSUITE SEULEMENT, gérer le state
       if (data.state === 'identity') {
         // Afficher le formulaire d'identité SOUS le message
@@ -165,47 +292,11 @@ window.addEventListener('DOMContentLoaded', async () => {
               // Masquer le formulaire d'identité
               formDiv.style.display = 'none';
 
-              // Afficher l'indicateur de réflexion
-              const typingIndicator = document.getElementById('typing-indicator');
-              if (typingIndicator) {
-                typingIndicator.classList.remove('hidden');
-              }
-
               try {
-                const response = await fetch(`${API_BASE_URL}/axiom`, {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    'x-session-id': sessionId,
-                  },
-                  body: JSON.stringify({
-                    tenantId: tenantId,
-                    posteId: posteId,
-                    sessionId: sessionId,
-                    message: identityMessage,
-                  }),
-                });
-
-                const data = await response.json();
-
-                // Masquer l'indicateur de réflexion
-                if (typingIndicator) {
-                  typingIndicator.classList.add('hidden');
-                }
-
-                // Mettre à jour sessionId si fourni
-                if (data.sessionId && data.sessionId !== sessionId) {
-                  sessionId = data.sessionId;
-                  localStorage.setItem(storageKey, sessionId);
-                }
-
-                // Afficher la réponse du moteur (toujours présente)
-                if (data.response) {
-                  addMessage('assistant', data.response);
-                }
+                const data = await callAxiom(identityMessage);
 
                 // Si on n'est plus en state "identity", activer le chat normal
-                if (data.state !== 'identity') {
+                if (data.state !== 'identity' && !showStartButton) {
                   if (chatForm) {
                     chatForm.style.display = 'flex';
                   }
@@ -213,11 +304,13 @@ window.addEventListener('DOMContentLoaded', async () => {
                   if (userInput) {
                     userInput.disabled = false;
                   }
+                } else if (showStartButton) {
+                  // Masquer le champ de saisie si le bouton MVP doit être affiché
+                  if (chatForm) {
+                    chatForm.style.display = 'none';
+                  }
                 }
               } catch (error) {
-                if (typingIndicator) {
-                  typingIndicator.classList.add('hidden');
-                }
                 console.error('Erreur:', error);
               }
             });
@@ -265,56 +358,24 @@ window.addEventListener('DOMContentLoaded', async () => {
 
       // Désactiver l'input
       userInput.disabled = true;
-      isWaiting = true;
-
-      // Afficher l'indicateur de réflexion
-      const typingIndicator = document.getElementById('typing-indicator');
-      if (typingIndicator) {
-        typingIndicator.classList.remove('hidden');
-      }
 
       try {
-        const response = await fetch(`${API_BASE_URL}/axiom`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-session-id': sessionId,
-          },
-          body: JSON.stringify({
-            tenantId: tenantId,
-            posteId: posteId,
-            sessionId: sessionId,
-            message: message,
-          }),
-        });
+        const data = await callAxiom(message);
 
-        const data = await response.json();
-
-        // Masquer l'indicateur de réflexion
-        if (typingIndicator) {
-          typingIndicator.classList.add('hidden');
-        }
-
-        // Afficher la réponse (toujours présente)
-        if (data.response) {
-          addMessage('assistant', data.response);
-        }
-
-        // Mettre à jour sessionId si fourni
-        if (data.sessionId && data.sessionId !== sessionId) {
-          sessionId = data.sessionId;
-          localStorage.setItem(getStorageKey(), sessionId);
+        // Réafficher l'input seulement si on attend une réponse et pas de bouton MVP
+        if (data.expectsAnswer === true && !showStartButton) {
+          userInput.disabled = false;
+        } else if (showStartButton) {
+          // Masquer le champ de saisie si le bouton MVP doit être affiché
+          if (chatForm) {
+            chatForm.style.display = 'none';
+          }
         }
       } catch (error) {
-        if (typingIndicator) {
-          typingIndicator.classList.add('hidden');
-        }
         console.error('Erreur:', error);
+        // Réactiver l'input en cas d'erreur
+        userInput.disabled = false;
       }
-
-      // Réactiver l'input
-      userInput.disabled = false;
-      isWaiting = false;
     });
   }
 });

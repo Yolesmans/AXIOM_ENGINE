@@ -293,3 +293,46 @@ body {
 .identity-form button:active {
   transform: translateY(0);
 }
+
+/* Bouton MVP - Démarrage Bloc 1 */
+.mvp-start-button {
+  max-width: 75%;
+  align-self: flex-start;
+  margin-top: 24px;
+}
+
+.mvp-start-button button {
+  width: 100%;
+  padding: 14px 24px;
+  background-color: var(--color-violet);
+  color: white;
+  border: none;
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: inherit;
+}
+
+.mvp-start-button button:hover:not(:disabled) {
+  background-color: var(--color-violet-dark);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(108, 77, 255, 0.3);
+}
+
+.mvp-start-button button:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.mvp-start-button button:disabled {
+  background-color: #E0E0E0;
+  color: #999;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.mvp-start-button.hidden {
+  display: none;
+}
