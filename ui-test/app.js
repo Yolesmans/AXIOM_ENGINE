@@ -45,7 +45,22 @@ window.addEventListener('DOMContentLoaded', async () => {
   tenantId = urlParams.get('tenant');
   posteId = urlParams.get('poste');
 
-  // Si tenant ou poste manquent, afficher erreur claire
+  // Si tenant ou poste manquent dans l'URL, essayer de les récupérer depuis localStorage
+  if (!tenantId || !posteId) {
+    const savedTenant = localStorage.getItem('axiom_tenant');
+    const savedPoste = localStorage.getItem('axiom_poste');
+    if (savedTenant && savedPoste) {
+      tenantId = savedTenant;
+      posteId = savedPoste;
+      // Réinjecter les paramètres dans l'URL sans recharger
+      const newUrl = new URL(window.location.href);
+      newUrl.searchParams.set('tenant', tenantId);
+      newUrl.searchParams.set('poste', posteId);
+      window.history.replaceState({}, '', newUrl.toString());
+    }
+  }
+
+  // Si tenant ou poste manquent toujours, afficher erreur claire
   if (!tenantId || !posteId) {
     const messagesContainer = document.getElementById('messages');
     if (messagesContainer) {
@@ -58,6 +73,10 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
     return;
   }
+
+  // Sauvegarder tenant et poste dans localStorage
+  localStorage.setItem('axiom_tenant', tenantId);
+  localStorage.setItem('axiom_poste', posteId);
 
   // Récupérer sessionId depuis localStorage avec clé tenant+poste
   const storageKey = getStorageKey();

@@ -3,6 +3,7 @@ import { candidateStore } from '../store/sessionStore.js';
 import { v4 as uuidv4 } from 'uuid';
 import { getPostConfig } from '../store/postRegistry.js';
 import { sessions } from '../server.js';
+import { executeAxiom, STEP_00_IDENTITY, STEP_01_TUTOVOU, STEP_02_PREAMBULE, STEP_03_BLOC1 } from '../engine/axiomExecutor.js';
 
 export async function registerStartRoute(app: FastifyInstance) {
   app.get('/start', async (req, reply) => {
@@ -38,46 +39,81 @@ export async function registerStartRoute(app: FastifyInstance) {
       // Nouvelle session
       finalSessionId = uuidv4();
       candidate = candidateStore.create(finalSessionId, tenant);
-      sessions.set(finalSessionId, {
-        identityDone: false,
-        vouvoiement: null,
+      // Initialiser le state UI
+      candidateStore.updateUIState(finalSessionId, {
+        step: STEP_00_IDENTITY,
         lastQuestion: null,
-        lastAssistant: null,
+        identityDone: false,
       });
+      candidate = candidateStore.get(finalSessionId);
+      if (!candidate) {
+        return reply.code(500).send({
+          error: 'INTERNAL_ERROR',
+          message: 'Failed to create candidate',
+        });
+      }
     } else {
       // Session existante
       finalSessionId = sessionId;
-      const sessionData = sessions.get(finalSessionId);
+      candidate = candidateStore.get(finalSessionId);
       
-      if (!sessionData) {
+      if (!candidate) {
         // Session inconnue, créer une nouvelle
         candidate = candidateStore.create(finalSessionId, tenant);
-        sessions.set(finalSessionId, {
-          identityDone: false,
-          vouvoiement: null,
+        candidateStore.updateUIState(finalSessionId, {
+          step: STEP_00_IDENTITY,
           lastQuestion: null,
-          lastAssistant: null,
+          identityDone: false,
         });
-      } else {
-        // Charger le candidat existant
         candidate = candidateStore.get(finalSessionId);
         if (!candidate) {
-          candidate = candidateStore.create(finalSessionId, tenant);
-        }
-
-        // Si identityDone === true, répondre avec state "chat"
-        if (sessionData.identityDone) {
-          const responseText = sessionData.lastAssistant || sessionData.lastQuestion || 'Bienvenue de retour !';
-          return reply.send({
-            sessionId: finalSessionId,
-            state: 'chat',
-            currentBlock: candidate.session.currentBlock,
-            response: responseText,
+          return reply.code(500).send({
+            error: 'INTERNAL_ERROR',
+            message: 'Failed to create candidate',
           });
         }
       }
+
+      // S'assurer que le state UI existe
+      if (!candidate.session.ui) {
+        candidateStore.updateUIState(finalSessionId, {
+          step: candidate.identity.completedAt ? STEP_01_TUTOVOU : STEP_00_IDENTITY,
+          lastQuestion: null,
+          identityDone: !!candidate.identity.completedAt,
+        });
+        candidate = candidateStore.get(finalSessionId);
+        if (!candidate) {
+          return reply.code(500).send({
+            error: 'INTERNAL_ERROR',
+            message: 'Failed to initialize UI state',
+          });
+        }
+      }
+
+      // Si identityDone === true, utiliser l'orchestrateur pour obtenir la réponse
+      if (candidate.session.ui.identityDone) {
+        const result = await executeAxiom(candidate, null);
+        
+        // Déterminer le state selon le step
+        let responseState: string = 'chat';
+        if (result.step === STEP_00_IDENTITY) {
+          responseState = 'identity';
+        } else if (result.step === STEP_01_TUTOVOU || result.step === STEP_02_PREAMBULE) {
+          responseState = 'preamble';
+        } else if (result.step === STEP_03_BLOC1) {
+          responseState = 'collecting';
+        }
+
+        return reply.send({
+          sessionId: finalSessionId,
+          state: responseState,
+          currentBlock: candidate.session.currentBlock,
+          response: result.response,
+        });
+      }
     }
 
+    // STEP_00_IDENTITY : demander l'identité
     return reply.send({
       sessionId: finalSessionId,
       state: 'identity',

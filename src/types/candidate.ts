@@ -14,6 +14,12 @@ export interface CandidateSession {
   startedAt: Date;
   lastActivityAt: Date;
   completedAt?: Date;
+  ui?: {
+    step: string;
+    lastQuestion: string | null;
+    tutoiement?: 'tutoiement' | 'vouvoiement';
+    identityDone?: boolean;
+  };
 }
 
 export interface AxiomCandidate {

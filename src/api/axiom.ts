@@ -19,6 +19,7 @@ import {
 import type { AnswerRecord } from '../types/answer.js';
 import { getPostConfig } from '../store/postRegistry.js';
 import { sessions } from '../server.js';
+import { executeAxiom, STEP_00_IDENTITY, STEP_01_TUTOVOU, STEP_02_PREAMBULE, STEP_03_BLOC1, STEP_99_MATCHING } from '../engine/axiomExecutor.js';
 
 const AxiomBodySchema = z.object({
   tenantId: z.string().min(1),
@@ -154,17 +155,16 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
         });
       }
 
-      // Marquer identityDone = true
-      sessionData.identityDone = true;
-      sessions.set(sessionId, sessionData);
-
-      // Passer à preamble
-      candidateStore.updateSession(candidate.candidateId, { state: 'preamble' });
+      // Mettre à jour le state UI : identityDone = true, step = STEP_01_TUTOVOU
+      candidateStore.updateUIState(candidate.candidateId, {
+        identityDone: true,
+        step: STEP_01_TUTOVOU,
+      });
       candidate = candidateStore.get(candidate.candidateId);
       if (!candidate) {
         return reply.code(500).send({
           error: 'INTERNAL_ERROR',
-          message: 'Failed to update session',
+          message: 'Failed to update UI state',
         });
       }
 
@@ -183,10 +183,31 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
         }, 'Failed to update live tracking');
       }
 
-      // EXÉCUTER IMMÉDIATEMENT LE PROMPT AXIOM (sauter preamble)
-      candidateStore.setTonePreference(candidate.candidateId, 'tutoiement');
-      sessionData.vouvoiement = 'tutoiement';
-      candidateStore.updateSession(candidate.candidateId, { state: 'collecting', currentBlock: 1 });
+      // Utiliser l'orchestrateur pour obtenir la réponse
+      const result = await executeAxiom(candidate, null);
+      
+      // Persister le state UI
+      candidateStore.updateUIState(candidate.candidateId, {
+        step: result.step,
+        lastQuestion: result.lastQuestion,
+        tutoiement: result.tutoiement,
+      });
+      
+      // Mettre à jour le tone preference si défini
+      if (result.tutoiement) {
+        candidateStore.setTonePreference(candidate.candidateId, result.tutoiement);
+      }
+
+      // Déterminer le state pour la réponse
+      let responseState: string = 'preamble';
+      if (result.step === STEP_03_BLOC1) {
+        responseState = 'collecting';
+        candidateStore.updateSession(candidate.candidateId, { state: 'collecting', currentBlock: 1 });
+      } else if (result.step === STEP_01_TUTOVOU) {
+        responseState = 'preamble';
+        candidateStore.updateSession(candidate.candidateId, { state: 'preamble' });
+      }
+
       candidate = candidateStore.get(candidate.candidateId);
       if (!candidate) {
         return reply.code(500).send({
@@ -195,60 +216,11 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
         });
       }
 
-      // Directive système obligatoire
-      const systemDirective = 'RÈGLE ABSOLUE: Tu exécutes STRICTEMENT le protocole AXIOM fourni. Tu ne produis JAMAIS de texte hors protocole. À chaque message, tu dois produire UNIQUEMENT la prochaine sortie autorisée par le protocole (question suivante, transition de bloc, miroir interprétatif autorisé, ou texte obligatoire). INTERDICTION d\'improviser, de résumer, de commenter le système, de sauter un bloc. Si l\'état est ambigu, tu rejoues la dernière question valide exactement.';
-
-      // Lancer AXIOM_PROFIL normalement (prompt complet relu à chaque appel)
-      const sessionForProfil = candidateToSession(candidate);
-      let aiResponse: string;
-      try {
-        aiResponse = await executeProfilPrompt(sessionForProfil, candidate.answers, systemDirective);
-        // Si réponse vide, utiliser lastQuestion
-        if (!aiResponse || aiResponse.trim() === '') {
-          aiResponse = sessionData.lastQuestion || 'Très bien. Continuons.';
-        }
-      } catch (error) {
-        app.log.error({
-          candidateId: candidate.candidateId,
-          errorMessage: error instanceof Error ? error.message : String(error),
-        }, 'Error executing profil prompt');
-        // Si erreur, utiliser lastQuestion
-        aiResponse = sessionData.lastQuestion || 'Très bien. Continuons.';
-      }
-      
-      // Extraire et sauvegarder lastQuestion
-      const extractedQuestion = extractLastQuestion(aiResponse);
-      if (extractedQuestion) {
-        sessionData.lastQuestion = extractedQuestion;
-      }
-      sessionData.lastAssistant = aiResponse;
-      sessions.set(sessionId, sessionData);
-      
-      candidateStore.setFinalProfileText(candidate.candidateId, aiResponse);
-      candidateStore.updateSession(candidate.candidateId, {});
-
-      try {
-        const trackingRow = candidateToLiveTrackingRow(candidate);
-        await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
-      } catch (error) {
-        app.log.error({
-          tenantId,
-          posteId,
-          candidateId: candidate.candidateId,
-          errorMessage: error instanceof Error ? error.message : String(error),
-          errorStack: error instanceof Error ? error.stack : undefined,
-          googleResponse: (error as any)?.response?.data,
-        }, 'Failed to update live tracking');
-      }
-
-      // VALIDATION FINALE : garantir que response n'est jamais vide
-      const finalResponse = aiResponse && aiResponse.trim() !== '' ? aiResponse : 'Très bien. Continuons.';
-      
       return reply.send({
         sessionId: candidate.candidateId,
-        currentBlock: 1,
-        state: 'collecting',
-        response: finalResponse,
+        currentBlock: candidate.session.currentBlock,
+        state: responseState,
+        response: result.response,
       });
     }
 
@@ -283,7 +255,7 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
       );
     }
 
-    // CAS 2 : Réception identité valide
+    // CAS 2 : Réception identité valide via providedIdentity
     if (providedIdentity && candidate.session.state === 'identity') {
       const identityValidation = IdentitySchema.safeParse(providedIdentity);
       if (!identityValidation.success) {
@@ -308,21 +280,16 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
         });
       }
 
-      app.log.info(
-        { candidateId: candidate.candidateId, tenantId },
-        'Identité candidat enregistrée, passage à preamble',
-      );
-
-      // Marquer identityDone = true
-      sessionData.identityDone = true;
-      sessions.set(sessionId, sessionData);
-
-      candidateStore.updateSession(candidate.candidateId, { state: 'preamble' });
+      // Mettre à jour le state UI : identityDone = true, step = STEP_01_TUTOVOU
+      candidateStore.updateUIState(candidate.candidateId, {
+        identityDone: true,
+        step: STEP_01_TUTOVOU,
+      });
       candidate = candidateStore.get(candidate.candidateId);
       if (!candidate) {
         return reply.code(500).send({
           error: 'INTERNAL_ERROR',
-          message: 'Failed to update session',
+          message: 'Failed to update UI state',
         });
       }
 
@@ -341,70 +308,17 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
         }, 'Failed to update live tracking');
       }
 
-      const preambleResponse = 'Avant de commencer AXIOM, une dernière chose.\n\nPréférez-vous que l\'on se tutoie ou que l\'on se vouvoie ?';
-      sessionData.lastAssistant = preambleResponse;
-      sessionData.lastQuestion = preambleResponse;
-      sessions.set(sessionId, sessionData);
-
-      return reply.send({
-        sessionId: candidate.candidateId,
-        currentBlock: candidate.session.currentBlock,
-        state: 'preamble',
-        response: preambleResponse,
+      // Utiliser l'orchestrateur pour obtenir la réponse
+      const result = await executeAxiom(candidate, null);
+      
+      // Persister le state UI
+      candidateStore.updateUIState(candidate.candidateId, {
+        step: result.step,
+        lastQuestion: result.lastQuestion,
+        tutoiement: result.tutoiement,
       });
-    }
 
-    // CAS 3 : Tentative AXIOM sans identité complète
-    if (candidate.session.state === 'identity') {
-      return reply.send({
-        sessionId: candidate.candidateId,
-        currentBlock: candidate.session.currentBlock,
-        state: candidate.session.state,
-        response: 'Avant de commencer AXIOM, j\'ai besoin de :\n- ton prénom\n- ton nom\n- ton adresse email',
-      });
-    }
-
-    // Convertir en session pour compatibilité avec le moteur existant
-    const session = candidateToSession(candidate);
-
-    // Vérifier que l'identité est complète avant toute exécution AXIOM
-    if (!candidate.identity.completedAt) {
-      return reply.send({
-        sessionId: candidate.candidateId,
-        currentBlock: candidate.session.currentBlock,
-        state: 'identity',
-        response: 'Avant de commencer AXIOM, j\'ai besoin de :\n- ton prénom\n- ton nom\n- ton adresse email',
-      });
-    }
-
-    // Gestion des messages en état preamble
-    if (candidate.session.state === 'preamble') {
-      const message = (parsed.data.message || parsed.data.userMessage || '').toLowerCase();
-      
-      let mode: 'tutoiement' | 'vouvoiement' | null = null;
-      
-      if (message.includes('tuto')) {
-        mode = 'tutoiement';
-      } else if (message.includes('vouvoi')) {
-        mode = 'vouvoiement';
-      }
-      
-      if (!mode) {
-        const fallbackResponse = sessionData.lastQuestion || 'Merci de répondre par « tutoiement » ou « vouvoiement ».';
-        return reply.send({
-          sessionId: candidate.candidateId,
-          currentBlock: candidate.session.currentBlock,
-          state: 'preamble',
-          response: fallbackResponse,
-        });
-      }
-      
-      // Mettre à jour vouvoiement dans sessions
-      sessionData.vouvoiement = mode;
-      sessions.set(sessionId, sessionData);
-      
-      candidateStore.setTonePreference(candidate.candidateId, mode);
-      candidateStore.updateSession(candidate.candidateId, { state: 'collecting', currentBlock: 1 });
+      candidateStore.updateSession(candidate.candidateId, { state: 'preamble' });
       candidate = candidateStore.get(candidate.candidateId);
       if (!candidate) {
         return reply.code(500).send({
@@ -413,38 +327,106 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
         });
       }
 
-      // Directive système obligatoire
-      const systemDirective = 'RÈGLE ABSOLUE: Tu exécutes STRICTEMENT le protocole AXIOM fourni. Tu ne produis JAMAIS de texte hors protocole. À chaque message, tu dois produire UNIQUEMENT la prochaine sortie autorisée par le protocole (question suivante, transition de bloc, miroir interprétatif autorisé, ou texte obligatoire). INTERDICTION d\'improviser, de résumer, de commenter le système, de sauter un bloc. Si l\'état est ambigu, tu rejoues la dernière question valide exactement.';
+      return reply.send({
+        sessionId: candidate.candidateId,
+        currentBlock: candidate.session.currentBlock,
+        state: 'preamble',
+        response: result.response,
+      });
+    }
 
-      // Lancer AXIOM_PROFIL normalement (prompt complet relu à chaque appel)
-      const sessionForProfil = candidateToSession(candidate);
-      let aiResponse: string;
-      try {
-        aiResponse = await executeProfilPrompt(sessionForProfil, candidate.answers, systemDirective);
-        // Si réponse vide, utiliser lastQuestion
-        if (!aiResponse || aiResponse.trim() === '') {
-          aiResponse = sessionData.lastQuestion || 'Dis-moi simplement : tu préfères qu\'on se tutoie ou qu\'on se vouvoie ?';
+    // CAS 3 : Tentative AXIOM sans identité complète
+    if (candidate.session.state === 'identity' || !candidate.identity.completedAt) {
+      return reply.send({
+        sessionId: candidate.candidateId,
+        currentBlock: candidate.session.currentBlock,
+        state: 'identity',
+        response: 'Avant de commencer AXIOM, j\'ai besoin de :\n- ton prénom\n- ton nom\n- ton adresse email',
+      });
+    }
+
+    // Utiliser l'orchestrateur pour tous les autres cas (preamble, collecting, etc.)
+    // S'assurer que le state UI existe
+    if (!candidate.session.ui) {
+      candidateStore.updateUIState(candidate.candidateId, {
+        step: candidate.session.state === 'preamble' ? STEP_01_TUTOVOU : STEP_03_BLOC1,
+        lastQuestion: null,
+        identityDone: true,
+      });
+      candidate = candidateStore.get(candidate.candidateId);
+      if (!candidate) {
+        return reply.code(500).send({
+          error: 'INTERNAL_ERROR',
+          message: 'Failed to initialize UI state',
+        });
+      }
+    }
+
+    // Gestion des messages en état preamble ou collecting - utiliser l'orchestrateur
+    if (candidate.session.state === 'preamble' || candidate.session.state === 'collecting') {
+      const userMessageText = userMessage || '';
+      
+      // Si on est en collecting, stocker la réponse comme AnswerRecord
+      if (candidate.session.state === 'collecting' && userMessageText) {
+        const answerRecord: AnswerRecord = {
+          block: candidate.session.currentBlock,
+          message: userMessageText,
+          createdAt: new Date().toISOString(),
+        };
+        candidate = candidateStore.addAnswer(candidate.candidateId, answerRecord);
+        if (!candidate) {
+          return reply.code(500).send({
+            error: 'INTERNAL_ERROR',
+            message: 'Failed to store answer',
+          });
         }
-      } catch (error) {
-        app.log.error({
-          candidateId: candidate.candidateId,
-          errorMessage: error instanceof Error ? error.message : String(error),
-        }, 'Error executing profil prompt');
-        // Si erreur, utiliser lastQuestion
-        aiResponse = sessionData.lastQuestion || 'Dis-moi simplement : tu préfères qu\'on se tutoie ou qu\'on se vouvoie ?';
       }
-      
-      // Extraire et sauvegarder lastQuestion
-      const extractedQuestion = extractLastQuestion(aiResponse);
-      if (extractedQuestion) {
-        sessionData.lastQuestion = extractedQuestion;
-      }
-      sessionData.lastAssistant = aiResponse;
-      sessions.set(sessionId, sessionData);
-      
-      candidateStore.setFinalProfileText(candidate.candidateId, aiResponse);
-      candidateStore.updateSession(candidate.candidateId, {});
 
+      // Utiliser l'orchestrateur
+      const result = await executeAxiom(candidate, userMessageText);
+      
+      // Persister le state UI
+      candidateStore.updateUIState(candidate.candidateId, {
+        step: result.step,
+        lastQuestion: result.lastQuestion,
+        tutoiement: result.tutoiement,
+      });
+      
+      // Mettre à jour le tone preference si défini
+      if (result.tutoiement) {
+        candidateStore.setTonePreference(candidate.candidateId, result.tutoiement);
+      }
+
+      // Déterminer le state et currentBlock pour la réponse
+      let responseState: string = candidate.session.state;
+      let currentBlock = candidate.session.currentBlock;
+      
+      if (result.step === STEP_03_BLOC1) {
+        responseState = 'collecting';
+        if (candidate.session.currentBlock === 1 && candidate.session.state === 'preamble') {
+          currentBlock = 1;
+          candidateStore.updateSession(candidate.candidateId, { state: 'collecting', currentBlock: 1 });
+        }
+      } else if (result.step === STEP_02_PREAMBULE) {
+        responseState = 'preamble';
+      } else if (result.step === STEP_01_TUTOVOU) {
+        responseState = 'preamble';
+      }
+
+      // Stocker finalProfileText si on est en collecting
+      if (responseState === 'collecting' && result.response) {
+        candidateStore.setFinalProfileText(candidate.candidateId, result.response);
+      }
+
+      candidate = candidateStore.get(candidate.candidateId);
+      if (!candidate) {
+        return reply.code(500).send({
+          error: 'INTERNAL_ERROR',
+          message: 'Failed to update candidate',
+        });
+      }
+
+      // Mettre à jour le suivi live
       try {
         const trackingRow = candidateToLiveTrackingRow(candidate);
         await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
@@ -459,20 +441,18 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
         }, 'Failed to update live tracking');
       }
 
-      // VALIDATION FINALE : garantir que response n'est jamais vide
-      const finalResponse = aiResponse && aiResponse.trim() !== '' ? aiResponse : 'Très bien. Continuons.';
-      
       return reply.send({
         sessionId: candidate.candidateId,
-        currentBlock: 1,
-        state: 'collecting',
-        response: finalResponse,
+        currentBlock: currentBlock,
+        state: responseState,
+        response: result.response,
       });
     }
 
     // Implémenter finish (basculement vers waiting_go)
     if (parsed.data.finish === true) {
-      if (candidate.session.state === 'collecting' && candidate.session.currentBlock === AXIOM_BLOCKS.MAX) {
+      const isCollecting = (candidate.session.ui?.step === STEP_03_BLOC1) || (candidate.session.state as string) === 'collecting';
+      if (isCollecting && candidate.session.currentBlock === AXIOM_BLOCKS.MAX) {
         candidateStore.updateSession(candidate.candidateId, { state: 'waiting_go' });
         candidate = candidateStore.get(candidate.candidateId);
         if (!candidate) {
@@ -602,94 +582,6 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
       });
     }
 
-    // Exécuter le prompt PROFIL si state === collecting
-    if (candidate.session.state === 'collecting') {
-      const message = parsed.data.message || parsed.data.userMessage;
-      
-      if (message) {
-        // Créer un AnswerRecord
-        const answerRecord: AnswerRecord = {
-          block: candidate.session.currentBlock,
-          message,
-          createdAt: new Date().toISOString(),
-        };
-
-        // Stocker la réponse
-        const updatedCandidate = candidateStore.addAnswer(candidate.candidateId, answerRecord);
-        if (!updatedCandidate) {
-          return reply.code(500).send({
-            error: 'INTERNAL_ERROR',
-            message: 'Failed to store answer',
-          });
-        }
-        candidate = updatedCandidate;
-        // Mettre à jour la session pour refléter le candidat mis à jour
-        const updatedSession = candidateToSession(candidate);
-        session.currentBlock = updatedSession.currentBlock;
-        session.state = updatedSession.state;
-      }
-
-      // Directive système obligatoire
-      const systemDirective = 'RÈGLE ABSOLUE: Tu exécutes STRICTEMENT le protocole AXIOM fourni. Tu ne produis JAMAIS de texte hors protocole. À chaque message, tu dois produire UNIQUEMENT la prochaine sortie autorisée par le protocole (question suivante, transition de bloc, miroir interprétatif autorisé, ou texte obligatoire). INTERDICTION d\'improviser, de résumer, de commenter le système, de sauter un bloc. Si l\'état est ambigu, tu rejoues la dernière question valide exactement.';
-
-      // Relancer l'exécution du prompt PROFIL avec toutes les réponses
-      // Le prompt complet est relu à chaque appel (ChatGPT-like)
-      let aiResponse: string;
-      try {
-        aiResponse = await executeProfilPrompt(session, candidate.answers, systemDirective);
-        // Si réponse vide, utiliser lastQuestion
-        if (!aiResponse || aiResponse.trim() === '') {
-          aiResponse = sessionData.lastQuestion || 'Très bien. Continuons.';
-        }
-      } catch (error) {
-        app.log.error({
-          candidateId: candidate.candidateId,
-          errorMessage: error instanceof Error ? error.message : String(error),
-        }, 'Error executing profil prompt');
-        // Si erreur, utiliser lastQuestion
-        aiResponse = sessionData.lastQuestion || 'Très bien. Continuons.';
-      }
-      
-      // Extraire et sauvegarder lastQuestion
-      const extractedQuestion = extractLastQuestion(aiResponse);
-      if (extractedQuestion) {
-        sessionData.lastQuestion = extractedQuestion;
-      }
-      sessionData.lastAssistant = aiResponse;
-      sessions.set(sessionId, sessionData);
-      
-      // Capturer le texte final du profil
-      candidateStore.setFinalProfileText(candidate.candidateId, aiResponse);
-      
-      // Mettre à jour l'activité (session déjà mise à jour par addAnswer)
-      candidateStore.updateSession(candidate.candidateId, {});
-
-      // Mettre à jour le suivi live
-      try {
-        const trackingRow = candidateToLiveTrackingRow(candidate);
-        await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
-      } catch (error) {
-        app.log.error({
-          tenantId,
-          posteId,
-          candidateId: candidate.candidateId,
-          errorMessage: error instanceof Error ? error.message : String(error),
-          errorStack: error instanceof Error ? error.stack : undefined,
-          googleResponse: (error as any)?.response?.data,
-        }, 'Failed to update live tracking');
-      }
-
-      // UN MESSAGE UTILISATEUR = UNE RÉPONSE AXIOM (toujours)
-      // VALIDATION FINALE : garantir que response n'est jamais vide
-      const finalResponse = aiResponse && aiResponse.trim() !== '' ? aiResponse : 'Très bien. Continuons.';
-      
-      return reply.send({
-        sessionId: candidate.candidateId,
-        currentBlock: candidate.session.currentBlock,
-        state: candidate.session.state,
-        response: finalResponse,
-      });
-    }
 
     // FALLBACK : réponse obligatoire pour tout autre cas
     // Utiliser lastQuestion si disponible, sinon fallback générique
