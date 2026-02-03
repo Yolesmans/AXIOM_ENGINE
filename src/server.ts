@@ -1,35 +1,49 @@
-import express from "express";
+import express, { type Express } from "express";
 
-const app = express();
+export const sessions = new Map<string, unknown>();
 
-// ROUTES IMMÉDIATES (Railway healthcheck)
-app.get("/", (_req, res) => {
-  res.status(200).json({
-    status: "ok",
-    service: "AXIOM_ENGINE",
-    runtime: "railway",
+export function buildServer(): Express {
+  const app = express();
+
+  app.get("/", (_req, res) => {
+    res.status(200).json({
+      status: "ok",
+      service: "AXIOM_ENGINE",
+      runtime: "railway",
+      env: process.env.NODE_ENV || "production",
+    });
   });
-});
 
-app.get("/health", (_req, res) => {
-  res.status(200).json({ ok: true });
-});
+  app.get("/health", (_req, res) => {
+    res.status(200).json({ ok: true });
+  });
 
-app.get("/favicon.ico", (_req, res) => {
-  res.status(204).send();
-});
+  app.get("/favicon.ico", (_req, res) => {
+    res.status(204).send();
+  });
 
-// DÉMARRAGE SERVEUR — AUCUNE LOGIQUE AVANT
-const PORT = Number(process.env.PORT) || 3000;
+  return app;
+}
 
-app.listen(PORT, "0.0.0.0", async () => {
-  console.log(`AXIOM ENGINE listening on port ${PORT}`);
+async function main() {
+  const app = buildServer();
+  const PORT = Number(process.env.PORT) || 3000;
 
-  // IMPORT LENT APRÈS BOOT HTTP
-  try {
-    await import("./index"); // ton ancien point d'entrée
-    console.log("AXIOM core loaded");
-  } catch (err) {
-    console.error("AXIOM core failed to load", err);
-  }
+  app.listen(PORT, "0.0.0.0", async () => {
+    console.log(`[railway] listening on 0.0.0.0:${PORT}`);
+
+    // Lazy-load core AFTER HTTP is live (avoid Railway timeouts)
+    try {
+      await import("./index");
+      console.log("[railway] core loaded via ./index");
+    } catch (e1) {
+      console.error("[railway] core load failed (server kept alive)", e1);
+    }
+  });
+}
+
+// ES modules entry point
+main().catch((err) => {
+  console.error("[railway] main failed", err);
+  process.exit(1);
 });
