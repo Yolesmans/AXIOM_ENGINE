@@ -82,7 +82,7 @@ async function callAxiom(message) {
     }
 
     // Détection fin préambule → affichage bouton MVP
-    if (data.step === 'STEP_03_BLOC1' && data.expectsAnswer === false) {
+    if (data.state === 'preamble_done') {
       showStartButton = true;
       displayStartButton();
     } else if (data.expectsAnswer === true) {
@@ -223,7 +223,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       }
 
       // Détection fin préambule → affichage bouton MVP
-      if (data.step === 'STEP_03_BLOC1' && data.expectsAnswer === false) {
+      if (data.state === 'preamble_done') {
         showStartButton = true;
         displayStartButton();
         // Masquer le champ de saisie

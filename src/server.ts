@@ -408,7 +408,10 @@ app.post("/axiom", async (req: Request, res: Response) => {
       let responseState: string = candidate.session.state;
       let currentBlock = candidate.session.currentBlock;
 
-      if (result.step === STEP_03_BLOC1) {
+      // Détection fin du préambule : STEP_02_PREAMBULE sans question
+      if (result.step === STEP_02_PREAMBULE && !result.expectsAnswer) {
+        responseState = "preamble_done";
+      } else if (result.step === STEP_03_BLOC1) {
         responseState = "collecting";
         currentBlock = 1;
         candidateStore.updateSession(candidate.candidateId, { state: "collecting", currentBlock: 1 });
