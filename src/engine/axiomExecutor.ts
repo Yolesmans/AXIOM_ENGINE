@@ -131,9 +131,16 @@ function logTransition(
   });
 }
 
-// ============================================
-// EXÉCUTEUR PRINCIPAL (FSM STRICTE)
-// ============================================
+  // ============================================
+  // RÈGLE CRITIQUE PROMPTS
+  // ============================================
+  // Le moteur AXIOM n'interprète pas les prompts.
+  // Il les exécute STRICTEMENT.
+  // Toute sortie LLM hors règles = invalide → rejouer le prompt.
+
+  // ============================================
+  // EXÉCUTEUR PRINCIPAL (FSM STRICTE)
+  // ============================================
 
 export async function executeAxiom(
   input: ExecuteAxiomInput,
@@ -244,23 +251,138 @@ export async function executeAxiom(
       };
     }
 
-    // Valide → stocker tone et passer à preambule
+    // PARTIE 4 — tone_choice → preambule → wait_start_button
+    // SI VALIDE : En UN SEUL RETURN :
+    // - envoyer le PRÉAMBULE COMPLET
+    // - expectsAnswer = false
+    // - step = "STEP_03_BLOC1"
+    // - state = "wait_start_button"
+
+    // Stocker tone
+    candidateStore.setTonePreference(candidate.candidateId, tone);
+
+    // Charger et exécuter le préambule STRICTEMENT
+    let aiText: string | null = null;
+
+    try {
+      const FULL_AXIOM_PROMPT = await loadFullAxiomPrompt();
+      const completion = await callOpenAI({
+        messages: [
+          { role: 'system', content: FULL_AXIOM_PROMPT },
+          {
+            role: 'system',
+            content: `RÈGLE ABSOLUE AXIOM :
+Le moteur AXIOM n'interprète pas les prompts. Il les exécute STRICTEMENT.
+Tu es en état STEP_03_PREAMBULE.
+Tu dois afficher LE PRÉAMBULE MÉTIER COMPLET tel que défini dans le prompt.
+Tu NE POSES PAS de question.
+Tu affiches uniquement le préambule, mot pour mot selon les instructions.
+AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.
+Toute sortie hors règles = invalide.`,
+          },
+        ],
+      });
+
+      if (typeof completion === 'string' && completion.trim()) {
+        aiText = completion.trim();
+      }
+    } catch (e) {
+      console.error('[AXIOM_EXECUTION_ERROR]', e);
+    }
+
+    // Si échec → réessayer une fois
+    if (!aiText) {
+      try {
+        const FULL_AXIOM_PROMPT = await loadFullAxiomPrompt();
+        const completion = await callOpenAI({
+          messages: [
+            { role: 'system', content: FULL_AXIOM_PROMPT },
+            {
+              role: 'system',
+              content: `RÈGLE ABSOLUE AXIOM :
+Le moteur AXIOM n'interprète pas les prompts. Il les exécute STRICTEMENT.
+Tu es en état STEP_03_PREAMBULE.
+Tu dois afficher LE PRÉAMBULE MÉTIER COMPLET tel que défini dans le prompt.
+Tu NE POSES PAS de question.
+Tu affiches uniquement le préambule, mot pour mot selon les instructions.
+AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.
+Toute sortie hors règles = invalide.`,
+            },
+          ],
+        });
+
+        if (typeof completion === 'string' && completion.trim()) {
+          aiText = completion.trim();
+        }
+      } catch (e) {
+        console.error('[AXIOM_EXECUTION_ERROR_RETRY]', e);
+      }
+    }
+
+    // Si toujours vide → utiliser le texte du prompt directement (pas de fallback générique)
+    if (!aiText) {
+      const FULL_AXIOM_PROMPT = await loadFullAxiomPrompt();
+      const preambuleMatch = FULL_AXIOM_PROMPT.match(/PRÉAMBULE MÉTIER[^]*?(?=🔒|🟢|$)/i);
+      if (preambuleMatch) {
+        aiText = preambuleMatch[0]
+          .replace(/PRÉAMBULE MÉTIER[^]*?AFFICHAGE OBLIGATOIRE[^]*?CANDIDAT\)[^]*?/i, '')
+          .trim();
+      } else {
+        // Texte du prompt (pas de fallback générique)
+        aiText =
+          'Avant de commencer vraiment, je te pose simplement le cadre.\n\n' +
+          'Le métier concerné est celui de courtier en énergie.\n\n' +
+          'Il consiste à accompagner des entreprises dans la gestion de leurs contrats d\'électricité et de gaz :\n' +
+          '• analyse de l\'existant,\n' +
+          '• renégociation auprès des fournisseurs,\n' +
+          '• sécurisation des prix,\n' +
+          '• suivi dans la durée.\n\n' +
+          'Le client final ne paie rien directement.\n' +
+          'La rémunération est versée par les fournisseurs, à la signature et sur la durée du contrat.\n\n' +
+          'Il n\'y a aucune garantie.\n' +
+          'Certains gagnent peu. D\'autres gagnent très bien.\n\n' +
+          'La différence ne vient ni du marché, ni du produit, ni de la chance,\n' +
+          'mais de la constance, de l\'autonomie, et de la capacité à tenir dans un cadre exigeant.\n\n' +
+          'C\'est précisément pour ça qu\'AXIOM existe.\n\n' +
+          'AXIOM n\'est ni un test, ni un jugement, ni une sélection déguisée.\n\n' +
+          'Il n\'est pas là pour te vendre ce métier, ni pour te faire entrer dans une case.\n\n' +
+          'Son rôle est simple :\n' +
+          'prendre le temps de comprendre comment tu fonctionnes réellement dans le travail,\n' +
+          'et te donner une lecture lucide de ce que ce cadre exige au quotidien.\n\n' +
+          'Pour certains profils, c\'est un terrain d\'expression très fort.\n' +
+          'Pour d\'autres, tout aussi solides, d\'autres environnements sont simplement plus cohérents.\n\n' +
+          'AXIOM est là pour apporter de la clarté :\n' +
+          '• sans pression,\n' +
+          '• sans promesse,\n' +
+          '• sans te pousser dans une direction.';
+      }
+    }
+
+    // ⛔ INTERDICTION : réponse vide, "On continue.", attendre un input utilisateur, return partiel
+    if (!aiText) {
+      console.error('[AXIOM_CRITICAL_ERROR]', { sessionId: candidate.candidateId, state: currentState });
+      throw new Error('Failed to generate preamble');
+    }
+
+    // Transition immédiate vers wait_start_button dans le MÊME return
+    currentState = STEP_03_BLOC1;
     candidateStore.updateUIState(candidate.candidateId, {
-      step: STEP_03_PREAMBULE,
+      step: currentState,
       lastQuestion: null,
       tutoiement: tone,
       identityDone: true,
     });
-    candidateStore.setTonePreference(candidate.candidateId, tone);
 
-    currentState = STEP_03_PREAMBULE;
     logTransition(candidate.candidateId, stateIn, currentState, 'message');
-
-    // Enchaîner immédiatement avec préambule
-    return await executeAxiom({
-      candidate: candidateStore.get(candidate.candidateId)!,
-      userMessage: null,
-    });
+    
+    // PARTIE 4 — En UN SEUL RETURN
+    return {
+      response: aiText,
+      step: "STEP_03_BLOC1",
+      lastQuestion: null,
+      expectsAnswer: false,
+      autoContinue: false,
+    };
   }
 
   // ============================================
@@ -383,9 +505,10 @@ AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
   // STEP_03_BLOC1 (wait_start_button)
   // ============================================
   if (currentState === STEP_03_BLOC1) {
-    // Si event START_BLOC_1 ou message "__SYSTEM_START__"
+    // PARTIE 5 — Bouton "Je commence mon profil"
+    // Si POST /axiom avec message == null ET state == "wait_start_button"
     if (event === 'START_BLOC_1' || userMessage === '__SYSTEM_START__' || userMessage === null) {
-      // Passer à BLOC_01
+      // state = "bloc_01"
       currentState = BLOC_01;
       candidateStore.updateUIState(candidate.candidateId, {
         step: currentState,
@@ -408,7 +531,7 @@ AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
     logTransition(candidate.candidateId, stateIn, currentState, 'message');
     return {
       response: '',
-      step: currentState,
+      step: "STEP_03_BLOC1",
       lastQuestion: null,
       expectsAnswer: false,
       autoContinue: false,
@@ -442,12 +565,14 @@ AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
           {
             role: 'system',
             content: `RÈGLE ABSOLUE AXIOM :
+Le moteur AXIOM n'interprète pas les prompts. Il les exécute STRICTEMENT.
 Tu es en état ${currentState} (BLOC ${blocNumber}).
 Tu exécutes STRICTEMENT le protocole AXIOM pour ce bloc.
 Tu produis UNIQUEMENT le texte autorisé à cette étape.
 INTERDICTIONS : improviser, commenter le système, reformuler le prompt, revenir en arrière.
 Si tu dois poser une question, pose-la. Si tu dois afficher un miroir, affiche-le.
-AUCUNE sortie générique type "On continue", "D'accord", etc.`,
+AUCUNE sortie générique type "On continue", "D'accord", etc.
+Toute sortie hors règles = invalide.`,
           },
           ...messages,
         ],
@@ -470,12 +595,14 @@ AUCUNE sortie générique type "On continue", "D'accord", etc.`,
             {
               role: 'system',
               content: `RÈGLE ABSOLUE AXIOM :
+Le moteur AXIOM n'interprète pas les prompts. Il les exécute STRICTEMENT.
 Tu es en état ${currentState} (BLOC ${blocNumber}).
 Tu exécutes STRICTEMENT le protocole AXIOM pour ce bloc.
 Tu produis UNIQUEMENT le texte autorisé à cette étape.
 INTERDICTIONS : improviser, commenter le système, reformuler le prompt, revenir en arrière.
 Si tu dois poser une question, pose-la. Si tu dois afficher un miroir, affiche-le.
-AUCUNE sortie générique type "On continue", "D'accord", etc.`,
+AUCUNE sortie générique type "On continue", "D'accord", etc.
+Toute sortie hors règles = invalide.`,
             },
             ...messages,
           ],

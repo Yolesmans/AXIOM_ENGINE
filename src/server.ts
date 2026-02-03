@@ -148,8 +148,8 @@ app.get("/start", async (req: Request, res: Response) => {
         sessionId: finalSessionId,
         state: "identity",
         currentBlock: candidate.session.currentBlock,
-        response: '',
-        step: "IDENTITY",
+        response: "Avant de commencer AXIOM, j'ai besoin de ton prénom, nom et email.",
+        step: "STEP_01_IDENTITY",
         expectsAnswer: true,
         autoContinue: false,
       });
@@ -284,12 +284,14 @@ app.post("/axiom", async (req: Request, res: Response) => {
           email: candidate.identity.email,
         });
       } catch (error) {
-        // Log serveur mais le moteur continue (pas de blocage UX)
+        // PARTIE 3 — Si l'écriture Sheet échoue → LOG + throw (pas silencieux)
         console.error("[SHEET] ERROR", {
           sessionId: candidate.candidateId,
           email: candidate.identity.email,
           error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined,
         });
+        throw new Error(`Failed to write candidate to Google Sheet: ${error instanceof Error ? error.message : String(error)}`);
       }
 
       // Passer à tone_choice après écriture Sheet
@@ -383,11 +385,14 @@ app.post("/axiom", async (req: Request, res: Response) => {
             email: candidate.identity.email,
           });
         } catch (error) {
+          // PARTIE 3 — Si l'écriture Sheet échoue → LOG + throw (pas silencieux)
           console.error("[SHEET] ERROR", {
             sessionId: candidate.candidateId,
             email: candidate.identity.email,
             error: error instanceof Error ? error.message : String(error),
+            stack: error instanceof Error ? error.stack : undefined,
           });
+          throw new Error(`Failed to write candidate to Google Sheet: ${error instanceof Error ? error.message : String(error)}`);
         }
 
         candidateStore.updateUIState(candidate.candidateId, {
@@ -478,7 +483,8 @@ app.post("/axiom", async (req: Request, res: Response) => {
       }
     }
 
-    // Gérer les events techniques (boutons)
+    // PARTIE 5 — Gérer les events techniques (boutons)
+    // Si POST /axiom avec message == null ET state == "wait_start_button"
     if (event === "START_BLOC_1" || (!userMessage && !event && candidate.session.ui?.step === STEP_03_BLOC1)) {
       const result = await executeAxiom({ candidate, userMessage: null, event: "START_BLOC_1" });
 
