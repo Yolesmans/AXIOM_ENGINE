@@ -134,21 +134,31 @@ app.get("/start", async (req, res) => {
         else if (result.step === STEP_99_MATCHING || result.step === DONE_MATCHING) {
             responseState = "completed";
         }
+        // C) CONTRAT DE SÉCURITÉ — Toujours renvoyer data.response non vide
+        const response = result.response || '';
+        const finalResponse = response || "Une erreur technique est survenue. Recharge la page.";
         return res.status(200).json({
             sessionId: finalSessionId,
             state: responseState,
             currentBlock: candidate.session.currentBlock,
-            response: result.response || '',
+            response: finalResponse,
             step: result.step,
-            expectsAnswer: result.expectsAnswer,
+            expectsAnswer: response ? result.expectsAnswer : false,
             autoContinue: result.autoContinue,
         });
     }
     catch (error) {
         console.error("[start] error:", error);
-        return res.status(500).json({
-            error: "INTERNAL_ERROR",
-            message: error instanceof Error ? error.message : "Unknown error",
+        // C) CONTRAT DE SÉCURITÉ — Si erreur interne
+        const errorSessionId = req.query?.sessionId || req.headers['x-session-id'] || '';
+        return res.status(200).json({
+            sessionId: errorSessionId,
+            state: "identity",
+            currentBlock: null,
+            response: "Une erreur technique est survenue. Recharge la page.",
+            step: "STEP_01_IDENTITY",
+            expectsAnswer: false,
+            autoContinue: false,
         });
     }
 });
@@ -236,7 +246,10 @@ app.post("/axiom", async (req, res) => {
                     error: error instanceof Error ? error.message : String(error),
                     stack: error instanceof Error ? error.stack : undefined,
                 });
-                throw new Error(`Failed to write candidate to Google Sheet: ${error instanceof Error ? error.message : String(error)}`);
+                // B) GOOGLE SHEETS = NON BLOQUANT
+                // Supprimer TOUS les throw liés à Google Sheets
+                // Le moteur DOIT répondre, changer d'état, continuer le flux AXIOM
+                // Pas de return ici, on continue le flux normalement
             }
             // Passer à tone_choice après écriture Sheet
             candidateStore.updateUIState(candidate.candidateId, {
@@ -329,7 +342,10 @@ app.post("/axiom", async (req, res) => {
                         error: error instanceof Error ? error.message : String(error),
                         stack: error instanceof Error ? error.stack : undefined,
                     });
-                    throw new Error(`Failed to write candidate to Google Sheet: ${error instanceof Error ? error.message : String(error)}`);
+                    // B) GOOGLE SHEETS = NON BLOQUANT
+                    // Supprimer TOUS les throw liés à Google Sheets
+                    // Le moteur DOIT répondre, changer d'état, continuer le flux AXIOM
+                    // Pas de return ici, on continue le flux normalement
                 }
                 candidateStore.updateUIState(candidate.candidateId, {
                     identityDone: true,
@@ -497,21 +513,31 @@ app.post("/axiom", async (req, res) => {
                 console.error("[axiom] live tracking error:", error);
             }
         }
+        // C) CONTRAT DE SÉCURITÉ — Toujours renvoyer data.response non vide
+        const response = result.response || '';
+        const finalResponse = response || "Une erreur technique est survenue. Recharge la page.";
         return res.status(200).json({
             sessionId: candidate.candidateId,
             currentBlock: candidate.session.currentBlock,
             state: responseState,
-            response: result.response || '',
+            response: finalResponse,
             step: responseStep,
-            expectsAnswer: result.expectsAnswer,
+            expectsAnswer: response ? result.expectsAnswer : false,
             autoContinue: result.autoContinue,
         });
     }
     catch (error) {
         console.error("[axiom] error:", error);
-        return res.status(500).json({
-            error: "INTERNAL_ERROR",
-            message: error instanceof Error ? error.message : "Unknown error",
+        // C) CONTRAT DE SÉCURITÉ — Si erreur interne
+        const errorSessionId = req.body?.sessionId || req.headers['x-session-id'] || '';
+        return res.status(200).json({
+            sessionId: errorSessionId,
+            state: "identity",
+            currentBlock: null,
+            response: "Une erreur technique est survenue. Recharge la page.",
+            step: "STEP_01_IDENTITY",
+            expectsAnswer: false,
+            autoContinue: false,
         });
     }
 });
