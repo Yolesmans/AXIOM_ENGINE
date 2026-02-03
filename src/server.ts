@@ -162,10 +162,12 @@ app.get("/start", async (req: Request, res: Response) => {
     let responseState: string = "collecting";
     if (result.step === STEP_01_IDENTITY) {
       responseState = "identity";
-    } else if (result.step === STEP_02_TONE || result.step === STEP_03_PREAMBULE) {
-      responseState = "preamble";
+    } else if (result.step === STEP_02_TONE) {
+      responseState = "tone_choice";
+    } else if (result.step === STEP_03_PREAMBULE) {
+      responseState = "preambule";
     } else if (result.step === STEP_03_BLOC1) {
-      responseState = "preamble_done";
+      responseState = "wait_start_button";
     } else if ([BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10].includes(result.step as any)) {
       responseState = "collecting";
     } else if (result.step === STEP_99_MATCH_READY) {
@@ -323,10 +325,16 @@ app.post("/axiom", async (req: Request, res: Response) => {
 
       const result = await executeAxiom({ candidate, userMessage: null });
 
-      // Mapper les états
-      let responseState: string = "preamble";
-      if (result.step === STEP_03_BLOC1) {
-        responseState = "preamble_done";
+      // Mapper les états correctement
+      let responseState: string = "collecting";
+      if (result.step === STEP_01_IDENTITY) {
+        responseState = "identity";
+      } else if (result.step === STEP_02_TONE) {
+        responseState = "tone_choice";
+      } else if (result.step === STEP_03_PREAMBULE) {
+        responseState = "preambule";
+      } else if (result.step === STEP_03_BLOC1) {
+        responseState = "wait_start_button";
       } else if (result.step === BLOC_01) {
         responseState = "collecting";
         candidateStore.updateSession(candidate.candidateId, { state: "collecting", currentBlock: 1 });

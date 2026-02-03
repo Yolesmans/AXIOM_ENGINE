@@ -1062,8 +1062,23 @@ export async function executeAxiom(
 
     // Stocker tone
     candidateStore.setTonePreference(candidate.candidateId, tone);
-
-    // Charger et exécuter le préambule STRICTEMENT
+    
+    // Transition vers STEP_03_PREAMBULE et auto-enchaînement
+    currentState = STEP_03_PREAMBULE;
+    candidateStore.updateUIState(candidate.candidateId, {
+      step: currentState,
+      lastQuestion: null,
+      tutoiement: tone,
+      identityDone: true,
+    });
+    
+    logTransition(candidate.candidateId, stateIn, currentState, 'message');
+    
+    // Auto-enchaînement : appeler executeAxiom immédiatement pour générer le préambule
+    return await executeAxiom({
+      candidate: candidateStore.get(candidate.candidateId)!,
+      userMessage: null,
+    });
     let aiText: string | null = null;
 
     try {
