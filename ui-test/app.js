@@ -1,5 +1,5 @@
 // Configuration API
-const API_BASE_URL = "https://axiom-engine-eight.vercel.app";
+const API_BASE_URL = "https://axiomengine-production.up.railway.app";
 
 // État de l'application
 let sessionId = null;
