@@ -1314,7 +1314,7 @@ AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
       step: currentState,
       lastQuestion: null,
       expectsAnswer: false,
-      autoContinue: false,
+      autoContinue: true, // STEP_03_PREAMBULE s'auto-enchaîne vers STEP_03_BLOC1
     };
   }
 
@@ -1631,23 +1631,45 @@ Toute sortie hors règles = invalide.`,
   // ============================================
   if (currentState === DONE_MATCHING) {
     logTransition(candidate.candidateId, stateIn, currentState, userMessage ? 'message' : 'event');
-    return {
-      response: '',
-      step: currentState,
-      lastQuestion: null,
-      expectsAnswer: false,
-      autoContinue: false,
-    };
-  }
-
-  // État inconnu
-  console.error('[AXIOM_UNKNOWN_STATE]', { sessionId: candidate.candidateId, state: currentState });
-  logTransition(candidate.candidateId, stateIn, DONE_MATCHING, 'message');
   return {
-    response: 'Erreur technique. Veuillez réessayer.',
-    step: DONE_MATCHING,
+    response: '',
+    step: currentState,
     lastQuestion: null,
     expectsAnswer: false,
     autoContinue: false,
   };
+}
+
+// ============================================
+// AUTO-ENCHAÎNEMENT FSM STRICT
+// ============================================
+
+export async function executeWithAutoContinue(
+  candidate: AxiomCandidate,
+): Promise<ExecuteAxiomResult> {
+  let result = await executeAxiom({
+    candidate,
+    userMessage: null,
+  });
+
+  // 🔁 AUTO-ENCHAÎNEMENT FSM STRICT
+  // Tant que l'état est non interactif ET demande à continuer
+  while (
+    result &&
+    result.expectsAnswer === false &&
+    result.autoContinue === true
+  ) {
+    // Recharger le candidate pour avoir l'état à jour
+    const updatedCandidate = candidateStore.get(candidate.candidateId);
+    if (!updatedCandidate) {
+      break;
+    }
+    
+    result = await executeAxiom({
+      candidate: updatedCandidate,
+      userMessage: null,
+    });
+  }
+
+  return result;
 }

@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from "uuid";
 import { getPostConfig } from "./store/postRegistry.js";
 import {
   executeAxiom,
+  executeWithAutoContinue,
   STEP_01_IDENTITY,
   STEP_02_TONE,
   STEP_03_PREAMBULE,
@@ -155,8 +156,8 @@ app.get("/start", async (req: Request, res: Response) => {
       });
     }
 
-    // Si identité complétée, continuer normalement
-    const result = await executeAxiom({ candidate, userMessage: null });
+    // Si identité complétée, continuer normalement avec auto-enchaînement
+    const result = await executeWithAutoContinue(candidate);
 
     // Mapper les états vers les states de réponse
     let responseState: string = "collecting";
@@ -432,7 +433,7 @@ app.post("/axiom", async (req: Request, res: Response) => {
           });
         }
 
-        const result = await executeAxiom({ candidate, userMessage: null });
+        const result = await executeWithAutoContinue(candidate);
 
         let responseState: string = "preamble";
         if (result.step === STEP_03_BLOC1) {
@@ -511,6 +512,7 @@ app.post("/axiom", async (req: Request, res: Response) => {
     // PARTIE 5 — Gérer les events techniques (boutons)
     // Si POST /axiom avec message == null ET state == "wait_start_button"
     if (event === "START_BLOC_1" || (!userMessage && !event && candidate.session.ui?.step === STEP_03_BLOC1)) {
+      // START_BLOC_1 est un event, pas un auto-enchaînement
       const result = await executeAxiom({ candidate, userMessage: null, event: "START_BLOC_1" });
 
       candidate = candidateStore.get(candidate.candidateId);
