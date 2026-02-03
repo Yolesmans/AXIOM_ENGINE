@@ -1629,9 +1629,21 @@ Toute sortie hors règles = invalide.`,
   // ============================================
   if (currentState === DONE_MATCHING) {
     logTransition(candidate.candidateId, stateIn, currentState, userMessage ? 'message' : 'event');
+    return {
+      response: '',
+      step: currentState,
+      lastQuestion: null,
+      expectsAnswer: false,
+      autoContinue: false,
+    };
+  }
+
+  // État inconnu
+  console.error('[AXIOM_UNKNOWN_STATE]', { sessionId: candidate.candidateId, state: currentState });
+  logTransition(candidate.candidateId, stateIn, DONE_MATCHING, 'message');
   return {
-    response: '',
-    step: currentState,
+    response: 'Erreur technique. Veuillez réessayer.',
+    step: DONE_MATCHING,
     lastQuestion: null,
     expectsAnswer: false,
     autoContinue: false,
