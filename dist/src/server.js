@@ -392,7 +392,7 @@ app.post("/axiom", async (req, res) => {
                 currentBlock: candidate.session.currentBlock,
                 state: "identity",
                 response: '',
-                step: "IDENTITY",
+                step: "STEP_01_IDENTITY",
                 expectsAnswer: true,
             });
         }
@@ -451,26 +451,34 @@ app.post("/axiom", async (req, res) => {
         // Mapper les états
         let responseState = "collecting";
         let responseStep = result.step;
+        // FSM STRICTE — Mapper les états
         if (result.step === STEP_01_IDENTITY || result.step === 'IDENTITY') {
             responseState = "identity";
-            responseStep = "IDENTITY";
+            responseStep = "STEP_01_IDENTITY";
         }
-        else if (result.step === STEP_02_TONE || result.step === STEP_03_PREAMBULE) {
-            responseState = "preamble";
+        else if (result.step === STEP_02_TONE) {
+            responseState = "tone_choice";
+        }
+        else if (result.step === STEP_03_PREAMBULE) {
+            responseState = "preambule";
         }
         else if (result.step === STEP_03_BLOC1) {
-            responseState = "preamble_done";
+            responseState = "wait_start_button";
+            responseStep = "STEP_03_BLOC1";
         }
         else if ([BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10].includes(result.step)) {
-            responseState = "collecting";
             const blocNumber = [BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10].indexOf(result.step) + 1;
+            responseState = `bloc_${blocNumber.toString().padStart(2, '0')}`;
             candidateStore.updateSession(candidate.candidateId, { state: "collecting", currentBlock: blocNumber });
         }
         else if (result.step === STEP_99_MATCH_READY) {
             responseState = "match_ready";
         }
-        else if (result.step === STEP_99_MATCHING || result.step === DONE_MATCHING) {
-            responseState = "completed";
+        else if (result.step === STEP_99_MATCHING) {
+            responseState = "matching";
+        }
+        else if (result.step === DONE_MATCHING) {
+            responseState = "done";
         }
         candidate = candidateStore.get(candidate.candidateId);
         if (!candidate) {
