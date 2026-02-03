@@ -52,6 +52,7 @@ export async function executeAxiom(
   };
 
   // 🔒 TRANSITION TUTOIEMENT / VOUVOIEMENT — DOIT ÊTRE AVANT callOpenAI
+  let justValidatedTone = false;
   if (state.step === STEP_01_TUTOVOU && userMessage) {
     const lower = userMessage.toLowerCase();
 
@@ -63,6 +64,7 @@ export async function executeAxiom(
       state.tutoiement = 'tutoiement';
       state.step = STEP_02_PREAMBULE;
       state.lastQuestion = null;
+      justValidatedTone = true;
     }
 
     if (
@@ -73,6 +75,7 @@ export async function executeAxiom(
       state.tutoiement = 'vouvoiement';
       state.step = STEP_02_PREAMBULE;
       state.lastQuestion = null;
+      justValidatedTone = true;
     }
   }
 
@@ -84,8 +87,9 @@ export async function executeAxiom(
     messages.push({ role: 'user', content: answer.message });
   });
 
-  // Ajouter le message utilisateur actuel si présent
-  if (userMessage) {
+  // Si on vient de valider tutoiement/vouvoiement, ne pas ajouter ce message
+  // pour forcer OpenAI à afficher le préambule directement
+  if (!justValidatedTone && userMessage) {
     messages.push({ role: 'user', content: userMessage });
   }
 
@@ -196,5 +200,11 @@ function fallbackByStep(state: any): string {
     );
   }
 
-  return state.lastQuestion || 'On continue.';
+  if (state.step === STEP_02_PREAMBULE) {
+    // Ne pas utiliser de fallback générique pour le préambule
+    // Le préambule doit venir d'OpenAI
+    return state.lastQuestion || '';
+  }
+
+  return state.lastQuestion || '';
 }
