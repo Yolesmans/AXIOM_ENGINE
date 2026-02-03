@@ -1066,7 +1066,7 @@ export async function executeAxiom(
     candidateStore.updateUIState(candidate.candidateId, {
       step: currentState,
       lastQuestion: null,
-      tutoiement: tone,
+      tutoiement: tone || undefined,
       identityDone: true,
     });
     
@@ -1138,7 +1138,7 @@ Toute sortie hors règles = invalide.`,
     if (!aiText) {
       const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
       const preambuleMatch = FULL_AXIOM_PROMPT.match(/PRÉAMBULE MÉTIER[^]*?(?=🔒|🟢|$)/i);
-      if (preambuleMatch) {
+      if (preambuleMatch && preambuleMatch[0]) {
         aiText = preambuleMatch[0]
           .replace(/PRÉAMBULE MÉTIER[^]*?AFFICHAGE OBLIGATOIRE[^]*?CANDIDAT\)[^]*?/i, '')
           .trim();
@@ -1184,7 +1184,7 @@ Toute sortie hors règles = invalide.`,
     candidateStore.updateUIState(candidate.candidateId, {
       step: currentState,
       lastQuestion: null,
-      tutoiement: tone,
+      tutoiement: tone || undefined,
       identityDone: true,
     });
 
@@ -1192,7 +1192,7 @@ Toute sortie hors règles = invalide.`,
     
     // PARTIE 4 — En UN SEUL RETURN
     return {
-      response: aiText,
+      response: aiText || '',
       step: "STEP_03_BLOC1",
       lastQuestion: null,
       expectsAnswer: false,
@@ -1262,7 +1262,7 @@ AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
     if (!aiText) {
       const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
       const preambuleMatch = FULL_AXIOM_PROMPT.match(/PRÉAMBULE MÉTIER[^]*?(?=🔒|🟢|$)/i);
-      if (preambuleMatch) {
+      if (preambuleMatch && preambuleMatch[0]) {
         aiText = preambuleMatch[0]
           .replace(/PRÉAMBULE MÉTIER[^]*?AFFICHAGE OBLIGATOIRE[^]*?CANDIDAT\)[^]*?/i, '')
           .trim();
@@ -1302,13 +1302,13 @@ AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
     candidateStore.updateUIState(candidate.candidateId, {
       step: currentState,
       lastQuestion: null,
-      tutoiement: ui.tutoiement,
+      tutoiement: ui.tutoiement || undefined,
       identityDone: true,
     });
 
     logTransition(candidate.candidateId, stateIn, currentState, 'message');
     return {
-      response: aiText,
+      response: aiText || '',
       step: currentState,
       lastQuestion: null,
       expectsAnswer: false,
@@ -1328,7 +1328,7 @@ AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
       candidateStore.updateUIState(candidate.candidateId, {
         step: currentState,
         lastQuestion: null,
-        tutoiement: ui.tutoiement,
+        tutoiement: ui.tutoiement || undefined,
         identityDone: true,
       });
       candidateStore.updateSession(candidate.candidateId, { state: 'collecting', currentBlock: 1 });
@@ -1480,7 +1480,7 @@ Toute sortie hors règles = invalide.`,
     candidateStore.updateUIState(candidate.candidateId, {
       step: nextState,
       lastQuestion,
-      tutoiement: ui.tutoiement,
+      tutoiement: ui.tutoiement || undefined,
       identityDone: true,
     });
 
@@ -1489,7 +1489,7 @@ Toute sortie hors règles = invalide.`,
     // Si fin du bloc 10 → transition automatique
     if (nextState === STEP_99_MATCH_READY) {
       return {
-        response: aiText + '\n\nProfil terminé. Quand tu es prêt, génère ton matching.',
+        response: (aiText || '') + '\n\nProfil terminé. Quand tu es prêt, génère ton matching.',
         step: nextState,
         lastQuestion: null,
         expectsAnswer: false,
@@ -1498,7 +1498,7 @@ Toute sortie hors règles = invalide.`,
     }
 
     return {
-      response: aiText,
+      response: aiText || '',
       step: nextState,
       lastQuestion,
       expectsAnswer,
@@ -1527,7 +1527,7 @@ Toute sortie hors règles = invalide.`,
     candidateStore.updateUIState(candidate.candidateId, {
       step: currentState,
       lastQuestion: null,
-      tutoiement: ui.tutoiement,
+      tutoiement: ui.tutoiement || undefined,
       identityDone: true,
     });
 
@@ -1610,13 +1610,13 @@ Toute sortie hors règles = invalide.`,
     candidateStore.updateUIState(candidate.candidateId, {
       step: currentState,
       lastQuestion: null,
-      tutoiement: ui.tutoiement,
+      tutoiement: ui.tutoiement || undefined,
       identityDone: true,
     });
 
     logTransition(candidate.candidateId, stateIn, currentState, 'message');
     return {
-      response: aiText,
+      response: aiText || '',
       step: currentState,
       lastQuestion: null,
       expectsAnswer: false,
