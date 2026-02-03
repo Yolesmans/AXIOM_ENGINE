@@ -82,9 +82,12 @@ async function callAxiom(message) {
     }
 
     // Détection fin préambule → affichage bouton MVP
-    if (data.state === 'preamble_done') {
+    if (data.step === 'STEP_03_BLOC1' && data.expectsAnswer === false) {
       showStartButton = true;
       displayStartButton();
+    } else if (data.step === 'STEP_99_MATCH_READY' && data.expectsAnswer === false) {
+      showStartButton = true;
+      displayMatchingButton();
     } else if (data.expectsAnswer === true) {
       // Réafficher le champ de saisie si on attend une réponse
       const chatForm = document.getElementById('chat-form');
@@ -136,6 +139,40 @@ function displayStartButton() {
   if (startButton) {
     startButton.addEventListener('click', async () => {
       startButton.disabled = true;
+      await callAxiom(null);
+    });
+  }
+
+  messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
+
+// Fonction pour afficher le bouton Matching
+function displayMatchingButton() {
+  const messagesContainer = document.getElementById('messages');
+  if (!messagesContainer) return;
+
+  // Vérifier si le bouton existe déjà
+  let buttonContainer = document.getElementById('mvp-matching-button-container');
+  if (!buttonContainer) {
+    buttonContainer = document.createElement('div');
+    buttonContainer.id = 'mvp-matching-button-container';
+    buttonContainer.className = 'mvp-start-button';
+    messagesContainer.appendChild(buttonContainer);
+  }
+
+  buttonContainer.innerHTML = `
+    <button id="mvp-matching-button" type="button">
+      👉 Je génère mon matching
+    </button>
+  `;
+
+  buttonContainer.classList.remove('hidden');
+
+  // Gestionnaire de clic
+  const matchingButton = document.getElementById('mvp-matching-button');
+  if (matchingButton) {
+    matchingButton.addEventListener('click', async () => {
+      matchingButton.disabled = true;
       await callAxiom(null);
     });
   }

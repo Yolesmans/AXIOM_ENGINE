@@ -7,7 +7,7 @@ import { IdentitySchema } from '../validators/identity.js';
 import { candidateToLiveTrackingRow, googleSheetsLiveTrackingService, } from '../services/googleSheetsService.js';
 import { getPostConfig } from '../store/postRegistry.js';
 // import { sessions } from '../server.js'; // TEMPORAIREMENT COMMENTÉ
-import { executeAxiom, STATE_1_WELCOME_MESSAGE, STATE_2_TONE_CHOICE, STATE_3_PREAMBULE, STATE_4_WAIT_START_EVENT, STATE_5_BLOC_1, STATE_6_BLOC_2, } from '../engine/axiomExecutor.js';
+import { executeAxiom, STEP_02_TONE, STEP_03_PREAMBULE, STEP_03_BLOC1, BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10, } from '../engine/axiomExecutor.js';
 const AxiomBodySchema = z.object({
     tenantId: z.string().min(1),
     posteId: z.string().min(1),
@@ -132,10 +132,10 @@ export async function registerAxiomRoutes(app) {
                     message: 'Failed to update identity',
                 });
             }
-            // Mettre à jour le state UI : identityDone = true, step = STATE_1_WELCOME_MESSAGE
+            // Mettre à jour le state UI : identityDone = true, step = STEP_02_TONE
             candidateStore.updateUIState(candidate.candidateId, {
                 identityDone: true,
-                step: STATE_1_WELCOME_MESSAGE,
+                step: STEP_02_TONE,
             });
             candidate = candidateStore.get(candidate.candidateId);
             if (!candidate) {
@@ -173,11 +173,11 @@ export async function registerAxiomRoutes(app) {
             }
             // Déterminer le state pour la réponse
             let responseState = 'preamble';
-            if (result.step === STATE_5_BLOC_1) {
+            if (result.step === BLOC_01) {
                 responseState = 'collecting';
                 candidateStore.updateSession(candidate.candidateId, { state: 'collecting', currentBlock: 1 });
             }
-            else if (result.step === STATE_1_WELCOME_MESSAGE || result.step === STATE_2_TONE_CHOICE || result.step === STATE_3_PREAMBULE) {
+            else if (result.step === STEP_02_TONE || result.step === STEP_03_PREAMBULE) {
                 responseState = 'preamble';
                 candidateStore.updateSession(candidate.candidateId, { state: 'preamble' });
             }
@@ -249,10 +249,10 @@ export async function registerAxiomRoutes(app) {
                     message: 'Failed to update identity',
                 });
             }
-            // Mettre à jour le state UI : identityDone = true, step = STATE_1_WELCOME_MESSAGE
+            // Mettre à jour le state UI : identityDone = true, step = STEP_02_TONE
             candidateStore.updateUIState(candidate.candidateId, {
                 identityDone: true,
-                step: STATE_1_WELCOME_MESSAGE,
+                step: STEP_02_TONE,
             });
             candidate = candidateStore.get(candidate.candidateId);
             if (!candidate) {
@@ -312,7 +312,7 @@ export async function registerAxiomRoutes(app) {
         // S'assurer que le state UI existe
         if (!candidate.session.ui) {
             candidateStore.updateUIState(candidate.candidateId, {
-                step: candidate.session.state === 'preamble' ? STATE_1_WELCOME_MESSAGE : STATE_5_BLOC_1,
+                step: candidate.session.state === 'preamble' ? STEP_02_TONE : BLOC_01,
                 lastQuestion: null,
                 identityDone: true,
             });
@@ -357,17 +357,17 @@ export async function registerAxiomRoutes(app) {
             // Déterminer le state et currentBlock pour la réponse selon le step
             let responseState = candidate.session.state;
             let currentBlock = candidate.session.currentBlock;
-            if (result.step === STATE_5_BLOC_1) {
+            if (result.step === BLOC_01) {
                 // On passe en collecting avec le Bloc 1
                 responseState = 'collecting';
                 currentBlock = 1;
                 candidateStore.updateSession(candidate.candidateId, { state: 'collecting', currentBlock: 1 });
             }
-            else if (result.step === STATE_3_PREAMBULE || result.step === STATE_4_WAIT_START_EVENT) {
-                // Préambule affiché, on reste en preamble mais le step va passer à BLOC_1 au prochain appel
-                responseState = result.step === STATE_4_WAIT_START_EVENT ? 'preamble_done' : 'preamble';
+            else if (result.step === STEP_03_PREAMBULE || result.step === STEP_03_BLOC1) {
+                // Préambule affiché, on reste en preamble mais le step va passer à BLOC_01 au prochain appel
+                responseState = result.step === STEP_03_BLOC1 ? 'preamble_done' : 'preamble';
             }
-            else if (result.step === STATE_1_WELCOME_MESSAGE || result.step === STATE_2_TONE_CHOICE) {
+            else if (result.step === STEP_02_TONE) {
                 // Question tutoiement/vouvoiement
                 responseState = 'preamble';
             }
@@ -408,7 +408,7 @@ export async function registerAxiomRoutes(app) {
         }
         // Implémenter finish (basculement vers waiting_go)
         if (parsed.data.finish === true) {
-            const isCollecting = (candidate.session.ui?.step === STATE_5_BLOC_1 || candidate.session.ui?.step === STATE_6_BLOC_2) || candidate.session.state === 'collecting';
+            const isCollecting = ([BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10].includes(candidate.session.ui?.step)) || candidate.session.state === 'collecting';
             if (isCollecting && candidate.session.currentBlock === AXIOM_BLOCKS.MAX) {
                 candidateStore.updateSession(candidate.candidateId, { state: 'waiting_go' });
                 candidate = candidateStore.get(candidate.candidateId);

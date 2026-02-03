@@ -3,7 +3,7 @@ import cors from "cors";
 import { candidateStore } from "./store/sessionStore.js";
 import { v4 as uuidv4 } from "uuid";
 import { getPostConfig } from "./store/postRegistry.js";
-import { executeAxiom, STATE_0_COLLECT_IDENTITY, STATE_1_WELCOME_MESSAGE, STATE_2_TONE_CHOICE, STATE_3_PREAMBULE, STATE_4_WAIT_START_EVENT, STATE_5_BLOC_1, STATE_6_BLOC_2, STATE_MATCHING_FINAL, STATE_END, } from "./engine/axiomExecutor.js";
+import { executeAxiom, STEP_01_IDENTITY, STEP_02_TONE, STEP_03_PREAMBULE, STEP_03_BLOC1, BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10, STEP_99_MATCH_READY, STEP_99_MATCHING, DONE_MATCHING, } from "./engine/axiomExecutor.js";
 import { z } from "zod";
 import { IdentitySchema } from "./validators/identity.js";
 import { candidateToLiveTrackingRow, googleSheetsLiveTrackingService } from "./services/googleSheetsService.js";
@@ -87,33 +87,34 @@ app.get("/start", async (req, res) => {
             });
         }
         const result = await executeAxiom({ candidate, userMessage: null });
-        // Mapper les nouveaux états vers les states de réponse
+        // Mapper les états vers les states de réponse
         let responseState = "collecting";
-        if (result.step === STATE_0_COLLECT_IDENTITY) {
+        if (result.step === STEP_01_IDENTITY) {
             responseState = "identity";
         }
-        else if (result.step === STATE_1_WELCOME_MESSAGE ||
-            result.step === STATE_2_TONE_CHOICE ||
-            result.step === STATE_3_PREAMBULE) {
+        else if (result.step === STEP_02_TONE || result.step === STEP_03_PREAMBULE) {
             responseState = "preamble";
         }
-        else if (result.step === STATE_4_WAIT_START_EVENT) {
+        else if (result.step === STEP_03_BLOC1) {
             responseState = "preamble_done";
         }
-        else if (result.step === STATE_5_BLOC_1 || result.step === STATE_6_BLOC_2) {
+        else if ([BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10].includes(result.step)) {
             responseState = "collecting";
         }
-        else if (result.step === STATE_MATCHING_FINAL || result.step === STATE_END) {
+        else if (result.step === STEP_99_MATCH_READY) {
+            responseState = "match_ready";
+        }
+        else if (result.step === STEP_99_MATCHING || result.step === DONE_MATCHING) {
             responseState = "completed";
         }
         return res.status(200).json({
             sessionId: finalSessionId,
             state: responseState,
             currentBlock: candidate.session.currentBlock,
-            response: result.response,
+            response: result.response || '',
+            step: result.step,
             expectsAnswer: result.expectsAnswer,
             autoContinue: result.autoContinue,
-            showStartButton: result.showStartButton,
         });
     }
     catch (error) {
@@ -184,7 +185,7 @@ app.post("/axiom", async (req, res) => {
             }
             candidateStore.updateUIState(candidate.candidateId, {
                 identityDone: true,
-                step: STATE_1_WELCOME_MESSAGE,
+                step: STEP_02_TONE,
             });
             candidate = candidateStore.get(candidate.candidateId);
             if (!candidate) {
@@ -203,10 +204,10 @@ app.post("/axiom", async (req, res) => {
             const result = await executeAxiom({ candidate, userMessage: null });
             // Mapper les états
             let responseState = "preamble";
-            if (result.step === STATE_4_WAIT_START_EVENT) {
+            if (result.step === STEP_03_BLOC1) {
                 responseState = "preamble_done";
             }
-            else if (result.step === STATE_5_BLOC_1) {
+            else if (result.step === BLOC_01) {
                 responseState = "collecting";
                 candidateStore.updateSession(candidate.candidateId, { state: "collecting", currentBlock: 1 });
             }
@@ -256,7 +257,7 @@ app.post("/axiom", async (req, res) => {
                 }
                 candidateStore.updateUIState(candidate.candidateId, {
                     identityDone: true,
-                    step: STATE_1_WELCOME_MESSAGE,
+                    step: STEP_02_TONE,
                 });
                 candidate = candidateStore.get(candidate.candidateId);
                 if (!candidate) {
@@ -274,7 +275,7 @@ app.post("/axiom", async (req, res) => {
                 }
                 const result = await executeAxiom({ candidate, userMessage: null });
                 let responseState = "preamble";
-                if (result.step === STATE_4_WAIT_START_EVENT) {
+                if (result.step === STEP_03_BLOC1) {
                     responseState = "preamble_done";
                 }
                 candidateStore.updateSession(candidate.candidateId, { state: "preamble" });
@@ -319,7 +320,7 @@ app.post("/axiom", async (req, res) => {
         }
         // Initialiser l'état UI si nécessaire
         if (!candidate.session.ui) {
-            const initialState = candidate.identity.completedAt ? STATE_1_WELCOME_MESSAGE : STATE_0_COLLECT_IDENTITY;
+            const initialState = candidate.identity.completedAt ? STEP_02_TONE : STEP_01_IDENTITY;
             candidateStore.updateUIState(candidate.candidateId, {
                 step: initialState,
                 lastQuestion: null,
@@ -333,58 +334,61 @@ app.post("/axiom", async (req, res) => {
                 });
             }
         }
-        // Gérer les events techniques
-        if (event) {
-            if (event === "START_BLOC_1") {
-                const result = await executeAxiom({ candidate, userMessage: null, event: "START_BLOC_1" });
-                candidate = candidateStore.get(candidate.candidateId);
-                if (!candidate) {
-                    return res.status(500).json({
-                        error: "INTERNAL_ERROR",
-                        message: "Failed to get candidate",
-                    });
-                }
-                try {
-                    const trackingRow = candidateToLiveTrackingRow(candidate);
-                    await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
-                }
-                catch (error) {
-                    console.error("[axiom] live tracking error:", error);
-                }
-                return res.status(200).json({
-                    sessionId: candidate.candidateId,
-                    currentBlock: candidate.session.currentBlock,
-                    state: "collecting",
-                    response: result.response,
-                    step: result.step,
-                    expectsAnswer: result.expectsAnswer,
-                    autoContinue: result.autoContinue,
+        // Gérer les events techniques (boutons)
+        if (event === "START_BLOC_1" || (!userMessage && !event && candidate.session.ui?.step === STEP_03_BLOC1)) {
+            const result = await executeAxiom({ candidate, userMessage: null, event: "START_BLOC_1" });
+            candidate = candidateStore.get(candidate.candidateId);
+            if (!candidate) {
+                return res.status(500).json({
+                    error: "INTERNAL_ERROR",
+                    message: "Failed to get candidate",
                 });
             }
+            try {
+                const trackingRow = candidateToLiveTrackingRow(candidate);
+                await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+            }
+            catch (error) {
+                console.error("[axiom] live tracking error:", error);
+            }
+            // Mapper les états
+            let responseState = "collecting";
+            if ([BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10].includes(result.step)) {
+                responseState = "collecting";
+            }
+            return res.status(200).json({
+                sessionId: candidate.candidateId,
+                currentBlock: candidate.session.currentBlock,
+                state: responseState,
+                response: result.response || '',
+                step: result.step,
+                expectsAnswer: result.expectsAnswer,
+                autoContinue: result.autoContinue,
+            });
         }
         // Gérer les messages utilisateur
-        const userMessageText = userMessage || "";
+        const userMessageText = userMessage || null;
         const result = await executeAxiom({ candidate, userMessage: userMessageText });
         // Mapper les états
         let responseState = "collecting";
-        if (result.step === STATE_0_COLLECT_IDENTITY) {
+        if (result.step === STEP_01_IDENTITY) {
             responseState = "identity";
         }
-        else if (result.step === STATE_1_WELCOME_MESSAGE ||
-            result.step === STATE_2_TONE_CHOICE ||
-            result.step === STATE_3_PREAMBULE) {
+        else if (result.step === STEP_02_TONE || result.step === STEP_03_PREAMBULE) {
             responseState = "preamble";
         }
-        else if (result.step === STATE_4_WAIT_START_EVENT) {
+        else if (result.step === STEP_03_BLOC1) {
             responseState = "preamble_done";
         }
-        else if (result.step === STATE_5_BLOC_1 || result.step === STATE_6_BLOC_2) {
+        else if ([BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10].includes(result.step)) {
             responseState = "collecting";
-            if (result.step === STATE_5_BLOC_1) {
-                candidateStore.updateSession(candidate.candidateId, { state: "collecting", currentBlock: 1 });
-            }
+            const blocNumber = [BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10].indexOf(result.step) + 1;
+            candidateStore.updateSession(candidate.candidateId, { state: "collecting", currentBlock: blocNumber });
         }
-        else if (result.step === STATE_MATCHING_FINAL || result.step === STATE_END) {
+        else if (result.step === STEP_99_MATCH_READY) {
+            responseState = "match_ready";
+        }
+        else if (result.step === STEP_99_MATCHING || result.step === DONE_MATCHING) {
             responseState = "completed";
         }
         candidate = candidateStore.get(candidate.candidateId);
@@ -405,11 +409,10 @@ app.post("/axiom", async (req, res) => {
             sessionId: candidate.candidateId,
             currentBlock: candidate.session.currentBlock,
             state: responseState,
-            response: result.response,
+            response: result.response || '',
             step: result.step,
             expectsAnswer: result.expectsAnswer,
             autoContinue: result.autoContinue,
-            showStartButton: result.showStartButton,
         });
     }
     catch (error) {

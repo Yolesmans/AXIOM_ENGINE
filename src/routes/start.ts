@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { candidateStore } from '../store/sessionStore.js';
 import { v4 as uuidv4 } from 'uuid';
 import { getPostConfig } from '../store/postRegistry.js';
-import { executeAxiom, STATE_0_COLLECT_IDENTITY, STATE_1_WELCOME_MESSAGE, STATE_2_TONE_CHOICE, STATE_3_PREAMBULE, STATE_4_WAIT_START_EVENT } from '../engine/axiomExecutor.js';
+import { executeAxiom, STEP_01_IDENTITY, STEP_02_TONE, STEP_03_PREAMBULE, STEP_03_BLOC1, BLOC_01, STEP_99_MATCH_READY } from '../engine/axiomExecutor.js';
 
 export async function registerStartRoute(app: FastifyInstance) {
   app.get('/start', async (req, reply) => {
