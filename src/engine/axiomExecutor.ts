@@ -506,9 +506,7 @@ conforme aux règles définies dans l'architecture interne.
 
 Tu mets à jour profil_axiom.energie et profil_axiom.moteurs.
 
-⸻
-
-[CONTENU COMPLET DU PROMPT AXIOM_PROFIL - intégrer tout le reste du fichier]`;
+⸻`;
 
 // PROMPT AXIOM_MATCHING (intégrer le contenu complet)
 const PROMPT_AXIOM_MATCHING = `🔷 PROMPT MATCHING — AXIOM_ELGAENERGY
