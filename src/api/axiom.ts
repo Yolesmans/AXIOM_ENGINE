@@ -19,7 +19,18 @@ import {
 import type { AnswerRecord } from '../types/answer.js';
 import { getPostConfig } from '../store/postRegistry.js';
 // import { sessions } from '../server.js'; // TEMPORAIREMENT COMMENTÉ
-import { executeAxiom, STEP_00_IDENTITY, STEP_01_TUTOVOU, STEP_02_PREAMBULE, STEP_03_BLOC1, STEP_99_MATCHING } from '../engine/axiomExecutor.js';
+import {
+  executeAxiom,
+  STATE_0_COLLECT_IDENTITY,
+  STATE_1_WELCOME_MESSAGE,
+  STATE_2_TONE_CHOICE,
+  STATE_3_PREAMBULE,
+  STATE_4_WAIT_START_EVENT,
+  STATE_5_BLOC_1,
+  STATE_6_BLOC_2,
+  STATE_MATCHING_FINAL,
+  STATE_END,
+} from '../engine/axiomExecutor.js';
 
 const AxiomBodySchema = z.object({
   tenantId: z.string().min(1),
@@ -162,10 +173,10 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
         });
       }
 
-      // Mettre à jour le state UI : identityDone = true, step = STEP_01_TUTOVOU
+      // Mettre à jour le state UI : identityDone = true, step = STATE_1_WELCOME_MESSAGE
       candidateStore.updateUIState(candidate.candidateId, {
         identityDone: true,
-        step: STEP_01_TUTOVOU,
+        step: STATE_1_WELCOME_MESSAGE,
       });
       candidate = candidateStore.get(candidate.candidateId);
       if (!candidate) {
@@ -191,7 +202,7 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
       }
 
       // Utiliser l'orchestrateur pour obtenir la réponse
-      const result = await executeAxiom(candidate, null);
+      const result = await executeAxiom({ candidate, userMessage: null });
       
       // Persister le state UI
       candidateStore.updateUIState(candidate.candidateId, {
@@ -207,10 +218,10 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
 
       // Déterminer le state pour la réponse
       let responseState: string = 'preamble';
-      if (result.step === STEP_03_BLOC1) {
+      if (result.step === STATE_5_BLOC_1) {
         responseState = 'collecting';
         candidateStore.updateSession(candidate.candidateId, { state: 'collecting', currentBlock: 1 });
-      } else if (result.step === STEP_01_TUTOVOU) {
+      } else if (result.step === STATE_1_WELCOME_MESSAGE || result.step === STATE_2_TONE_CHOICE || result.step === STATE_3_PREAMBULE) {
         responseState = 'preamble';
         candidateStore.updateSession(candidate.candidateId, { state: 'preamble' });
       }
@@ -294,10 +305,10 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
         });
       }
 
-      // Mettre à jour le state UI : identityDone = true, step = STEP_01_TUTOVOU
+      // Mettre à jour le state UI : identityDone = true, step = STATE_1_WELCOME_MESSAGE
       candidateStore.updateUIState(candidate.candidateId, {
         identityDone: true,
-        step: STEP_01_TUTOVOU,
+        step: STATE_1_WELCOME_MESSAGE,
       });
       candidate = candidateStore.get(candidate.candidateId);
       if (!candidate) {
@@ -323,7 +334,7 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
       }
 
       // Utiliser l'orchestrateur pour obtenir la réponse
-      const result = await executeAxiom(candidate, null);
+      const result = await executeAxiom({ candidate, userMessage: null });
       
       // Persister le state UI
       candidateStore.updateUIState(candidate.candidateId, {
@@ -363,7 +374,7 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
     // S'assurer que le state UI existe
     if (!candidate.session.ui) {
       candidateStore.updateUIState(candidate.candidateId, {
-        step: candidate.session.state === 'preamble' ? STEP_01_TUTOVOU : STEP_03_BLOC1,
+        step: candidate.session.state === 'preamble' ? STATE_1_WELCOME_MESSAGE : STATE_5_BLOC_1,
         lastQuestion: null,
         identityDone: true,
       });
@@ -397,7 +408,7 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
       }
 
       // Utiliser l'orchestrateur
-      const result = await executeAxiom(candidate, userMessageText);
+      const result = await executeAxiom({ candidate, userMessage: userMessageText });
       
       // Persister le state UI
       candidateStore.updateUIState(candidate.candidateId, {
@@ -415,15 +426,15 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
       let responseState: string = candidate.session.state;
       let currentBlock = candidate.session.currentBlock;
       
-      if (result.step === STEP_03_BLOC1) {
+      if (result.step === STATE_5_BLOC_1) {
         // On passe en collecting avec le Bloc 1
         responseState = 'collecting';
         currentBlock = 1;
         candidateStore.updateSession(candidate.candidateId, { state: 'collecting', currentBlock: 1 });
-      } else if (result.step === STEP_02_PREAMBULE) {
-        // Préambule affiché, on reste en preamble mais le step va passer à BLOC_1_Q1 au prochain appel
-        responseState = 'preamble';
-      } else if (result.step === STEP_01_TUTOVOU) {
+      } else if (result.step === STATE_3_PREAMBULE || result.step === STATE_4_WAIT_START_EVENT) {
+        // Préambule affiché, on reste en preamble mais le step va passer à BLOC_1 au prochain appel
+        responseState = result.step === STATE_4_WAIT_START_EVENT ? 'preamble_done' : 'preamble';
+      } else if (result.step === STATE_1_WELCOME_MESSAGE || result.step === STATE_2_TONE_CHOICE) {
         // Question tutoiement/vouvoiement
         responseState = 'preamble';
       }
@@ -468,7 +479,7 @@ export async function registerAxiomRoutes(app: FastifyInstance) {
 
     // Implémenter finish (basculement vers waiting_go)
     if (parsed.data.finish === true) {
-      const isCollecting = (candidate.session.ui?.step === STEP_03_BLOC1) || (candidate.session.state as string) === 'collecting';
+      const isCollecting = (candidate.session.ui?.step === STATE_5_BLOC_1 || candidate.session.ui?.step === STATE_6_BLOC_2) || (candidate.session.state as string) === 'collecting';
       if (isCollecting && candidate.session.currentBlock === AXIOM_BLOCKS.MAX) {
         candidateStore.updateSession(candidate.candidateId, { state: 'waiting_go' });
         candidate = candidateStore.get(candidate.candidateId);

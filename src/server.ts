@@ -3,7 +3,18 @@ import cors from "cors";
 import { candidateStore } from "./store/sessionStore.js";
 import { v4 as uuidv4 } from "uuid";
 import { getPostConfig } from "./store/postRegistry.js";
-import { executeAxiom, STEP_00_IDENTITY, STEP_01_TUTOVOU, STEP_02_PREAMBULE, STEP_03_BLOC1 } from "./engine/axiomExecutor.js";
+import {
+  executeAxiom,
+  STATE_0_COLLECT_IDENTITY,
+  STATE_1_WELCOME_MESSAGE,
+  STATE_2_TONE_CHOICE,
+  STATE_3_PREAMBULE,
+  STATE_4_WAIT_START_EVENT,
+  STATE_5_BLOC_1,
+  STATE_6_BLOC_2,
+  STATE_MATCHING_FINAL,
+  STATE_END,
+} from "./engine/axiomExecutor.js";
 import { z } from "zod";
 import { IdentitySchema } from "./validators/identity.js";
 import { candidateToLiveTrackingRow, googleSheetsLiveTrackingService } from "./services/googleSheetsService.js";
@@ -36,6 +47,7 @@ const AxiomBodySchema = z.object({
   sessionId: z.string().min(8).optional(),
   message: z.string().min(1).optional(),
   userMessage: z.string().min(1).optional(),
+  event: z.string().optional(),
   test: z.boolean().optional(),
   finish: z.boolean().optional(),
   identity: z
@@ -107,15 +119,24 @@ app.get("/start", async (req: Request, res: Response) => {
       });
     }
 
-    const result = await executeAxiom(candidate, null);
+    const result = await executeAxiom({ candidate, userMessage: null });
 
+    // Mapper les nouveaux états vers les states de réponse
     let responseState: string = "collecting";
-    if (result.step === STEP_00_IDENTITY) {
+    if (result.step === STATE_0_COLLECT_IDENTITY) {
       responseState = "identity";
-    } else if (result.step === STEP_01_TUTOVOU || result.step === STEP_02_PREAMBULE) {
+    } else if (
+      result.step === STATE_1_WELCOME_MESSAGE ||
+      result.step === STATE_2_TONE_CHOICE ||
+      result.step === STATE_3_PREAMBULE
+    ) {
       responseState = "preamble";
-    } else if (result.step === STEP_03_BLOC1) {
+    } else if (result.step === STATE_4_WAIT_START_EVENT) {
+      responseState = "preamble_done";
+    } else if (result.step === STATE_5_BLOC_1 || result.step === STATE_6_BLOC_2) {
       responseState = "collecting";
+    } else if (result.step === STATE_MATCHING_FINAL || result.step === STATE_END) {
+      responseState = "completed";
     }
 
     return res.status(200).json({
@@ -125,6 +146,7 @@ app.get("/start", async (req: Request, res: Response) => {
       response: result.response,
       expectsAnswer: result.expectsAnswer,
       autoContinue: result.autoContinue,
+      showStartButton: result.showStartButton,
     });
   } catch (error) {
     console.error("[start] error:", error);
@@ -146,7 +168,14 @@ app.post("/axiom", async (req: Request, res: Response) => {
       });
     }
 
-    const { tenantId, posteId, sessionId: providedSessionId, identity: providedIdentity, message: userMessage } = parsed.data;
+    const {
+      tenantId,
+      posteId,
+      sessionId: providedSessionId,
+      identity: providedIdentity,
+      message: userMessage,
+      event,
+    } = parsed.data;
 
     const sessionId = (req.headers["x-session-id"] as string) || providedSessionId;
     if (!sessionId) {
@@ -204,7 +233,7 @@ app.post("/axiom", async (req: Request, res: Response) => {
 
       candidateStore.updateUIState(candidate.candidateId, {
         identityDone: true,
-        step: STEP_01_TUTOVOU,
+        step: STATE_1_WELCOME_MESSAGE,
       });
       candidate = candidateStore.get(candidate.candidateId);
       if (!candidate) {
@@ -221,25 +250,15 @@ app.post("/axiom", async (req: Request, res: Response) => {
         console.error("[axiom] live tracking error:", error);
       }
 
-      const result = await executeAxiom(candidate, null);
+      const result = await executeAxiom({ candidate, userMessage: null });
 
-      candidateStore.updateUIState(candidate.candidateId, {
-        step: result.step,
-        lastQuestion: result.lastQuestion,
-        tutoiement: result.tutoiement,
-      });
-
-      if (result.tutoiement) {
-        candidateStore.setTonePreference(candidate.candidateId, result.tutoiement);
-      }
-
+      // Mapper les états
       let responseState: string = "preamble";
-      if (result.step === STEP_03_BLOC1) {
+      if (result.step === STATE_4_WAIT_START_EVENT) {
+        responseState = "preamble_done";
+      } else if (result.step === STATE_5_BLOC_1) {
         responseState = "collecting";
         candidateStore.updateSession(candidate.candidateId, { state: "collecting", currentBlock: 1 });
-      } else if (result.step === STEP_01_TUTOVOU) {
-        responseState = "preamble";
-        candidateStore.updateSession(candidate.candidateId, { state: "preamble" });
       }
 
       candidate = candidateStore.get(candidate.candidateId);
@@ -258,6 +277,7 @@ app.post("/axiom", async (req: Request, res: Response) => {
         step: result.step,
         expectsAnswer: result.expectsAnswer,
         autoContinue: result.autoContinue,
+        showStartButton: result.showStartButton,
       });
     }
 
@@ -293,7 +313,7 @@ app.post("/axiom", async (req: Request, res: Response) => {
 
         candidateStore.updateUIState(candidate.candidateId, {
           identityDone: true,
-          step: STEP_01_TUTOVOU,
+          step: STATE_1_WELCOME_MESSAGE,
         });
         candidate = candidateStore.get(candidate.candidateId);
         if (!candidate) {
@@ -310,13 +330,12 @@ app.post("/axiom", async (req: Request, res: Response) => {
           console.error("[axiom] live tracking error:", error);
         }
 
-        const result = await executeAxiom(candidate, null);
+        const result = await executeAxiom({ candidate, userMessage: null });
 
-        candidateStore.updateUIState(candidate.candidateId, {
-          step: result.step,
-          lastQuestion: result.lastQuestion,
-          tutoiement: result.tutoiement,
-        });
+        let responseState: string = "preamble";
+        if (result.step === STATE_4_WAIT_START_EVENT) {
+          responseState = "preamble_done";
+        }
 
         candidateStore.updateSession(candidate.candidateId, { state: "preamble" });
         candidate = candidateStore.get(candidate.candidateId);
@@ -330,11 +349,12 @@ app.post("/axiom", async (req: Request, res: Response) => {
         return res.status(200).json({
           sessionId: candidate.candidateId,
           currentBlock: candidate.session.currentBlock,
-          state: "preamble",
+          state: responseState,
           response: result.response,
           step: result.step,
           expectsAnswer: result.expectsAnswer,
           autoContinue: result.autoContinue,
+          showStartButton: result.showStartButton,
         });
       }
     }
@@ -360,11 +380,13 @@ app.post("/axiom", async (req: Request, res: Response) => {
       });
     }
 
+    // Initialiser l'état UI si nécessaire
     if (!candidate.session.ui) {
+      const initialState = candidate.identity.completedAt ? STATE_1_WELCOME_MESSAGE : STATE_0_COLLECT_IDENTITY;
       candidateStore.updateUIState(candidate.candidateId, {
-        step: candidate.session.state === "preamble" ? STEP_01_TUTOVOU : STEP_03_BLOC1,
+        step: initialState,
         lastQuestion: null,
-        identityDone: true,
+        identityDone: !!candidate.identity.completedAt,
       });
       candidate = candidateStore.get(candidate.candidateId);
       if (!candidate) {
@@ -375,87 +397,87 @@ app.post("/axiom", async (req: Request, res: Response) => {
       }
     }
 
-    if (candidate.session.state === "preamble" || candidate.session.state === "collecting") {
-      const userMessageText = userMessage || "";
+    // Gérer les events techniques
+    if (event) {
+      if (event === "START_BLOC_1") {
+        const result = await executeAxiom({ candidate, userMessage: null, event: "START_BLOC_1" });
 
-      if (candidate.session.state === "collecting" && userMessageText) {
-        const answerRecord: AnswerRecord = {
-          block: candidate.session.currentBlock,
-          message: userMessageText,
-          createdAt: new Date().toISOString(),
-        };
-        candidate = candidateStore.addAnswer(candidate.candidateId, answerRecord);
+        candidate = candidateStore.get(candidate.candidateId);
         if (!candidate) {
           return res.status(500).json({
             error: "INTERNAL_ERROR",
-            message: "Failed to store answer",
+            message: "Failed to get candidate",
           });
         }
-      }
 
-      const result = await executeAxiom(candidate, userMessageText);
+        try {
+          const trackingRow = candidateToLiveTrackingRow(candidate);
+          await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+        } catch (error) {
+          console.error("[axiom] live tracking error:", error);
+        }
 
-      candidateStore.updateUIState(candidate.candidateId, {
-        step: result.step,
-        lastQuestion: result.lastQuestion,
-        tutoiement: result.tutoiement,
-      });
-
-      if (result.tutoiement) {
-        candidateStore.setTonePreference(candidate.candidateId, result.tutoiement);
-      }
-
-      let responseState: string = candidate.session.state;
-      let currentBlock = candidate.session.currentBlock;
-
-      // Détection fin du préambule : STEP_02_PREAMBULE sans question
-      if (result.step === STEP_02_PREAMBULE && !result.expectsAnswer) {
-        responseState = "preamble_done";
-      } else if (result.step === STEP_03_BLOC1) {
-        responseState = "collecting";
-        currentBlock = 1;
-        candidateStore.updateSession(candidate.candidateId, { state: "collecting", currentBlock: 1 });
-      } else if (result.step === STEP_02_PREAMBULE) {
-        responseState = "preamble";
-      } else if (result.step === STEP_01_TUTOVOU) {
-        responseState = "preamble";
-      }
-
-      if (responseState === "collecting" && result.response) {
-        candidateStore.setFinalProfileText(candidate.candidateId, result.response);
-      }
-
-      candidate = candidateStore.get(candidate.candidateId);
-      if (!candidate) {
-        return res.status(500).json({
-          error: "INTERNAL_ERROR",
-          message: "Failed to update candidate",
+        return res.status(200).json({
+          sessionId: candidate.candidateId,
+          currentBlock: candidate.session.currentBlock,
+          state: "collecting",
+          response: result.response,
+          step: result.step,
+          expectsAnswer: result.expectsAnswer,
+          autoContinue: result.autoContinue,
         });
       }
+    }
 
-      try {
-        const trackingRow = candidateToLiveTrackingRow(candidate);
-        await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
-      } catch (error) {
-        console.error("[axiom] live tracking error:", error);
+    // Gérer les messages utilisateur
+    const userMessageText = userMessage || "";
+    const result = await executeAxiom({ candidate, userMessage: userMessageText });
+
+    // Mapper les états
+    let responseState: string = "collecting";
+    if (result.step === STATE_0_COLLECT_IDENTITY) {
+      responseState = "identity";
+    } else if (
+      result.step === STATE_1_WELCOME_MESSAGE ||
+      result.step === STATE_2_TONE_CHOICE ||
+      result.step === STATE_3_PREAMBULE
+    ) {
+      responseState = "preamble";
+    } else if (result.step === STATE_4_WAIT_START_EVENT) {
+      responseState = "preamble_done";
+    } else if (result.step === STATE_5_BLOC_1 || result.step === STATE_6_BLOC_2) {
+      responseState = "collecting";
+      if (result.step === STATE_5_BLOC_1) {
+        candidateStore.updateSession(candidate.candidateId, { state: "collecting", currentBlock: 1 });
       }
+    } else if (result.step === STATE_MATCHING_FINAL || result.step === STATE_END) {
+      responseState = "completed";
+    }
 
-      return res.status(200).json({
-        sessionId: candidate.candidateId,
-        currentBlock: currentBlock,
-        state: responseState,
-        response: result.response,
-        step: result.step,
-        expectsAnswer: result.expectsAnswer,
-        autoContinue: result.autoContinue,
+    candidate = candidateStore.get(candidate.candidateId);
+    if (!candidate) {
+      return res.status(500).json({
+        error: "INTERNAL_ERROR",
+        message: "Failed to get candidate",
       });
+    }
+
+    try {
+      const trackingRow = candidateToLiveTrackingRow(candidate);
+      await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+    } catch (error) {
+      console.error("[axiom] live tracking error:", error);
     }
 
     return res.status(200).json({
       sessionId: candidate.candidateId,
       currentBlock: candidate.session.currentBlock,
-      state: candidate.session.state,
-      response: "En attente...",
+      state: responseState,
+      response: result.response,
+      step: result.step,
+      expectsAnswer: result.expectsAnswer,
+      autoContinue: result.autoContinue,
+      showStartButton: result.showStartButton,
     });
   } catch (error) {
     console.error("[axiom] error:", error);

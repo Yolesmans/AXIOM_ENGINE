@@ -13,141 +13,390 @@ async function loadFullAxiomPrompt() {
     const profilPrompt = await readFile(join(promptsDir, 'metier/AXIOM_PROFIL.txt'), 'utf-8');
     return `${systemPrompt}\n\n${profilPrompt}`;
 }
-// Steps minimaux
-export const STEP_00_IDENTITY = 'STEP_00_IDENTITY';
-export const STEP_01_TUTOVOU = 'STEP_01_TUTOVOU';
-export const STEP_02_PREAMBULE = 'STEP_02_PREAMBULE';
-export const STEP_03_BLOC1 = 'STEP_03_BLOC1';
-export const STEP_99_MATCHING = 'STEP_99_MATCHING';
-export async function executeAxiom(candidate, userMessage) {
+// Charger PROMPT MATCHING
+async function loadMatchingPrompt() {
+    const promptsDir = join(__dirname, '../prompts');
+    return await readFile(join(promptsDir, 'metier/AXIOM_MATCHING.txt'), 'utf-8');
+}
+// ============================================
+// ÉTATS STRICTS (ENUM)
+// ============================================
+export const STATE_0_COLLECT_IDENTITY = 'STATE_0_COLLECT_IDENTITY';
+export const STATE_1_WELCOME_MESSAGE = 'STATE_1_WELCOME_MESSAGE';
+export const STATE_2_TONE_CHOICE = 'STATE_2_TONE_CHOICE';
+export const STATE_3_PREAMBULE = 'STATE_3_PREAMBULE';
+export const STATE_4_WAIT_START_EVENT = 'STATE_4_WAIT_START_EVENT';
+export const STATE_5_BLOC_1 = 'STATE_5_BLOC_1';
+export const STATE_6_BLOC_2 = 'STATE_6_BLOC_2';
+export const STATE_MATCHING_FINAL = 'STATE_MATCHING_FINAL';
+export const STATE_END = 'STATE_END';
+// ============================================
+// LOGGING OBLIGATOIRE
+// ============================================
+function logTransition(sessionId, stateIn, stateOut, inputType) {
+    console.log('[AXIOM_STATE_TRANSITION]', {
+        sessionId,
+        stateIn,
+        stateOut,
+        inputType,
+        timestamp: new Date().toISOString(),
+    });
+}
+// ============================================
+// EXÉCUTEUR PRINCIPAL
+// ============================================
+export async function executeAxiom(input) {
+    const { candidate, userMessage, event } = input;
     // INIT ÉTAT
     const ui = candidate.session.ui || {
-        step: candidate.identity.completedAt ? STEP_01_TUTOVOU : STEP_00_IDENTITY,
+        step: candidate.identity.completedAt ? STATE_1_WELCOME_MESSAGE : STATE_0_COLLECT_IDENTITY,
         lastQuestion: null,
         identityDone: !!candidate.identity.completedAt,
     };
-    let state = {
-        step: ui.step,
-        lastQuestion: ui.lastQuestion,
-        tutoiement: ui.tutoiement,
-    };
-    // 🔒 TRANSITION TUTOIEMENT / VOUVOIEMENT — DOIT ÊTRE AVANT callOpenAI
-    if (state.step === STEP_01_TUTOVOU && userMessage) {
-        const lower = userMessage.toLowerCase();
-        if (lower.includes('tutoi') ||
-            lower.includes('tutoie') ||
-            lower.includes('tutoy')) {
-            state.tutoiement = 'tutoiement';
-            state.step = STEP_02_PREAMBULE;
-            state.lastQuestion = null;
-        }
-        if (lower.includes('vouvoi') ||
-            lower.includes('vouvoie') ||
-            lower.includes('vouvoy')) {
-            state.tutoiement = 'vouvoiement';
-            state.step = STEP_02_PREAMBULE;
-            state.lastQuestion = null;
-        }
+    let currentState = ui.step;
+    const stateIn = currentState;
+    // ============================================
+    // STATE_0_COLLECT_IDENTITY
+    // ============================================
+    if (currentState === STATE_0_COLLECT_IDENTITY) {
+        // Affiche UNIQUEMENT le formulaire identité
+        // N'envoie AUCUN prompt LLM
+        // Transition automatique vers STATE_1 après validation (géré dans server.ts)
+        logTransition(candidate.candidateId, stateIn, currentState, userMessage ? 'message' : 'event');
+        return {
+            response: '',
+            step: currentState,
+            lastQuestion: null,
+            expectsAnswer: false,
+            autoContinue: false,
+        };
     }
-    // Construire l'historique des messages
-    const messages = [];
-    // Ajouter les réponses précédentes
-    candidate.answers.forEach((answer) => {
-        messages.push({ role: 'user', content: answer.message });
-    });
-    // Ajouter le message utilisateur actuel si présent
-    if (userMessage) {
-        messages.push({ role: 'user', content: userMessage });
-    }
-    let aiText = null;
-    try {
-        const FULL_AXIOM_PROMPT = await loadFullAxiomPrompt();
-        const completion = await callOpenAI({
-            messages: [
-                { role: 'system', content: FULL_AXIOM_PROMPT },
-                {
-                    role: 'system',
-                    content: buildExecutionDirective(state),
-                },
-                ...messages,
-            ],
-        });
-        if (typeof completion === 'string' && completion.trim()) {
-            aiText = completion.trim();
-        }
-    }
-    catch (e) {
-        console.error('AXIOM_EXECUTION_ERROR', e);
-    }
-    // ANTI SILENCE
-    if (!aiText) {
-        aiText = fallbackByStep(state);
-    }
-    const expectsAnswer = endsWithQuestion(aiText);
-    // MÉMO DERNIÈRE QUESTION
-    if (expectsAnswer) {
-        state.lastQuestion = aiText;
-    }
-    // 🔒 ÉTAPE 1 — FIN DU PRÉAMBULE → PASSAGE AU BLOC 1
-    // Le front relance /axiom quand expectsAnswer === false
-    if (state.step === STEP_02_PREAMBULE && !expectsAnswer) {
-        state.step = STEP_03_BLOC1;
-        state.lastQuestion = null;
-    }
-    let autoContinue = false;
-    // 🔒 ÉTAPE 2 — PERSISTENCE DE L'ÉTAT AXIOM (OBLIGATOIRE)
-    // L'état de la discussion DOIT être sauvegardé à CHAQUE appel
-    if (candidate?.session) {
-        candidateStore.updateUIState(candidate.candidateId, {
-            step: state.step,
-            lastQuestion: state.lastQuestion,
-            tutoiement: state.tutoiement,
-            identityDone: ui.identityDone,
-        });
-    }
-    return {
-        response: aiText,
-        expectsAnswer,
-        step: state.step,
-        lastQuestion: state.lastQuestion,
-        tutoiement: state.tutoiement,
-        autoContinue,
-    };
-}
-function buildExecutionDirective(state) {
-    return `
-RÈGLE ABSOLUE AXIOM :
-
-Tu exécutes STRICTEMENT le protocole AXIOM.
-
-ÉTAT COURANT :
-- step = ${state.step}
-
-Tu produis UNIQUEMENT le texte autorisé à cette étape.
-
-Si le bloc est INFORMATIF :
-- tu l'affiches intégralement
-- tu NE POSES PAS de question
-
-Si le bloc ATTEND une réponse :
-- tu poses UNE question claire
-
-INTERDICTIONS :
-- improviser
-- commenter le système
-- reformuler le prompt
-- revenir en arrière
-`;
-}
-function endsWithQuestion(text) {
-    return text.trim().endsWith('?');
-}
-function fallbackByStep(state) {
-    if (state.step === STEP_00_IDENTITY || state.step === STEP_01_TUTOVOU) {
-        return ('Bienvenue dans AXIOM.\n' +
+    // ============================================
+    // STATE_1_WELCOME_MESSAGE
+    // ============================================
+    if (currentState === STATE_1_WELCOME_MESSAGE) {
+        const welcomeText = 'Bienvenue dans AXIOM.\n' +
             'On va découvrir qui tu es vraiment — pas ce qu\'il y a sur ton CV.\n' +
-            'Promis : je ne te juge pas. Je veux juste comprendre comment tu fonctionnes.\n\n' +
-            'Dis-moi : tu préfères qu\'on se tutoie ou qu\'on se vouvoie pour cette discussion ?');
+            'Promis : je ne te juge pas. Je veux juste comprendre comment tu fonctionnes.';
+        currentState = STATE_2_TONE_CHOICE;
+        candidateStore.updateUIState(candidate.candidateId, {
+            step: currentState,
+            lastQuestion: null,
+            identityDone: true,
+        });
+        logTransition(candidate.candidateId, stateIn, currentState, 'message');
+        return {
+            response: welcomeText,
+            step: currentState,
+            lastQuestion: null,
+            expectsAnswer: false,
+            autoContinue: true,
+        };
     }
-    return state.lastQuestion || 'On continue.';
+    // ============================================
+    // STATE_2_TONE_CHOICE
+    // ============================================
+    if (currentState === STATE_2_TONE_CHOICE) {
+        // Si pas de message, afficher la question
+        if (!userMessage) {
+            const toneQuestion = 'On commence tranquille.\nDis-moi : tu préfères qu\'on se tutoie ou qu\'on se vouvoie pour cette discussion ?';
+            logTransition(candidate.candidateId, stateIn, currentState, 'message');
+            return {
+                response: toneQuestion,
+                step: currentState,
+                lastQuestion: toneQuestion,
+                expectsAnswer: true,
+                autoContinue: false,
+            };
+        }
+        // Validation tutoiement/vouvoiement
+        const lower = userMessage.toLowerCase();
+        let tutoiement;
+        if (lower.includes('tutoi') || lower.includes('tutoie') || lower.includes('tutoy')) {
+            tutoiement = 'tutoiement';
+        }
+        else if (lower.includes('vouvoi') || lower.includes('vouvoie') || lower.includes('vouvoy')) {
+            tutoiement = 'vouvoiement';
+        }
+        if (tutoiement) {
+            // Stocker le ton et passer au préambule
+            candidateStore.updateUIState(candidate.candidateId, {
+                step: STATE_3_PREAMBULE,
+                lastQuestion: null,
+                tutoiement,
+                identityDone: true,
+            });
+            candidateStore.setTonePreference(candidate.candidateId, tutoiement);
+            currentState = STATE_3_PREAMBULE;
+            logTransition(candidate.candidateId, stateIn, currentState, 'message');
+            // Enchaîner immédiatement avec le préambule
+            return await executeAxiom({
+                candidate: candidateStore.get(candidate.candidateId),
+                userMessage: null,
+            });
+        }
+        else {
+            // Réponse invalide, reposer la question
+            const toneQuestion = 'On commence tranquille.\nDis-moi : tu préfères qu\'on se tutoie ou qu\'on se vouvoie pour cette discussion ?';
+            logTransition(candidate.candidateId, stateIn, currentState, 'message');
+            return {
+                response: toneQuestion,
+                step: currentState,
+                lastQuestion: toneQuestion,
+                expectsAnswer: true,
+                autoContinue: false,
+            };
+        }
+    }
+    // ============================================
+    // STATE_3_PREAMBULE
+    // ============================================
+    if (currentState === STATE_3_PREAMBULE) {
+        // Envoyer LE PRÉAMBULE COMPLET (prompt figé)
+        let aiText = null;
+        try {
+            const FULL_AXIOM_PROMPT = await loadFullAxiomPrompt();
+            const completion = await callOpenAI({
+                messages: [
+                    { role: 'system', content: FULL_AXIOM_PROMPT },
+                    {
+                        role: 'system',
+                        content: `RÈGLE ABSOLUE AXIOM :
+Tu es en état STATE_3_PREAMBULE.
+Tu dois afficher LE PRÉAMBULE MÉTIER COMPLET.
+Tu NE POSES PAS de question.
+Tu affiches uniquement le préambule tel que défini dans le prompt.`,
+                    },
+                ],
+            });
+            if (typeof completion === 'string' && completion.trim()) {
+                aiText = completion.trim();
+            }
+        }
+        catch (e) {
+            console.error('[AXIOM_EXECUTION_ERROR]', e);
+        }
+        // AUCUN FALLBACK AUTORISÉ
+        if (!aiText) {
+            logTransition(candidate.candidateId, stateIn, STATE_END, 'message');
+            return {
+                response: '',
+                step: STATE_END,
+                lastQuestion: null,
+                expectsAnswer: false,
+                autoContinue: false,
+            };
+        }
+        // Transition vers STATE_4
+        currentState = STATE_4_WAIT_START_EVENT;
+        candidateStore.updateUIState(candidate.candidateId, {
+            step: currentState,
+            lastQuestion: null,
+            tutoiement: ui.tutoiement,
+            identityDone: true,
+        });
+        logTransition(candidate.candidateId, stateIn, currentState, 'message');
+        return {
+            response: aiText,
+            step: currentState,
+            lastQuestion: null,
+            expectsAnswer: false,
+            autoContinue: false,
+        };
+    }
+    // ============================================
+    // STATE_4_WAIT_START_EVENT
+    // ============================================
+    if (currentState === STATE_4_WAIT_START_EVENT) {
+        // Si event START_BLOC_1, transition vers STATE_5
+        if (event === 'START_BLOC_1') {
+            currentState = STATE_5_BLOC_1;
+            candidateStore.updateUIState(candidate.candidateId, {
+                step: currentState,
+                lastQuestion: null,
+                tutoiement: ui.tutoiement,
+                identityDone: true,
+            });
+            candidateStore.updateSession(candidate.candidateId, { state: 'collecting', currentBlock: 1 });
+            logTransition(candidate.candidateId, stateIn, currentState, 'event');
+            // Enchaîner immédiatement avec BLOC 1
+            return await executeAxiom({
+                candidate: candidateStore.get(candidate.candidateId),
+                userMessage: null,
+            });
+        }
+        // Si message texte reçu, refuser
+        if (userMessage) {
+            logTransition(candidate.candidateId, stateIn, currentState, 'message');
+            return {
+                response: '',
+                step: currentState,
+                lastQuestion: null,
+                expectsAnswer: false,
+                autoContinue: false,
+                showStartButton: true,
+            };
+        }
+        // Retourner l'état d'attente
+        logTransition(candidate.candidateId, stateIn, currentState, 'message');
+        return {
+            response: '',
+            step: currentState,
+            lastQuestion: null,
+            expectsAnswer: false,
+            autoContinue: false,
+            showStartButton: true,
+        };
+    }
+    // ============================================
+    // STATE_5_BLOC_1 et suivants
+    // ============================================
+    if (currentState === STATE_5_BLOC_1 || currentState === STATE_6_BLOC_2) {
+        // Construire l'historique des messages
+        const messages = [];
+        candidate.answers.forEach((answer) => {
+            messages.push({ role: 'user', content: answer.message });
+        });
+        if (userMessage) {
+            messages.push({ role: 'user', content: userMessage });
+        }
+        let aiText = null;
+        try {
+            const FULL_AXIOM_PROMPT = await loadFullAxiomPrompt();
+            const completion = await callOpenAI({
+                messages: [
+                    { role: 'system', content: FULL_AXIOM_PROMPT },
+                    {
+                        role: 'system',
+                        content: `RÈGLE ABSOLUE AXIOM :
+Tu es en état ${currentState}.
+Tu exécutes STRICTEMENT le protocole AXIOM pour ce bloc.
+Tu produis UNIQUEMENT le texte autorisé à cette étape.
+INTERDICTIONS : improviser, commenter le système, reformuler le prompt, revenir en arrière.`,
+                    },
+                    ...messages,
+                ],
+            });
+            if (typeof completion === 'string' && completion.trim()) {
+                aiText = completion.trim();
+            }
+        }
+        catch (e) {
+            console.error('[AXIOM_EXECUTION_ERROR]', e);
+        }
+        // AUCUN FALLBACK AUTORISÉ
+        if (!aiText) {
+            logTransition(candidate.candidateId, stateIn, STATE_END, 'message');
+            return {
+                response: '',
+                step: STATE_END,
+                lastQuestion: null,
+                expectsAnswer: false,
+                autoContinue: false,
+            };
+        }
+        const expectsAnswer = aiText.trim().endsWith('?');
+        // Stocker la réponse si en collecting
+        if (userMessage && candidate.session.state === 'collecting') {
+            const answerRecord = {
+                block: candidate.session.currentBlock,
+                message: userMessage,
+                createdAt: new Date().toISOString(),
+            };
+            candidateStore.addAnswer(candidate.candidateId, answerRecord);
+        }
+        // Mémoriser la dernière question
+        let lastQuestion = null;
+        if (expectsAnswer) {
+            lastQuestion = aiText;
+        }
+        candidateStore.updateUIState(candidate.candidateId, {
+            step: currentState,
+            lastQuestion,
+            tutoiement: ui.tutoiement,
+            identityDone: true,
+        });
+        logTransition(candidate.candidateId, stateIn, currentState, userMessage ? 'message' : 'event');
+        return {
+            response: aiText,
+            step: currentState,
+            lastQuestion,
+            expectsAnswer,
+            autoContinue: false,
+        };
+    }
+    // ============================================
+    // STATE_MATCHING_FINAL
+    // ============================================
+    if (currentState === STATE_MATCHING_FINAL) {
+        let aiText = null;
+        try {
+            const MATCHING_PROMPT = await loadMatchingPrompt();
+            const messages = [];
+            candidate.answers.forEach((answer) => {
+                messages.push({ role: 'user', content: answer.message });
+            });
+            const completion = await callOpenAI({
+                messages: [
+                    { role: 'system', content: MATCHING_PROMPT },
+                    ...messages,
+                ],
+            });
+            if (typeof completion === 'string' && completion.trim()) {
+                aiText = completion.trim();
+            }
+        }
+        catch (e) {
+            console.error('[AXIOM_EXECUTION_ERROR]', e);
+        }
+        // AUCUN FALLBACK AUTORISÉ
+        if (!aiText) {
+            logTransition(candidate.candidateId, stateIn, STATE_END, 'message');
+            return {
+                response: '',
+                step: STATE_END,
+                lastQuestion: null,
+                expectsAnswer: false,
+                autoContinue: false,
+            };
+        }
+        currentState = STATE_END;
+        candidateStore.updateUIState(candidate.candidateId, {
+            step: currentState,
+            lastQuestion: null,
+            tutoiement: ui.tutoiement,
+            identityDone: true,
+        });
+        logTransition(candidate.candidateId, stateIn, currentState, 'message');
+        return {
+            response: aiText,
+            step: currentState,
+            lastQuestion: null,
+            expectsAnswer: false,
+            autoContinue: false,
+        };
+    }
+    // ============================================
+    // STATE_END
+    // ============================================
+    if (currentState === STATE_END) {
+        logTransition(candidate.candidateId, stateIn, currentState, userMessage ? 'message' : 'event');
+        return {
+            response: '',
+            step: currentState,
+            lastQuestion: null,
+            expectsAnswer: false,
+            autoContinue: false,
+        };
+    }
+    // État inconnu
+    console.error('[AXIOM_UNKNOWN_STATE]', { sessionId: candidate.candidateId, state: currentState });
+    logTransition(candidate.candidateId, stateIn, STATE_END, 'message');
+    return {
+        response: '',
+        step: STATE_END,
+        lastQuestion: null,
+        expectsAnswer: false,
+        autoContinue: false,
+    };
 }

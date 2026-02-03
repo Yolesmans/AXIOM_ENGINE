@@ -45,7 +45,7 @@ export async function registerStartRoute(app) {
             });
         }
         // Pass-through vers executeAxiom
-        const result = await executeAxiom(candidate, null);
+        const result = await executeAxiom({ candidate, userMessage: null });
         // Déterminer le state selon le step (mapping simple, pas de logique métier)
         let responseState = 'collecting';
         if (result.step === 'STEP_00_IDENTITY') {
