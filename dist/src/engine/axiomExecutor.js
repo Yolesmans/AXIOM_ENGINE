@@ -113,12 +113,12 @@ export async function executeAxiom(input) {
     if (currentState === STEP_01_IDENTITY) {
         if (!userMessage) {
             // Première demande identité
-            const identityQuestion = "Avant de commencer AXIOM, j'ai besoin de :\n- ton prénom\n- ton nom\n- ton adresse email";
+            // Le front gère l'UI formulaire, on ne renvoie pas de message ici
             logTransition(candidate.candidateId, stateIn, currentState, 'message');
             return {
-                response: identityQuestion,
-                step: currentState,
-                lastQuestion: identityQuestion,
+                response: '',
+                step: 'IDENTITY',
+                lastQuestion: null,
                 expectsAnswer: true,
                 autoContinue: false,
             };
@@ -126,13 +126,12 @@ export async function executeAxiom(input) {
         // Parser identité
         const identity = extractIdentity(userMessage);
         if (!identity || !identity.firstName || !identity.lastName || !identity.email) {
-            // Invalide → répéter
-            const identityQuestion = "Avant de commencer AXIOM, j'ai besoin de :\n- ton prénom\n- ton nom\n- ton adresse email";
+            // Invalide → rester en identity
             logTransition(candidate.candidateId, stateIn, currentState, 'message');
             return {
-                response: identityQuestion,
-                step: currentState,
-                lastQuestion: identityQuestion,
+                response: '',
+                step: 'IDENTITY',
+                lastQuestion: null,
                 expectsAnswer: true,
                 autoContinue: false,
             };

@@ -86,6 +86,33 @@ app.get("/start", async (req, res) => {
                 message: "Failed to create candidate",
             });
         }
+        // RÈGLE 5 — /start DOIT ÊTRE IDÉMPOTENT
+        // Si aucune identité n'est stockée → FORCER state = identity
+        if (!candidate.identity.completedAt || !candidate.identity.firstName || !candidate.identity.lastName || !candidate.identity.email) {
+            // Forcer l'état identity
+            candidateStore.updateUIState(candidate.candidateId, {
+                step: STEP_01_IDENTITY,
+                lastQuestion: null,
+                identityDone: false,
+            });
+            candidate = candidateStore.get(candidate.candidateId);
+            if (!candidate) {
+                return res.status(500).json({
+                    error: "INTERNAL_ERROR",
+                    message: "Failed to update UI state",
+                });
+            }
+            return res.status(200).json({
+                sessionId: finalSessionId,
+                state: "identity",
+                currentBlock: candidate.session.currentBlock,
+                response: '',
+                step: "IDENTITY",
+                expectsAnswer: true,
+                autoContinue: false,
+            });
+        }
+        // Si identité complétée, continuer normalement
         const result = await executeAxiom({ candidate, userMessage: null });
         // Mapper les états vers les states de réponse
         let responseState = "collecting";
@@ -183,6 +210,33 @@ app.post("/axiom", async (req, res) => {
                     message: "Failed to update identity",
                 });
             }
+            // RÈGLE 2 — ÉCRITURE GOOGLE SHEET OBLIGATOIRE
+            // DÈS QUE l'identité est valide → ÉCRIRE / METTRE À JOUR la ligne Google Sheet
+            try {
+                const trackingRow = candidateToLiveTrackingRow(candidate);
+                console.log("[SHEET] INSERT/UPDATE", {
+                    sessionId: candidate.candidateId,
+                    email: candidate.identity.email,
+                    firstName: candidate.identity.firstName,
+                    lastName: candidate.identity.lastName,
+                    tenantId,
+                    posteId,
+                });
+                await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+                console.log("[SHEET] SUCCESS", {
+                    sessionId: candidate.candidateId,
+                    email: candidate.identity.email,
+                });
+            }
+            catch (error) {
+                // Log serveur mais le moteur continue (pas de blocage UX)
+                console.error("[SHEET] ERROR", {
+                    sessionId: candidate.candidateId,
+                    email: candidate.identity.email,
+                    error: error instanceof Error ? error.message : String(error),
+                });
+            }
+            // Passer à tone_choice après écriture Sheet
             candidateStore.updateUIState(candidate.candidateId, {
                 identityDone: true,
                 step: STEP_02_TONE,
@@ -193,13 +247,6 @@ app.post("/axiom", async (req, res) => {
                     error: "INTERNAL_ERROR",
                     message: "Failed to update UI state",
                 });
-            }
-            try {
-                const trackingRow = candidateToLiveTrackingRow(candidate);
-                await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
-            }
-            catch (error) {
-                console.error("[axiom] live tracking error:", error);
             }
             const result = await executeAxiom({ candidate, userMessage: null });
             // Mapper les états
@@ -255,6 +302,30 @@ app.post("/axiom", async (req, res) => {
                         message: "Failed to update identity",
                     });
                 }
+                // RÈGLE 2 — ÉCRITURE GOOGLE SHEET OBLIGATOIRE
+                try {
+                    const trackingRow = candidateToLiveTrackingRow(candidate);
+                    console.log("[SHEET] INSERT/UPDATE", {
+                        sessionId: candidate.candidateId,
+                        email: candidate.identity.email,
+                        firstName: candidate.identity.firstName,
+                        lastName: candidate.identity.lastName,
+                        tenantId,
+                        posteId,
+                    });
+                    await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+                    console.log("[SHEET] SUCCESS", {
+                        sessionId: candidate.candidateId,
+                        email: candidate.identity.email,
+                    });
+                }
+                catch (error) {
+                    console.error("[SHEET] ERROR", {
+                        sessionId: candidate.candidateId,
+                        email: candidate.identity.email,
+                        error: error instanceof Error ? error.message : String(error),
+                    });
+                }
                 candidateStore.updateUIState(candidate.candidateId, {
                     identityDone: true,
                     step: STEP_02_TONE,
@@ -265,13 +336,6 @@ app.post("/axiom", async (req, res) => {
                         error: "INTERNAL_ERROR",
                         message: "Failed to update UI state",
                     });
-                }
-                try {
-                    const trackingRow = candidateToLiveTrackingRow(candidate);
-                    await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
-                }
-                catch (error) {
-                    console.error("[axiom] live tracking error:", error);
                 }
                 const result = await executeAxiom({ candidate, userMessage: null });
                 let responseState = "preamble";
@@ -310,12 +374,21 @@ app.post("/axiom", async (req, res) => {
                 });
             }
         }
-        if (candidate.session.state === "identity" || !candidate.identity.completedAt) {
+        // RÈGLE 1 — CONTRAT FRONT / BACK
+        // Si identité absente → forcer state = identity
+        if (candidate.session.state === "identity" || !candidate.identity.completedAt || !candidate.identity.firstName || !candidate.identity.lastName || !candidate.identity.email) {
+            candidateStore.updateUIState(candidate.candidateId, {
+                step: STEP_01_IDENTITY,
+                lastQuestion: null,
+                identityDone: false,
+            });
             return res.status(200).json({
                 sessionId: candidate.candidateId,
                 currentBlock: candidate.session.currentBlock,
                 state: "identity",
-                response: "Avant de commencer AXIOM, j'ai besoin de :\n- ton prénom\n- ton nom\n- ton adresse email",
+                response: '',
+                step: "IDENTITY",
+                expectsAnswer: true,
             });
         }
         // Initialiser l'état UI si nécessaire
@@ -371,8 +444,10 @@ app.post("/axiom", async (req, res) => {
         const result = await executeAxiom({ candidate, userMessage: userMessageText });
         // Mapper les états
         let responseState = "collecting";
-        if (result.step === STEP_01_IDENTITY) {
+        let responseStep = result.step;
+        if (result.step === STEP_01_IDENTITY || result.step === 'IDENTITY') {
             responseState = "identity";
+            responseStep = "IDENTITY";
         }
         else if (result.step === STEP_02_TONE || result.step === STEP_03_PREAMBULE) {
             responseState = "preamble";
@@ -398,19 +473,22 @@ app.post("/axiom", async (req, res) => {
                 message: "Failed to get candidate",
             });
         }
-        try {
-            const trackingRow = candidateToLiveTrackingRow(candidate);
-            await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
-        }
-        catch (error) {
-            console.error("[axiom] live tracking error:", error);
+        // Mise à jour Google Sheet (sauf si on est en identity)
+        if (responseState !== "identity" && candidate.identity.completedAt) {
+            try {
+                const trackingRow = candidateToLiveTrackingRow(candidate);
+                await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+            }
+            catch (error) {
+                console.error("[axiom] live tracking error:", error);
+            }
         }
         return res.status(200).json({
             sessionId: candidate.candidateId,
             currentBlock: candidate.session.currentBlock,
             state: responseState,
             response: result.response || '',
-            step: result.step,
+            step: responseStep,
             expectsAnswer: result.expectsAnswer,
             autoContinue: result.autoContinue,
         });

@@ -511,8 +511,10 @@ class GoogleSheetsLiveTrackingService {
       });
 
       const rows = response.data.values || [];
+      // RÈGLE 3 — UNE SESSION = UNE LIGNE SHEET
+      // Rechercher par candidateId (colonne J si disponible) ou par email (colonne D)
       const candidateIndex = rows.findIndex(
-        (r) => r && r.length >= 4 && r[2] === row.lastName && r[3] === row.email,
+        (r) => r && r.length >= 4 && (r[9] === row.candidateId || r[3] === row.email),
       );
 
       if (candidateIndex >= 0) {
