@@ -1,52 +1,35 @@
-import Fastify from 'fastify';
-import cors from '@fastify/cors';
-import { registerAxiomRoutes } from './api/axiom.js';
-import { registerStartRoute } from './routes/start.js';
+import express from "express";
 
-// Map de sessions en mémoire pour gérer identityDone, vouvoiement, lastQuestion, lastAssistant
-export const sessions = new Map<string, {
-  identityDone: boolean;
-  vouvoiement: 'tutoiement' | 'vouvoiement' | null;
-  lastQuestion: string | null;
-  lastAssistant: string | null;
-}>();
+const app = express();
 
-export function buildServer() {
-  const app = Fastify({
-    logger: true,
+// ROUTES IMMÉDIATES (Railway healthcheck)
+app.get("/", (_req, res) => {
+  res.status(200).json({
+    status: "ok",
+    service: "AXIOM_ENGINE",
+    runtime: "railway",
   });
+});
 
-  // 🔒 CORS — MVP (OBLIGATOIRE POUR LE FRONT)
-  app.register(cors, {
-    origin: '*',
-    methods: ['GET', 'POST', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'x-session-id'],
-  });
+app.get("/health", (_req, res) => {
+  res.status(200).json({ ok: true });
+});
 
-  // Route GET /health
-  app.get('/health', async () => {
-    return { status: 'ok' };
-  });
+app.get("/favicon.ico", (_req, res) => {
+  res.status(204).send();
+});
 
-  // Route POST /api/start
-  app.post('/api/start', async () => {
-    return { started: true };
-  });
+// DÉMARRAGE SERVEUR — AUCUNE LOGIQUE AVANT
+const PORT = Number(process.env.PORT) || 3000;
 
-  registerStartRoute(app);
-  registerAxiomRoutes(app);
+app.listen(PORT, "0.0.0.0", async () => {
+  console.log(`AXIOM ENGINE listening on port ${PORT}`);
 
-  return app;
-}
-
-// Export default compatible Vercel
-const app = buildServer();
-let isReady = false;
-
-export default async function handler(req: any, res: any) {
-  if (!isReady) {
-    await app.ready();
-    isReady = true;
+  // IMPORT LENT APRÈS BOOT HTTP
+  try {
+    await import("./index"); // ton ancien point d'entrée
+    console.log("AXIOM core loaded");
+  } catch (err) {
+    console.error("AXIOM core failed to load", err);
   }
-  app.server.emit('request', req, res);
-}
+});

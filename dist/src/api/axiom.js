@@ -6,7 +6,7 @@ import { executeMatchingPrompt } from '../services/axiomExecutor.js';
 import { IdentitySchema } from '../validators/identity.js';
 import { candidateToLiveTrackingRow, googleSheetsLiveTrackingService, } from '../services/googleSheetsService.js';
 import { getPostConfig } from '../store/postRegistry.js';
-import { sessions } from '../server.js';
+// import { sessions } from '../server.js'; // TEMPORAIREMENT COMMENTÉ
 import { executeAxiom, STEP_01_TUTOVOU, STEP_02_PREAMBULE, STEP_03_BLOC1 } from '../engine/axiomExecutor.js';
 const AxiomBodySchema = z.object({
     tenantId: z.string().min(1),
@@ -70,16 +70,23 @@ export async function registerAxiomRoutes(app) {
             });
         }
         // Charger ou initialiser session
-        let sessionData = sessions.get(sessionId);
-        if (!sessionData) {
-            sessionData = {
-                identityDone: false,
-                vouvoiement: null,
-                lastQuestion: null,
-                lastAssistant: null,
-            };
-            sessions.set(sessionId, sessionData);
-        }
+        // TEMPORAIREMENT COMMENTÉ - sessions
+        // let sessionData = sessions.get(sessionId);
+        // if (!sessionData) {
+        //   sessionData = {
+        //     identityDone: false,
+        //     vouvoiement: null,
+        //     lastQuestion: null,
+        //     lastAssistant: null,
+        //   };
+        //   sessions.set(sessionId, sessionData);
+        // }
+        let sessionData = {
+            identityDone: false,
+            vouvoiement: null,
+            lastQuestion: null,
+            lastAssistant: null,
+        };
         try {
             getPostConfig(tenantId, posteId);
         }
@@ -193,15 +200,22 @@ export async function registerAxiomRoutes(app) {
         if (!candidate) {
             app.log.warn({ candidateId: sessionId, tenantId }, 'Candidat non trouvé, création d\'un nouveau candidat');
             candidate = candidateStore.create(sessionId, tenantId);
-            if (!sessions.has(sessionId)) {
-                sessions.set(sessionId, {
-                    identityDone: false,
-                    vouvoiement: null,
-                    lastQuestion: null,
-                    lastAssistant: null,
-                });
-                sessionData = sessions.get(sessionId);
-            }
+            // TEMPORAIREMENT COMMENTÉ - sessions
+            // if (!sessions.has(sessionId)) {
+            //   sessions.set(sessionId, {
+            //     identityDone: false,
+            //     vouvoiement: null,
+            //     lastQuestion: null,
+            //     lastAssistant: null,
+            //   });
+            //   sessionData = sessions.get(sessionId)!;
+            // }
+            sessionData = {
+                identityDone: false,
+                vouvoiement: null,
+                lastQuestion: null,
+                lastAssistant: null,
+            };
         }
         else {
             // Vérifier l'isolation tenant
@@ -418,7 +432,7 @@ export async function registerAxiomRoutes(app) {
                 const waitingGoResponse = 'AXIOM est prêt pour le matching final.\n\nQuand vous êtes prêt, écrivez exactement : GO';
                 sessionData.lastAssistant = waitingGoResponse;
                 sessionData.lastQuestion = waitingGoResponse;
-                sessions.set(sessionId, sessionData);
+                // TEMPORAIREMENT COMMENTÉ - sessions.set(sessionId, sessionData);
                 return reply.send({
                     sessionId: candidate.candidateId,
                     currentBlock: candidate.session.currentBlock,
@@ -479,7 +493,7 @@ export async function registerAxiomRoutes(app) {
             }
             // Mettre à jour lastAssistant
             sessionData.lastAssistant = fullText;
-            sessions.set(sessionId, sessionData);
+            // TEMPORAIREMENT COMMENTÉ - sessions.set(sessionId, sessionData);
             const lignes = fullText.split('\n').map(l => l.trim()).filter(Boolean);
             const verdict = (lignes[0] ?? '').slice(0, 80);
             const summary = lignes.slice(0, 3).join(' ').slice(0, 240);
