@@ -324,7 +324,7 @@ app.post("/axiom", async (req: Request, res: Response) => {
         });
       }
 
-      const result = await executeAxiom({ candidate, userMessage: null });
+      const result = await executeWithAutoContinue(candidate);
 
       // Mapper les états correctement
       let responseState: string = "collecting";
