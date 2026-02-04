@@ -170,6 +170,8 @@ app.get("/start", async (req: Request, res: Response) => {
       responseState = "preambule";
     } else if (result.step === STEP_03_BLOC1) {
       responseState = "wait_start_button";
+    } else if (result.step === "PREAMBULE_DONE") {
+      responseState = "wait_start_button";
     } else if ([BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10].includes(result.step as any)) {
       responseState = "collecting";
     } else if (result.step === STEP_99_MATCH_READY) {
@@ -549,7 +551,7 @@ app.post("/axiom", async (req: Request, res: Response) => {
 
     // Gérer les messages utilisateur
     const userMessageText = userMessage || null;
-    const result = await executeWithAutoContinue(candidate);
+    const result = await executeWithAutoContinue(candidate, userMessageText);
 
     // Recharger le candidate AVANT le mapping pour avoir l'état à jour
     candidate = candidateStore.get(candidate.candidateId);

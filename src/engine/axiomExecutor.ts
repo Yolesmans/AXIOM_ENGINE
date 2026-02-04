@@ -1205,7 +1205,7 @@ AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
     logTransition(candidate.candidateId, stateIn, currentState, 'message');
     return {
       response: aiText || '',
-      step: "PREAMBULE_DONE",
+      step: STEP_03_BLOC1,
       lastQuestion: null,
       expectsAnswer: false,
       autoContinue: false, // déclenchement explicite requis
@@ -1651,10 +1651,11 @@ Toute sortie hors règles = invalide.`,
 
 export async function executeWithAutoContinue(
   candidate: AxiomCandidate,
+  userMessage: string | null = null,
 ): Promise<ExecuteAxiomResult> {
   let result = await executeAxiom({
     candidate,
-    userMessage: null,
+    userMessage: userMessage,
   });
 
   // 🔁 AUTO-ENCHAÎNEMENT FSM STRICT
