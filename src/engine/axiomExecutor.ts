@@ -1138,9 +1138,13 @@ Toute sortie hors règles = invalide.`,
     if (!aiText) {
       const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
       const preambuleMatch = FULL_AXIOM_PROMPT.match(/PRÉAMBULE MÉTIER[^]*?(?=🔒|🟢|$)/i);
+
       if (preambuleMatch && preambuleMatch[0]) {
         aiText = preambuleMatch[0]
-          .replace(/PRÉAMBULE MÉTIER[^]*?AFFICHAGE OBLIGATOIRE[^]*?CANDIDAT\)[^]*?/i, '')
+          .replace(
+            /PRÉAMBULE MÉTIER[^]*?AFFICHAGE OBLIGATOIRE[^]*?CANDIDAT\)[^]*?/i,
+            ''
+          )
           .trim();
       } else {
         // Texte du prompt (pas de fallback générique)
@@ -1262,9 +1266,13 @@ AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
     if (!aiText) {
       const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
       const preambuleMatch = FULL_AXIOM_PROMPT.match(/PRÉAMBULE MÉTIER[^]*?(?=🔒|🟢|$)/i);
+
       if (preambuleMatch && preambuleMatch[0]) {
         aiText = preambuleMatch[0]
-          .replace(/PRÉAMBULE MÉTIER[^]*?AFFICHAGE OBLIGATOIRE[^]*?CANDIDAT\)[^]*?/i, '')
+          .replace(
+            /PRÉAMBULE MÉTIER[^]*?AFFICHAGE OBLIGATOIRE[^]*?CANDIDAT\)[^]*?/i,
+            ''
+          )
           .trim();
       } else {
         // Fallback minimal (texte du prompt)
