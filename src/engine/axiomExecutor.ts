@@ -851,6 +851,36 @@ export const STEP_03_PREAMBULE = 'STEP_03_PREAMBULE';
 export const STEP_03_BLOC1 = 'STEP_03_BLOC1'; // wait_start_button
 export const PREAMBULE_DONE = 'PREAMBULE_DONE';
 export const BLOC_01 = 'BLOC_01';
+
+// ============================================
+// HELPER : Dérivation d'état depuis l'historique
+// ============================================
+// PRIORITÉ A : Empêcher les retours en arrière
+// Dérive l'état depuis l'historique du candidat si UI est null
+function deriveStepFromHistory(candidate: AxiomCandidate): string {
+  // Règle 1 : Si currentBlock > 0 → candidat est dans un bloc
+  if (candidate.session.currentBlock > 0) {
+    return `BLOC_${String(candidate.session.currentBlock).padStart(2, '0')}`;
+  }
+  
+  // Règle 2 : Si réponses présentes → candidat a dépassé le préambule
+  if (candidate.answers.length > 0) {
+    return STEP_03_BLOC1;
+  }
+  
+  // Règle 3 : Si tone choisi → candidat est au préambule ou après
+  if (candidate.tonePreference) {
+    return STEP_03_BLOC1;
+  }
+  
+  // Règle 4 : Si identité complétée → candidat est au tone
+  if (candidate.identity.completedAt) {
+    return STEP_02_TONE;
+  }
+  
+  // Règle 5 : Sinon → nouveau candidat, identité
+  return STEP_01_IDENTITY;
+}
 export const BLOC_02 = 'BLOC_02';
 export const BLOC_03 = 'BLOC_03';
 export const BLOC_04 = 'BLOC_04';
@@ -965,12 +995,28 @@ export async function executeAxiom(
 ): Promise<ExecuteAxiomResult> {
   const { candidate, userMessage, event } = input;
 
-  // INIT ÉTAT
-  const ui = candidate.session.ui || {
-    step: candidate.identity.completedAt ? STEP_02_TONE : STEP_01_IDENTITY,
-    lastQuestion: null,
-    identityDone: !!candidate.identity.completedAt,
-  };
+  // PRIORITÉ A3 : INIT ÉTAT avec dérivation depuis l'historique
+  // INTERDICTION : Ne jamais fallback vers STEP_02_TONE sans analyser l'historique
+  let ui = candidate.session.ui;
+  if (!ui) {
+    // Dériver l'état depuis l'historique
+    const derivedStep = deriveStepFromHistory(candidate);
+    
+    ui = {
+      step: derivedStep,
+      lastQuestion: null,
+      identityDone: !!candidate.identity.completedAt,
+    };
+    
+    // Persister immédiatement l'état dérivé
+    candidateStore.updateUIState(candidate.candidateId, ui);
+    
+    // Recharger le candidate pour avoir l'état à jour
+    const updatedCandidate = candidateStore.get(candidate.candidateId);
+    if (updatedCandidate && updatedCandidate.session.ui) {
+      ui = updatedCandidate.session.ui;
+    }
+  }
 
   let currentState = ui.step as string;
   const stateIn = currentState;

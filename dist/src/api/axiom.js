@@ -16,6 +16,7 @@ const AxiomBodySchema = z.object({
     userMessage: z.string().min(1).optional(),
     test: z.boolean().optional(),
     finish: z.boolean().optional(),
+    event: z.string().min(1).optional(),
     identity: z
         .object({
         firstName: z.string().min(1),
@@ -61,12 +62,81 @@ export async function registerAxiomRoutes(app) {
             });
         }
         const { tenantId, posteId, sessionId: providedSessionId, identity: providedIdentity, message: userMessage } = parsed.data;
+        const event = parsed.data.event;
         // Exiger sessionId (header ou body)
         const sessionId = req.headers['x-session-id'] || providedSessionId;
         if (!sessionId) {
             return reply.code(400).send({
                 error: 'MISSING_SESSION_ID',
                 message: 'sessionId requis (header x-session-id ou body)',
+            });
+        }
+        // ✅ EVENT HANDLER — START_BLOC_1
+        if (event === 'START_BLOC_1') {
+            app.log.info({ event }, '[AXIOM] event received');
+            // Charger le candidat
+            let candidate = candidateStore.get(sessionId);
+            if (!candidate) {
+                candidate = candidateStore.create(sessionId, tenantId);
+            }
+            // Si identité pas complétée -> demander identité (comportement stable)
+            if (!candidate.identity?.completedAt) {
+                return reply.send({
+                    sessionId: candidate.candidateId,
+                    currentBlock: candidate.session.currentBlock,
+                    state: 'identity',
+                    response: "Avant de commencer AXIOM, j'ai besoin de :\n- ton prénom\n- ton nom\n- ton adresse email",
+                });
+            }
+            // Forcer collecting bloc 1 + UI step bloc 1
+            candidateStore.updateSession(candidate.candidateId, { state: 'collecting', currentBlock: 1 });
+            candidateStore.updateUIState(candidate.candidateId, {
+                step: BLOC_01,
+                lastQuestion: candidate.session.ui?.lastQuestion ?? null,
+                identityDone: true,
+            });
+            candidate = candidateStore.get(candidate.candidateId);
+            if (!candidate) {
+                return reply.code(500).send({ error: 'INTERNAL_ERROR', message: 'Failed to reload candidate after START_BLOC_1' });
+            }
+            // Tenter de laisser l'orchestrateur produire la 1ère question
+            let result;
+            try {
+                result = await executeAxiom({ candidate, userMessage: "" });
+            }
+            catch (e) {
+                // Fallback déterministe (si orchestrateur ne gère pas encore)
+                const q = "Tu te sens plus poussé par :\nA. Progresser / devenir meilleur\nB. Atteindre des objectifs concrets\nC. Être reconnu pour ce que tu fais ?";
+                return reply.send({
+                    sessionId: candidate.candidateId,
+                    currentBlock: 1,
+                    state: 'collecting',
+                    response: q,
+                    expectsAnswer: true,
+                    autoContinue: false,
+                });
+            }
+            // Persister UI state depuis result
+            candidateStore.updateUIState(candidate.candidateId, {
+                step: result.step,
+                lastQuestion: result.lastQuestion,
+                tutoiement: result.tutoiement,
+            });
+            // Live tracking
+            try {
+                const trackingRow = candidateToLiveTrackingRow(candidate);
+                await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+            }
+            catch (error) {
+                app.log.error({ tenantId, posteId, candidateId: candidate.candidateId, errorMessage: error instanceof Error ? error.message : String(error) }, 'Failed to update live tracking');
+            }
+            return reply.send({
+                sessionId: candidate.candidateId,
+                currentBlock: 1,
+                state: 'collecting',
+                response: result.response,
+                expectsAnswer: result.expectsAnswer,
+                autoContinue: result.autoContinue,
             });
         }
         // Charger ou initialiser session

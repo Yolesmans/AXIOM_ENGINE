@@ -1,5 +1,14 @@
 import { callOpenAI } from '../services/openaiClient.js';
 import { candidateStore } from '../store/sessionStore.js';
+function extractPreambuleFromPrompt(prompt) {
+    const match = prompt.match(/PRÉAMBULE MÉTIER[^]*?(?=🔒|🟢|$)/i);
+    if (match && match[0]) {
+        return match[0]
+            .replace(/PRÉAMBULE MÉTIER[^]*?AFFICHAGE OBLIGATOIRE[^]*?CANDIDAT\)[^]*?/i, '')
+            .trim();
+    }
+    return '';
+}
 // ============================================
 // PROMPTS INTÉGRÉS (MÉMOIRE UNIQUEMENT)
 // ============================================
@@ -501,9 +510,7 @@ conforme aux règles définies dans l'architecture interne.
 
 Tu mets à jour profil_axiom.energie et profil_axiom.moteurs.
 
-⸻
-
-[CONTENU COMPLET DU PROMPT AXIOM_PROFIL - intégrer tout le reste du fichier]`;
+⸻`;
 // PROMPT AXIOM_MATCHING (intégrer le contenu complet)
 const PROMPT_AXIOM_MATCHING = `🔷 PROMPT MATCHING — AXIOM_ELGAENERGY
 (Phase 2 — Décision & Projection)
@@ -824,7 +831,33 @@ export const STEP_01_IDENTITY = 'STEP_01_IDENTITY';
 export const STEP_02_TONE = 'STEP_02_TONE';
 export const STEP_03_PREAMBULE = 'STEP_03_PREAMBULE';
 export const STEP_03_BLOC1 = 'STEP_03_BLOC1'; // wait_start_button
+export const PREAMBULE_DONE = 'PREAMBULE_DONE';
 export const BLOC_01 = 'BLOC_01';
+// ============================================
+// HELPER : Dérivation d'état depuis l'historique
+// ============================================
+// PRIORITÉ A : Empêcher les retours en arrière
+// Dérive l'état depuis l'historique du candidat si UI est null
+function deriveStepFromHistory(candidate) {
+    // Règle 1 : Si currentBlock > 0 → candidat est dans un bloc
+    if (candidate.session.currentBlock > 0) {
+        return `BLOC_${String(candidate.session.currentBlock).padStart(2, '0')}`;
+    }
+    // Règle 2 : Si réponses présentes → candidat a dépassé le préambule
+    if (candidate.answers.length > 0) {
+        return STEP_03_BLOC1;
+    }
+    // Règle 3 : Si tone choisi → candidat est au préambule ou après
+    if (candidate.tonePreference) {
+        return STEP_03_BLOC1;
+    }
+    // Règle 4 : Si identité complétée → candidat est au tone
+    if (candidate.identity.completedAt) {
+        return STEP_02_TONE;
+    }
+    // Règle 5 : Sinon → nouveau candidat, identité
+    return STEP_01_IDENTITY;
+}
 export const BLOC_02 = 'BLOC_02';
 export const BLOC_03 = 'BLOC_03';
 export const BLOC_04 = 'BLOC_04';
@@ -904,12 +937,25 @@ function logTransition(sessionId, stateIn, stateOut, inputType) {
 // ============================================
 export async function executeAxiom(input) {
     const { candidate, userMessage, event } = input;
-    // INIT ÉTAT
-    const ui = candidate.session.ui || {
-        step: candidate.identity.completedAt ? STEP_02_TONE : STEP_01_IDENTITY,
-        lastQuestion: null,
-        identityDone: !!candidate.identity.completedAt,
-    };
+    // PRIORITÉ A3 : INIT ÉTAT avec dérivation depuis l'historique
+    // INTERDICTION : Ne jamais fallback vers STEP_02_TONE sans analyser l'historique
+    let ui = candidate.session.ui;
+    if (!ui) {
+        // Dériver l'état depuis l'historique
+        const derivedStep = deriveStepFromHistory(candidate);
+        ui = {
+            step: derivedStep,
+            lastQuestion: null,
+            identityDone: !!candidate.identity.completedAt,
+        };
+        // Persister immédiatement l'état dérivé
+        candidateStore.updateUIState(candidate.candidateId, ui);
+        // Recharger le candidate pour avoir l'état à jour
+        const updatedCandidate = candidateStore.get(candidate.candidateId);
+        if (updatedCandidate && updatedCandidate.session.ui) {
+            ui = updatedCandidate.session.ui;
+        }
+    }
     let currentState = ui.step;
     const stateIn = currentState;
     // ============================================
@@ -1004,122 +1050,20 @@ export async function executeAxiom(input) {
         // - state = "wait_start_button"
         // Stocker tone
         candidateStore.setTonePreference(candidate.candidateId, tone);
-        // Charger et exécuter le préambule STRICTEMENT
-        let aiText = null;
-        try {
-            const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
-            const completion = await callOpenAI({
-                messages: [
-                    { role: 'system', content: FULL_AXIOM_PROMPT },
-                    {
-                        role: 'system',
-                        content: `RÈGLE ABSOLUE AXIOM :
-Le moteur AXIOM n'interprète pas les prompts. Il les exécute STRICTEMENT.
-Tu es en état STEP_03_PREAMBULE.
-Tu dois afficher LE PRÉAMBULE MÉTIER COMPLET tel que défini dans le prompt.
-Tu NE POSES PAS de question.
-Tu affiches uniquement le préambule, mot pour mot selon les instructions.
-AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.
-Toute sortie hors règles = invalide.`,
-                    },
-                ],
-            });
-            if (typeof completion === 'string' && completion.trim()) {
-                aiText = completion.trim();
-            }
-        }
-        catch (e) {
-            console.error('[AXIOM_EXECUTION_ERROR]', e);
-        }
-        // Si échec → réessayer une fois
-        if (!aiText) {
-            try {
-                const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
-                const completion = await callOpenAI({
-                    messages: [
-                        { role: 'system', content: FULL_AXIOM_PROMPT },
-                        {
-                            role: 'system',
-                            content: `RÈGLE ABSOLUE AXIOM :
-Le moteur AXIOM n'interprète pas les prompts. Il les exécute STRICTEMENT.
-Tu es en état STEP_03_PREAMBULE.
-Tu dois afficher LE PRÉAMBULE MÉTIER COMPLET tel que défini dans le prompt.
-Tu NE POSES PAS de question.
-Tu affiches uniquement le préambule, mot pour mot selon les instructions.
-AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.
-Toute sortie hors règles = invalide.`,
-                        },
-                    ],
-                });
-                if (typeof completion === 'string' && completion.trim()) {
-                    aiText = completion.trim();
-                }
-            }
-            catch (e) {
-                console.error('[AXIOM_EXECUTION_ERROR_RETRY]', e);
-            }
-        }
-        // Si toujours vide → utiliser le texte du prompt directement (pas de fallback générique)
-        if (!aiText) {
-            const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
-            const preambuleMatch = FULL_AXIOM_PROMPT.match(/PRÉAMBULE MÉTIER[^]*?(?=🔒|🟢|$)/i);
-            if (preambuleMatch) {
-                aiText = preambuleMatch[0]
-                    .replace(/PRÉAMBULE MÉTIER[^]*?AFFICHAGE OBLIGATOIRE[^]*?CANDIDAT\)[^]*?/i, '')
-                    .trim();
-            }
-            else {
-                // Texte du prompt (pas de fallback générique)
-                aiText =
-                    'Avant de commencer vraiment, je te pose simplement le cadre.\n\n' +
-                        'Le métier concerné est celui de courtier en énergie.\n\n' +
-                        'Il consiste à accompagner des entreprises dans la gestion de leurs contrats d\'électricité et de gaz :\n' +
-                        '• analyse de l\'existant,\n' +
-                        '• renégociation auprès des fournisseurs,\n' +
-                        '• sécurisation des prix,\n' +
-                        '• suivi dans la durée.\n\n' +
-                        'Le client final ne paie rien directement.\n' +
-                        'La rémunération est versée par les fournisseurs, à la signature et sur la durée du contrat.\n\n' +
-                        'Il n\'y a aucune garantie.\n' +
-                        'Certains gagnent peu. D\'autres gagnent très bien.\n\n' +
-                        'La différence ne vient ni du marché, ni du produit, ni de la chance,\n' +
-                        'mais de la constance, de l\'autonomie, et de la capacité à tenir dans un cadre exigeant.\n\n' +
-                        'C\'est précisément pour ça qu\'AXIOM existe.\n\n' +
-                        'AXIOM n\'est ni un test, ni un jugement, ni une sélection déguisée.\n\n' +
-                        'Il n\'est pas là pour te vendre ce métier, ni pour te faire entrer dans une case.\n\n' +
-                        'Son rôle est simple :\n' +
-                        'prendre le temps de comprendre comment tu fonctionnes réellement dans le travail,\n' +
-                        'et te donner une lecture lucide de ce que ce cadre exige au quotidien.\n\n' +
-                        'Pour certains profils, c\'est un terrain d\'expression très fort.\n' +
-                        'Pour d\'autres, tout aussi solides, d\'autres environnements sont simplement plus cohérents.\n\n' +
-                        'AXIOM est là pour apporter de la clarté :\n' +
-                        '• sans pression,\n' +
-                        '• sans promesse,\n' +
-                        '• sans te pousser dans une direction.';
-            }
-        }
-        // ⛔ INTERDICTION : réponse vide, "On continue.", attendre un input utilisateur, return partiel
-        if (!aiText) {
-            console.error('[AXIOM_CRITICAL_ERROR]', { sessionId: candidate.candidateId, state: currentState });
-            throw new Error('Failed to generate preamble');
-        }
-        // Transition immédiate vers wait_start_button dans le MÊME return
-        currentState = STEP_03_BLOC1;
+        // Transition vers STEP_03_PREAMBULE et auto-enchaînement
+        currentState = STEP_03_PREAMBULE;
         candidateStore.updateUIState(candidate.candidateId, {
             step: currentState,
             lastQuestion: null,
-            tutoiement: tone,
+            tutoiement: tone || undefined,
             identityDone: true,
         });
         logTransition(candidate.candidateId, stateIn, currentState, 'message');
-        // PARTIE 4 — En UN SEUL RETURN
-        return {
-            response: aiText,
-            step: "STEP_03_BLOC1",
-            lastQuestion: null,
-            expectsAnswer: false,
-            autoContinue: false,
-        };
+        // Auto-enchaînement : appeler executeAxiom immédiatement pour générer le préambule
+        return await executeAxiom({
+            candidate: candidateStore.get(candidate.candidateId),
+            userMessage: null,
+        });
     }
     // ============================================
     // STEP_03_PREAMBULE
@@ -1179,11 +1123,9 @@ AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
         // Si toujours vide → utiliser le texte du prompt directement
         if (!aiText) {
             const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
-            const preambuleMatch = FULL_AXIOM_PROMPT.match(/PRÉAMBULE MÉTIER[^]*?(?=🔒|🟢|$)/i);
-            if (preambuleMatch) {
-                aiText = preambuleMatch[0]
-                    .replace(/PRÉAMBULE MÉTIER[^]*?AFFICHAGE OBLIGATOIRE[^]*?CANDIDAT\)[^]*?/i, '')
-                    .trim();
+            const extractedPreambule = extractPreambuleFromPrompt(FULL_AXIOM_PROMPT);
+            if (extractedPreambule) {
+                aiText = extractedPreambule;
             }
             else {
                 // Fallback minimal (texte du prompt)
@@ -1220,16 +1162,16 @@ AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
         candidateStore.updateUIState(candidate.candidateId, {
             step: currentState,
             lastQuestion: null,
-            tutoiement: ui.tutoiement,
+            tutoiement: ui.tutoiement || undefined,
             identityDone: true,
         });
         logTransition(candidate.candidateId, stateIn, currentState, 'message');
         return {
-            response: aiText,
-            step: currentState,
+            response: aiText || '',
+            step: STEP_03_BLOC1,
             lastQuestion: null,
             expectsAnswer: false,
-            autoContinue: false,
+            autoContinue: false, // déclenchement explicite requis
         };
     }
     // ============================================
@@ -1237,29 +1179,118 @@ AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
     // ============================================
     if (currentState === STEP_03_BLOC1) {
         // PARTIE 5 — Bouton "Je commence mon profil"
-        // Si POST /axiom avec message == null ET state == "wait_start_button"
-        if (event === 'START_BLOC_1' || userMessage === '__SYSTEM_START__' || userMessage === null) {
-            // state = "bloc_01"
-            currentState = BLOC_01;
+        if (event === 'START_BLOC_1') {
+            // Mettre à jour l'état UI vers BLOC_01
             candidateStore.updateUIState(candidate.candidateId, {
-                step: currentState,
+                step: BLOC_01,
                 lastQuestion: null,
-                tutoiement: ui.tutoiement,
+                tutoiement: ui.tutoiement || undefined,
                 identityDone: true,
             });
+            // Mettre à jour la session vers collecting + bloc 1
             candidateStore.updateSession(candidate.candidateId, { state: 'collecting', currentBlock: 1 });
-            logTransition(candidate.candidateId, stateIn, currentState, event ? 'event' : 'message');
-            // Enchaîner immédiatement avec première question BLOC_01
-            return await executeAxiom({
-                candidate: candidateStore.get(candidate.candidateId),
-                userMessage: null,
+            // Récupérer le candidate mis à jour
+            let updatedCandidate = candidateStore.get(candidate.candidateId);
+            if (!updatedCandidate) {
+                throw new Error('Candidate not found after update');
+            }
+            // Appeler OpenAI EXACTEMENT comme dans la section "BLOCS 1 à 10" avec userMessage = null
+            const blocNumber = 1;
+            const messages = [];
+            updatedCandidate.answers.forEach((answer) => {
+                messages.push({ role: 'user', content: answer.message });
             });
+            let aiText = null;
+            try {
+                const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
+                const completion = await callOpenAI({
+                    messages: [
+                        { role: 'system', content: FULL_AXIOM_PROMPT },
+                        {
+                            role: 'system',
+                            content: `RÈGLE ABSOLUE AXIOM :
+Le moteur AXIOM n'interprète pas les prompts. Il les exécute STRICTEMENT.
+Tu es en état BLOC_01 (BLOC ${blocNumber}).
+Tu exécutes STRICTEMENT le protocole AXIOM pour ce bloc.
+Tu produis UNIQUEMENT le texte autorisé à cette étape.
+INTERDICTIONS : improviser, commenter le système, reformuler le prompt, revenir en arrière.
+Si tu dois poser une question, pose-la. Si tu dois afficher un miroir, affiche-le.
+AUCUNE sortie générique type "On continue", "D'accord", etc.
+Toute sortie hors règles = invalide.`,
+                        },
+                        ...messages,
+                    ],
+                });
+                if (typeof completion === 'string' && completion.trim()) {
+                    aiText = completion.trim();
+                }
+            }
+            catch (e) {
+                console.error('[AXIOM_EXECUTION_ERROR]', e);
+            }
+            // Si échec → réessayer une fois
+            if (!aiText) {
+                try {
+                    const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
+                    const completion = await callOpenAI({
+                        messages: [
+                            { role: 'system', content: FULL_AXIOM_PROMPT },
+                            {
+                                role: 'system',
+                                content: `RÈGLE ABSOLUE AXIOM :
+Le moteur AXIOM n'interprète pas les prompts. Il les exécute STRICTEMENT.
+Tu es en état BLOC_01 (BLOC ${blocNumber}).
+Tu exécutes STRICTEMENT le protocole AXIOM pour ce bloc.
+Tu produis UNIQUEMENT le texte autorisé à cette étape.
+INTERDICTIONS : improviser, commenter le système, reformuler le prompt, revenir en arrière.
+Si tu dois poser une question, pose-la. Si tu dois afficher un miroir, affiche-le.
+AUCUNE sortie générique type "On continue", "D'accord", etc.
+Toute sortie hors règles = invalide.`,
+                            },
+                            ...messages,
+                        ],
+                    });
+                    if (typeof completion === 'string' && completion.trim()) {
+                        aiText = completion.trim();
+                    }
+                }
+                catch (e) {
+                    console.error('[AXIOM_EXECUTION_ERROR_RETRY]', e);
+                }
+            }
+            // Si toujours vide → utiliser lastQuestion
+            if (!aiText) {
+                aiText = updatedCandidate.session.ui?.lastQuestion || '';
+            }
+            // Si toujours vide → erreur critique
+            if (!aiText) {
+                console.error('[AXIOM_CRITICAL_ERROR]', { sessionId: updatedCandidate.candidateId, state: BLOC_01 });
+                throw new Error('Failed to generate BLOC 1 question');
+            }
+            const expectsAnswer = aiText.trim().endsWith('?');
+            const lastQuestion = expectsAnswer ? aiText : null;
+            // Mettre à jour lastQuestion dans l'UI state
+            candidateStore.updateUIState(updatedCandidate.candidateId, {
+                step: BLOC_01,
+                lastQuestion,
+                tutoiement: ui.tutoiement || undefined,
+                identityDone: true,
+            });
+            logTransition(updatedCandidate.candidateId, stateIn, BLOC_01, 'event');
+            // Retourner la première question du BLOC 1
+            return {
+                response: aiText,
+                step: BLOC_01,
+                lastQuestion,
+                expectsAnswer: true,
+                autoContinue: false,
+            };
         }
         // Si message texte reçu → ignorer (on attend le bouton)
         logTransition(candidate.candidateId, stateIn, currentState, 'message');
         return {
             response: '',
-            step: "STEP_03_BLOC1",
+            step: "PREAMBULE_DONE",
             lastQuestion: null,
             expectsAnswer: false,
             autoContinue: false,
@@ -1382,14 +1413,14 @@ Toute sortie hors règles = invalide.`,
         candidateStore.updateUIState(candidate.candidateId, {
             step: nextState,
             lastQuestion,
-            tutoiement: ui.tutoiement,
+            tutoiement: ui.tutoiement || undefined,
             identityDone: true,
         });
         logTransition(candidate.candidateId, stateIn, nextState, userMessage ? 'message' : 'event');
         // Si fin du bloc 10 → transition automatique
         if (nextState === STEP_99_MATCH_READY) {
             return {
-                response: aiText + '\n\nProfil terminé. Quand tu es prêt, génère ton matching.',
+                response: (aiText || '') + '\n\nProfil terminé. Quand tu es prêt, génère ton matching.',
                 step: nextState,
                 lastQuestion: null,
                 expectsAnswer: false,
@@ -1397,7 +1428,7 @@ Toute sortie hors règles = invalide.`,
             };
         }
         return {
-            response: aiText,
+            response: aiText || '',
             step: nextState,
             lastQuestion,
             expectsAnswer,
@@ -1424,7 +1455,7 @@ Toute sortie hors règles = invalide.`,
         candidateStore.updateUIState(candidate.candidateId, {
             step: currentState,
             lastQuestion: null,
-            tutoiement: ui.tutoiement,
+            tutoiement: ui.tutoiement || undefined,
             identityDone: true,
         });
         logTransition(candidate.candidateId, stateIn, currentState, 'message');
@@ -1496,12 +1527,12 @@ Toute sortie hors règles = invalide.`,
         candidateStore.updateUIState(candidate.candidateId, {
             step: currentState,
             lastQuestion: null,
-            tutoiement: ui.tutoiement,
+            tutoiement: ui.tutoiement || undefined,
             identityDone: true,
         });
         logTransition(candidate.candidateId, stateIn, currentState, 'message');
         return {
-            response: aiText,
+            response: aiText || '',
             step: currentState,
             lastQuestion: null,
             expectsAnswer: false,
@@ -1531,4 +1562,29 @@ Toute sortie hors règles = invalide.`,
         expectsAnswer: false,
         autoContinue: false,
     };
+}
+// ============================================
+// AUTO-ENCHAÎNEMENT FSM STRICT
+// ============================================
+export async function executeWithAutoContinue(candidate, userMessage = null) {
+    let result = await executeAxiom({
+        candidate,
+        userMessage: userMessage,
+    });
+    // 🔁 AUTO-ENCHAÎNEMENT FSM STRICT
+    // Tant que l'état est non interactif ET demande à continuer
+    while (result &&
+        result.expectsAnswer === false &&
+        result.autoContinue === true) {
+        // Recharger le candidate pour avoir l'état à jour
+        const updatedCandidate = candidateStore.get(candidate.candidateId);
+        if (!updatedCandidate) {
+            break;
+        }
+        result = await executeAxiom({
+            candidate: updatedCandidate,
+            userMessage: null,
+        });
+    }
+    return result;
 }

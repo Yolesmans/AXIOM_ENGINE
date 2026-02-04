@@ -28,8 +28,39 @@ import { z } from "zod";
 import { IdentitySchema } from "./validators/identity.js";
 import { candidateToLiveTrackingRow, googleSheetsLiveTrackingService } from "./services/googleSheetsService.js";
 import type { AnswerRecord } from "./types/answer.js";
+import type { AxiomCandidate } from "./types/candidate.js";
 
 console.log("BOOT SERVER START");
+
+// ============================================
+// HELPER : Dérivation d'état depuis l'historique
+// ============================================
+// PRIORITÉ A : Empêcher les retours en arrière
+// Dérive l'état depuis l'historique du candidat si UI est null
+function deriveStepFromHistory(candidate: AxiomCandidate): string {
+  // Règle 1 : Si currentBlock > 0 → candidat est dans un bloc
+  if (candidate.session.currentBlock > 0) {
+    return `BLOC_${String(candidate.session.currentBlock).padStart(2, '0')}`;
+  }
+  
+  // Règle 2 : Si réponses présentes → candidat a dépassé le préambule
+  if (candidate.answers.length > 0) {
+    return STEP_03_BLOC1;
+  }
+  
+  // Règle 3 : Si tone choisi → candidat est au préambule ou après
+  if (candidate.tonePreference) {
+    return STEP_03_BLOC1;
+  }
+  
+  // Règle 4 : Si identité complétée → candidat est au tone
+  if (candidate.identity.completedAt) {
+    return STEP_02_TONE;
+  }
+  
+  // Règle 5 : Sinon → nouveau candidat, identité
+  return STEP_01_IDENTITY;
+}
 
 const app = express();
 
@@ -152,9 +183,10 @@ app.get("/start", async (req: Request, res: Response) => {
         lastQuestion: null,
         identityDone: false,
       });
-      candidate = candidateStore.get(candidate.candidateId);
+      const candidateIdBeforeReload = candidate.candidateId;
+      candidate = candidateStore.get(candidateIdBeforeReload);
       if (!candidate) {
-        candidate = await candidateStore.getAsync(candidate.candidateId);
+        candidate = await candidateStore.getAsync(candidateIdBeforeReload);
       }
       if (!candidate) {
         return res.status(500).json({
@@ -175,13 +207,41 @@ app.get("/start", async (req: Request, res: Response) => {
       });
     }
 
-    // Empêcher /start de relancer le moteur si l'utilisateur est déjà au bouton
+    // PRIORITÉ A2 : Empêcher /start de relancer le moteur si l'utilisateur est déjà avancé
+    // Dériver l'état depuis l'historique si UI est null
     const currentStep = candidate.session.ui?.step;
-    if (currentStep === STEP_03_BLOC1 || currentStep === "PREAMBULE_DONE") {
+    const derivedStep = currentStep || deriveStepFromHistory(candidate);
+    
+    // Si candidat est avancé (préambule ou bloc) → retourner immédiatement SANS appeler le moteur
+    if (
+      derivedStep === STEP_03_BLOC1 ||
+      derivedStep === "PREAMBULE_DONE" ||
+      (derivedStep && derivedStep.startsWith('BLOC_'))
+    ) {
+      // Persister l'état dérivé si UI était null
+      if (!candidate.session.ui && currentStep !== derivedStep) {
+        const candidateIdForReload5 = candidate.candidateId;
+        candidateStore.updateUIState(candidateIdForReload5, {
+          step: derivedStep,
+          lastQuestion: null,
+          identityDone: !!candidate.identity.completedAt,
+        });
+        candidate = candidateStore.get(candidateIdForReload5);
+        if (!candidate) {
+          candidate = await candidateStore.getAsync(candidateIdForReload5);
+        }
+        if (!candidate) {
+          return res.status(500).json({
+            error: "INTERNAL_ERROR",
+            message: "Failed to update UI state",
+          });
+        }
+      }
+      
       return res.status(200).json({
         sessionId: finalSessionId,
-        step: STEP_03_BLOC1,
-        state: "wait_start_button",
+        step: derivedStep,
+        state: derivedStep.startsWith('BLOC_') ? "collecting" : "wait_start_button",
         response: "",
         expectsAnswer: false,
         autoContinue: false,
@@ -361,9 +421,10 @@ app.post("/axiom", async (req: Request, res: Response) => {
         identityDone: true,
         step: STEP_02_TONE,
       });
-      candidate = candidateStore.get(candidate.candidateId);
+      const candidateIdBeforeReload = candidate.candidateId;
+      candidate = candidateStore.get(candidateIdBeforeReload);
       if (!candidate) {
-        candidate = await candidateStore.getAsync(candidate.candidateId);
+        candidate = await candidateStore.getAsync(candidateIdBeforeReload);
       }
       if (!candidate) {
         return res.status(500).json({
@@ -469,13 +530,14 @@ app.post("/axiom", async (req: Request, res: Response) => {
         // Pas de return ici, on continue le flux normalement
         }
 
-        candidateStore.updateUIState(candidate.candidateId, {
+        const candidateIdForReload2 = candidate.candidateId;
+        candidateStore.updateUIState(candidateIdForReload2, {
           identityDone: true,
           step: STEP_02_TONE,
         });
-        candidate = candidateStore.get(candidate.candidateId);
+        candidate = candidateStore.get(candidateIdForReload2);
       if (!candidate) {
-        candidate = await candidateStore.getAsync(candidate.candidateId);
+        candidate = await candidateStore.getAsync(candidateIdForReload2);
       }
         if (!candidate) {
           return res.status(500).json({
@@ -491,10 +553,11 @@ app.post("/axiom", async (req: Request, res: Response) => {
           responseState = "preamble_done";
         }
 
-        candidateStore.updateSession(candidate.candidateId, { state: "preamble" });
-        candidate = candidateStore.get(candidate.candidateId);
+        const candidateIdForReload3 = candidate.candidateId;
+        candidateStore.updateSession(candidateIdForReload3, { state: "preamble" });
+        candidate = candidateStore.get(candidateIdForReload3);
       if (!candidate) {
-        candidate = await candidateStore.getAsync(candidate.candidateId);
+        candidate = await candidateStore.getAsync(candidateIdForReload3);
       }
         if (!candidate) {
           return res.status(500).json({
@@ -549,17 +612,19 @@ app.post("/axiom", async (req: Request, res: Response) => {
       });
     }
 
-    // Initialiser l'état UI si nécessaire
+    // PRIORITÉ A1 : Initialiser l'état UI avec dérivation depuis l'historique
+    // INTERDICTION : Ne jamais forcer STEP_02_TONE sans analyser l'historique
     if (!candidate.session.ui) {
-      const initialState = candidate.identity.completedAt ? STEP_02_TONE : STEP_01_IDENTITY;
+      const initialState = deriveStepFromHistory(candidate);
       candidateStore.updateUIState(candidate.candidateId, {
         step: initialState,
         lastQuestion: null,
         identityDone: !!candidate.identity.completedAt,
       });
-      candidate = candidateStore.get(candidate.candidateId);
+      const candidateIdBeforeReload = candidate.candidateId;
+      candidate = candidateStore.get(candidateIdBeforeReload);
       if (!candidate) {
-        candidate = await candidateStore.getAsync(candidate.candidateId);
+        candidate = await candidateStore.getAsync(candidateIdBeforeReload);
       }
       if (!candidate) {
         return res.status(500).json({
@@ -572,11 +637,12 @@ app.post("/axiom", async (req: Request, res: Response) => {
     // PARTIE 5 — Gérer les events techniques (boutons)
     if (event === "START_BLOC_1") {
       // START_BLOC_1 est un event, pas un auto-enchaînement
+      const candidateIdBeforeReload = candidate.candidateId;
       const result = await executeAxiom({ candidate, userMessage: null, event: "START_BLOC_1" });
 
-      candidate = candidateStore.get(candidate.candidateId);
+      candidate = candidateStore.get(candidateIdBeforeReload);
       if (!candidate) {
-        candidate = await candidateStore.getAsync(candidate.candidateId);
+        candidate = await candidateStore.getAsync(candidateIdBeforeReload);
       }
       if (!candidate) {
         return res.status(500).json({

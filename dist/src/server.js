@@ -3,11 +3,36 @@ import cors from "cors";
 import { candidateStore } from "./store/sessionStore.js";
 import { v4 as uuidv4 } from "uuid";
 import { getPostConfig } from "./store/postRegistry.js";
-import { executeAxiom, STEP_01_IDENTITY, STEP_02_TONE, STEP_03_PREAMBULE, STEP_03_BLOC1, BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10, STEP_99_MATCH_READY, STEP_99_MATCHING, DONE_MATCHING, } from "./engine/axiomExecutor.js";
+import { executeAxiom, executeWithAutoContinue, STEP_01_IDENTITY, STEP_02_TONE, STEP_03_PREAMBULE, STEP_03_BLOC1, BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10, STEP_99_MATCH_READY, STEP_99_MATCHING, DONE_MATCHING, } from "./engine/axiomExecutor.js";
 import { z } from "zod";
 import { IdentitySchema } from "./validators/identity.js";
 import { candidateToLiveTrackingRow, googleSheetsLiveTrackingService } from "./services/googleSheetsService.js";
 console.log("BOOT SERVER START");
+// ============================================
+// HELPER : Dérivation d'état depuis l'historique
+// ============================================
+// PRIORITÉ A : Empêcher les retours en arrière
+// Dérive l'état depuis l'historique du candidat si UI est null
+function deriveStepFromHistory(candidate) {
+    // Règle 1 : Si currentBlock > 0 → candidat est dans un bloc
+    if (candidate.session.currentBlock > 0) {
+        return `BLOC_${String(candidate.session.currentBlock).padStart(2, '0')}`;
+    }
+    // Règle 2 : Si réponses présentes → candidat a dépassé le préambule
+    if (candidate.answers.length > 0) {
+        return STEP_03_BLOC1;
+    }
+    // Règle 3 : Si tone choisi → candidat est au préambule ou après
+    if (candidate.tonePreference) {
+        return STEP_03_BLOC1;
+    }
+    // Règle 4 : Si identité complétée → candidat est au tone
+    if (candidate.identity.completedAt) {
+        return STEP_02_TONE;
+    }
+    // Règle 5 : Sinon → nouveau candidat, identité
+    return STEP_01_IDENTITY;
+}
 const app = express();
 // BODY PARSER
 app.use(express.json());
@@ -24,19 +49,20 @@ app.options("*", cors());
 const AxiomBodySchema = z.object({
     tenantId: z.string().min(1),
     posteId: z.string().min(1),
-    sessionId: z.string().min(8).optional(),
-    message: z.string().min(1).optional(),
-    userMessage: z.string().min(1).optional(),
-    event: z.string().optional(),
-    test: z.boolean().optional(),
-    finish: z.boolean().optional(),
+    sessionId: z.string().min(8).optional().nullable(),
+    message: z.string().min(1).optional().nullable(),
+    userMessage: z.string().min(1).optional().nullable(),
+    event: z.string().optional().nullable(),
+    test: z.boolean().optional().nullable(),
+    finish: z.boolean().optional().nullable(),
     identity: z
         .object({
         firstName: z.string().min(1),
         lastName: z.string().min(1),
         email: z.string().email(),
     })
-        .optional(),
+        .optional()
+        .nullable(),
 });
 app.get("/health", (_req, res) => {
     res.status(200).json({ ok: true });
@@ -66,19 +92,34 @@ app.get("/start", async (req, res) => {
                 message: "Entreprise ou poste inconnu",
             });
         }
-        const sessionId = req.headers["x-session-id"] || querySessionId;
-        let candidate;
+        // Normaliser la lecture sessionId
+        const sessionIdHeader = req.headers["x-session-id"] || "";
+        const sessionIdHeaderTrim = sessionIdHeader.trim();
+        const querySessionIdTrim = querySessionId ? querySessionId.trim() : "";
         let finalSessionId;
-        if (!sessionId) {
-            finalSessionId = uuidv4();
-            candidate = candidateStore.create(finalSessionId, tenant);
+        if (sessionIdHeaderTrim !== "") {
+            finalSessionId = sessionIdHeaderTrim;
+        }
+        else if (querySessionIdTrim !== "") {
+            finalSessionId = querySessionIdTrim;
         }
         else {
-            finalSessionId = sessionId;
-            candidate = candidateStore.get(finalSessionId);
-            if (!candidate) {
-                candidate = candidateStore.create(finalSessionId, tenant);
-            }
+            finalSessionId = uuidv4();
+        }
+        let candidate = candidateStore.get(finalSessionId);
+        if (!candidate) {
+            candidate = await candidateStore.getAsync(finalSessionId);
+        }
+        let sessionReset = false;
+        // Ne jamais créer silencieusement une nouvelle session quand le client en a déjà une
+        if (sessionIdHeaderTrim !== "" && !candidate) {
+            // Store perdu (redémarrage) OU session invalide
+            finalSessionId = uuidv4();
+            candidate = candidateStore.create(finalSessionId, tenant);
+            sessionReset = true;
+        }
+        else if (!candidate) {
+            candidate = candidateStore.create(finalSessionId, tenant);
         }
         if (!candidate) {
             return res.status(500).json({
@@ -95,7 +136,11 @@ app.get("/start", async (req, res) => {
                 lastQuestion: null,
                 identityDone: false,
             });
-            candidate = candidateStore.get(candidate.candidateId);
+            const candidateIdBeforeReload = candidate.candidateId;
+            candidate = candidateStore.get(candidateIdBeforeReload);
+            if (!candidate) {
+                candidate = await candidateStore.getAsync(candidateIdBeforeReload);
+            }
             if (!candidate) {
                 return res.status(500).json({
                     error: "INTERNAL_ERROR",
@@ -110,29 +155,81 @@ app.get("/start", async (req, res) => {
                 step: "STEP_01_IDENTITY",
                 expectsAnswer: true,
                 autoContinue: false,
+                ...(sessionReset ? { sessionReset: true } : {}),
             });
         }
-        // Si identité complétée, continuer normalement
-        const result = await executeAxiom({ candidate, userMessage: null });
-        // Mapper les états vers les states de réponse
-        let responseState = "collecting";
-        if (result.step === STEP_01_IDENTITY) {
-            responseState = "identity";
+        // PRIORITÉ A2 : Empêcher /start de relancer le moteur si l'utilisateur est déjà avancé
+        // Dériver l'état depuis l'historique si UI est null
+        const currentStep = candidate.session.ui?.step;
+        const derivedStep = currentStep || deriveStepFromHistory(candidate);
+        // Si candidat est avancé (préambule ou bloc) → retourner immédiatement SANS appeler le moteur
+        if (derivedStep === STEP_03_BLOC1 ||
+            derivedStep === "PREAMBULE_DONE" ||
+            (derivedStep && derivedStep.startsWith('BLOC_'))) {
+            // Persister l'état dérivé si UI était null
+            if (!candidate.session.ui && currentStep !== derivedStep) {
+                const candidateIdForReload5 = candidate.candidateId;
+                candidateStore.updateUIState(candidateIdForReload5, {
+                    step: derivedStep,
+                    lastQuestion: null,
+                    identityDone: !!candidate.identity.completedAt,
+                });
+                candidate = candidateStore.get(candidateIdForReload5);
+                if (!candidate) {
+                    candidate = await candidateStore.getAsync(candidateIdForReload5);
+                }
+                if (!candidate) {
+                    return res.status(500).json({
+                        error: "INTERNAL_ERROR",
+                        message: "Failed to update UI state",
+                    });
+                }
+            }
+            return res.status(200).json({
+                sessionId: finalSessionId,
+                step: derivedStep,
+                state: derivedStep.startsWith('BLOC_') ? "collecting" : "wait_start_button",
+                response: "",
+                expectsAnswer: false,
+                autoContinue: false,
+                currentBlock: candidate.session.currentBlock,
+                ...(sessionReset ? { sessionReset: true } : {}),
+            });
         }
-        else if (result.step === STEP_02_TONE || result.step === STEP_03_PREAMBULE) {
-            responseState = "preamble";
+        // Si identité complétée, continuer normalement avec auto-enchaînement
+        const result = await executeWithAutoContinue(candidate);
+        // Aligner le mapping /start sur le mapping /axiom
+        let responseState = "collecting";
+        let responseStep = result.step;
+        if (result.step === STEP_01_IDENTITY || result.step === 'IDENTITY') {
+            responseState = "identity";
+            responseStep = "STEP_01_IDENTITY";
+        }
+        else if (result.step === STEP_02_TONE) {
+            responseState = "tone_choice";
+            responseStep = "STEP_02_TONE";
+        }
+        else if (result.step === STEP_03_PREAMBULE) {
+            responseState = "preambule";
+            responseStep = "STEP_03_PREAMBULE";
         }
         else if (result.step === STEP_03_BLOC1) {
-            responseState = "preamble_done";
+            responseState = "wait_start_button";
+            responseStep = "STEP_03_BLOC1";
+        }
+        else if (result.step === "PREAMBULE_DONE") {
+            responseState = "wait_start_button";
+            responseStep = "PREAMBULE_DONE";
         }
         else if ([BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10].includes(result.step)) {
             responseState = "collecting";
+            // responseStep reste result.step
         }
         else if (result.step === STEP_99_MATCH_READY) {
             responseState = "match_ready";
         }
         else if (result.step === STEP_99_MATCHING || result.step === DONE_MATCHING) {
-            responseState = "completed";
+            responseState = "matching";
         }
         // C) CONTRAT DE SÉCURITÉ — Toujours renvoyer data.response non vide
         const response = result.response || '';
@@ -142,9 +239,10 @@ app.get("/start", async (req, res) => {
             state: responseState,
             currentBlock: candidate.session.currentBlock,
             response: finalResponse,
-            step: result.step,
+            step: responseStep,
             expectsAnswer: response ? result.expectsAnswer : false,
             autoContinue: result.autoContinue,
+            ...(sessionReset ? { sessionReset: true } : {}),
         });
     }
     catch (error) {
@@ -256,18 +354,31 @@ app.post("/axiom", async (req, res) => {
                 identityDone: true,
                 step: STEP_02_TONE,
             });
-            candidate = candidateStore.get(candidate.candidateId);
+            const candidateIdBeforeReload = candidate.candidateId;
+            candidate = candidateStore.get(candidateIdBeforeReload);
+            if (!candidate) {
+                candidate = await candidateStore.getAsync(candidateIdBeforeReload);
+            }
             if (!candidate) {
                 return res.status(500).json({
                     error: "INTERNAL_ERROR",
                     message: "Failed to update UI state",
                 });
             }
-            const result = await executeAxiom({ candidate, userMessage: null });
-            // Mapper les états
-            let responseState = "preamble";
-            if (result.step === STEP_03_BLOC1) {
-                responseState = "preamble_done";
+            const result = await executeWithAutoContinue(candidate);
+            // Mapper les états correctement
+            let responseState = "collecting";
+            if (result.step === STEP_01_IDENTITY) {
+                responseState = "identity";
+            }
+            else if (result.step === STEP_02_TONE) {
+                responseState = "tone_choice";
+            }
+            else if (result.step === STEP_03_PREAMBULE) {
+                responseState = "preambule";
+            }
+            else if (result.step === STEP_03_BLOC1) {
+                responseState = "wait_start_button";
             }
             else if (result.step === BLOC_01) {
                 responseState = "collecting";
@@ -347,24 +458,32 @@ app.post("/axiom", async (req, res) => {
                     // Le moteur DOIT répondre, changer d'état, continuer le flux AXIOM
                     // Pas de return ici, on continue le flux normalement
                 }
-                candidateStore.updateUIState(candidate.candidateId, {
+                const candidateIdForReload2 = candidate.candidateId;
+                candidateStore.updateUIState(candidateIdForReload2, {
                     identityDone: true,
                     step: STEP_02_TONE,
                 });
-                candidate = candidateStore.get(candidate.candidateId);
+                candidate = candidateStore.get(candidateIdForReload2);
+                if (!candidate) {
+                    candidate = await candidateStore.getAsync(candidateIdForReload2);
+                }
                 if (!candidate) {
                     return res.status(500).json({
                         error: "INTERNAL_ERROR",
                         message: "Failed to update UI state",
                     });
                 }
-                const result = await executeAxiom({ candidate, userMessage: null });
+                const result = await executeWithAutoContinue(candidate);
                 let responseState = "preamble";
                 if (result.step === STEP_03_BLOC1) {
                     responseState = "preamble_done";
                 }
-                candidateStore.updateSession(candidate.candidateId, { state: "preamble" });
-                candidate = candidateStore.get(candidate.candidateId);
+                const candidateIdForReload3 = candidate.candidateId;
+                candidateStore.updateSession(candidateIdForReload3, { state: "preamble" });
+                candidate = candidateStore.get(candidateIdForReload3);
+                if (!candidate) {
+                    candidate = await candidateStore.getAsync(candidateIdForReload3);
+                }
                 if (!candidate) {
                     return res.status(500).json({
                         error: "INTERNAL_ERROR",
@@ -384,6 +503,9 @@ app.post("/axiom", async (req, res) => {
             }
         }
         let candidate = candidateStore.get(sessionId);
+        if (!candidate) {
+            candidate = await candidateStore.getAsync(sessionId);
+        }
         if (!candidate) {
             candidate = candidateStore.create(sessionId, tenantId);
         }
@@ -412,15 +534,20 @@ app.post("/axiom", async (req, res) => {
                 expectsAnswer: true,
             });
         }
-        // Initialiser l'état UI si nécessaire
+        // PRIORITÉ A1 : Initialiser l'état UI avec dérivation depuis l'historique
+        // INTERDICTION : Ne jamais forcer STEP_02_TONE sans analyser l'historique
         if (!candidate.session.ui) {
-            const initialState = candidate.identity.completedAt ? STEP_02_TONE : STEP_01_IDENTITY;
+            const initialState = deriveStepFromHistory(candidate);
             candidateStore.updateUIState(candidate.candidateId, {
                 step: initialState,
                 lastQuestion: null,
                 identityDone: !!candidate.identity.completedAt,
             });
-            candidate = candidateStore.get(candidate.candidateId);
+            const candidateIdBeforeReload = candidate.candidateId;
+            candidate = candidateStore.get(candidateIdBeforeReload);
+            if (!candidate) {
+                candidate = await candidateStore.getAsync(candidateIdBeforeReload);
+            }
             if (!candidate) {
                 return res.status(500).json({
                     error: "INTERNAL_ERROR",
@@ -429,10 +556,14 @@ app.post("/axiom", async (req, res) => {
             }
         }
         // PARTIE 5 — Gérer les events techniques (boutons)
-        // Si POST /axiom avec message == null ET state == "wait_start_button"
-        if (event === "START_BLOC_1" || (!userMessage && !event && candidate.session.ui?.step === STEP_03_BLOC1)) {
+        if (event === "START_BLOC_1") {
+            // START_BLOC_1 est un event, pas un auto-enchaînement
+            const candidateIdBeforeReload = candidate.candidateId;
             const result = await executeAxiom({ candidate, userMessage: null, event: "START_BLOC_1" });
-            candidate = candidateStore.get(candidate.candidateId);
+            candidate = candidateStore.get(candidateIdBeforeReload);
+            if (!candidate) {
+                candidate = await candidateStore.getAsync(candidateIdBeforeReload);
+            }
             if (!candidate) {
                 return res.status(500).json({
                     error: "INTERNAL_ERROR",
@@ -463,7 +594,15 @@ app.post("/axiom", async (req, res) => {
         }
         // Gérer les messages utilisateur
         const userMessageText = userMessage || null;
-        const result = await executeAxiom({ candidate, userMessage: userMessageText });
+        const result = await executeWithAutoContinue(candidate, userMessageText);
+        // Recharger le candidate AVANT le mapping pour avoir l'état à jour
+        candidate = candidateStore.get(candidate.candidateId);
+        if (!candidate) {
+            return res.status(500).json({
+                error: "INTERNAL_ERROR",
+                message: "Failed to get candidate",
+            });
+        }
         // Mapper les états
         let responseState = "collecting";
         let responseStep = result.step;
@@ -482,6 +621,10 @@ app.post("/axiom", async (req, res) => {
             responseState = "wait_start_button";
             responseStep = "STEP_03_BLOC1";
         }
+        else if (result.step === "PREAMBULE_DONE") {
+            responseState = "wait_start_button";
+            responseStep = "PREAMBULE_DONE";
+        }
         else if ([BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10].includes(result.step)) {
             const blocNumber = [BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10].indexOf(result.step) + 1;
             responseState = `bloc_${blocNumber.toString().padStart(2, '0')}`;
@@ -495,13 +638,6 @@ app.post("/axiom", async (req, res) => {
         }
         else if (result.step === DONE_MATCHING) {
             responseState = "done";
-        }
-        candidate = candidateStore.get(candidate.candidateId);
-        if (!candidate) {
-            return res.status(500).json({
-                error: "INTERNAL_ERROR",
-                message: "Failed to get candidate",
-            });
         }
         // Mise à jour Google Sheet (sauf si on est en identity)
         if (responseState !== "identity" && candidate.identity.completedAt) {
