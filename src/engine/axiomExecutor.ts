@@ -3,6 +3,21 @@ import type { AxiomCandidate } from '../types/candidate.js';
 import type { AnswerRecord } from '../types/answer.js';
 import { candidateStore } from '../store/sessionStore.js';
 
+function extractPreambuleFromPrompt(prompt: string): string {
+  const match = prompt.match(/PRÉAMBULE MÉTIER[^]*?(?=🔒|🟢|$)/i);
+
+  if (match && match[0]) {
+    return match[0]
+      .replace(
+        /PRÉAMBULE MÉTIER[^]*?AFFICHAGE OBLIGATOIRE[^]*?CANDIDAT\)[^]*?/i,
+        ''
+      )
+      .trim();
+  }
+
+  return '';
+}
+
 // ============================================
 // PROMPTS INTÉGRÉS (MÉMOIRE UNIQUEMENT)
 // ============================================
@@ -1137,20 +1152,7 @@ Toute sortie hors règles = invalide.`,
     // Si toujours vide → utiliser le texte du prompt directement (pas de fallback générique)
     if (!aiText) {
       const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
-      const preambuleMatch = FULL_AXIOM_PROMPT.match(
-        /PRÉAMBULE MÉTIER[^]*?(?=🔒|🟢|$)/i
-      );
-
-      let extractedPreambule = '';
-
-      if (preambuleMatch && preambuleMatch[0]) {
-        extractedPreambule = preambuleMatch[0]
-          .replace(
-            /PRÉAMBULE MÉTIER[^]*?AFFICHAGE OBLIGATOIRE[^]*?CANDIDAT\)[^]*?/i,
-            ''
-          )
-          .trim();
-      }
+      const extractedPreambule = extractPreambuleFromPrompt(FULL_AXIOM_PROMPT);
 
       if (extractedPreambule) {
         aiText = extractedPreambule;
@@ -1273,20 +1275,7 @@ AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
     // Si toujours vide → utiliser le texte du prompt directement
     if (!aiText) {
       const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
-      const preambuleMatch = FULL_AXIOM_PROMPT.match(
-        /PRÉAMBULE MÉTIER[^]*?(?=🔒|🟢|$)/i
-      );
-
-      let extractedPreambule = '';
-
-      if (preambuleMatch && preambuleMatch[0]) {
-        extractedPreambule = preambuleMatch[0]
-          .replace(
-            /PRÉAMBULE MÉTIER[^]*?AFFICHAGE OBLIGATOIRE[^]*?CANDIDAT\)[^]*?/i,
-            ''
-          )
-          .trim();
-      }
+      const extractedPreambule = extractPreambuleFromPrompt(FULL_AXIOM_PROMPT);
 
       if (extractedPreambule) {
         aiText = extractedPreambule;
