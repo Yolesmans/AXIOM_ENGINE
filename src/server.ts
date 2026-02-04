@@ -208,15 +208,6 @@ app.get("/start", async (req: Request, res: Response) => {
 
 // POST /axiom
 app.post("/axiom", async (req: Request, res: Response) => {
-  if (req.body?.event === "START_BLOC_1") {
-    return res.status(200).json({
-      step: "DEBUG_EVENT_OK",
-      state: "debug",
-      expectsAnswer: true,
-      response: "🧪 EVENT START_BLOC_1 BIEN REÇU PAR LE BACKEND"
-    });
-  }
-
   try {
     const parsed = AxiomBodySchema.safeParse(req.body);
     if (!parsed.success) {
