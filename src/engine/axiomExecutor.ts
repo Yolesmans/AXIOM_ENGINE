@@ -976,6 +976,19 @@ export async function executeAxiom(
   const stateIn = currentState;
 
   // ============================================
+  // TRANSITION EXPLICITE START_BLOC_1
+  // ============================================
+  if (event === "START_BLOC_1") {
+    return {
+      step: "STEP_03_BLOC1",
+      lastQuestion: null,
+      expectsAnswer: true,
+      autoContinue: false,
+      response: ""
+    };
+  }
+
+  // ============================================
   // STEP_01_IDENTITY
   // ============================================
   if (currentState === STEP_01_IDENTITY) {
