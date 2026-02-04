@@ -53,19 +53,20 @@ app.options("*", cors());
 const AxiomBodySchema = z.object({
   tenantId: z.string().min(1),
   posteId: z.string().min(1),
-  sessionId: z.string().min(8).optional(),
-  message: z.string().min(1).optional(),
-  userMessage: z.string().min(1).optional(),
-  event: z.string().optional(),
-  test: z.boolean().optional(),
-  finish: z.boolean().optional(),
+  sessionId: z.string().min(8).optional().nullable(),
+  message: z.string().min(1).optional().nullable(),
+  userMessage: z.string().min(1).optional().nullable(),
+  event: z.string().optional().nullable(),
+  test: z.boolean().optional().nullable(),
+  finish: z.boolean().optional().nullable(),
   identity: z
     .object({
       firstName: z.string().min(1),
       lastName: z.string().min(1),
       email: z.string().email(),
     })
-    .optional(),
+    .optional()
+    .nullable(),
 });
 
 app.get("/health", (_req, res) => {
