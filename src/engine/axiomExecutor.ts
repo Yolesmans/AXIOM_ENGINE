@@ -2,6 +2,8 @@ import { callOpenAI } from '../services/openaiClient.js';
 import type { AxiomCandidate } from '../types/candidate.js';
 import type { AnswerRecord } from '../types/answer.js';
 import { candidateStore } from '../store/sessionStore.js';
+import { advanceBlock } from './axiomEngine.js';
+import { candidateToSession, updateCandidateFromSession } from '../utils/candidateAdapter.js';
 
 function extractPreambuleFromPrompt(prompt: string): string {
   const match = prompt.match(/PRÉAMBULE MÉTIER[^]*?(?=🔒|🟢|$)/i);
@@ -1336,21 +1338,43 @@ AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
   if (currentState === STEP_03_BLOC1) {
     // PARTIE 5 — Bouton "Je commence mon profil"
     if (event === 'START_BLOC_1') {
-      // state = "bloc_01"
+      // Mettre la session en waiting_go avec currentBlock: 0
+      candidateStore.updateSession(candidate.candidateId, { state: 'waiting_go', currentBlock: 0 });
+      
+      // Récupérer le candidate mis à jour
+      let updatedCandidate = candidateStore.get(candidate.candidateId);
+      if (!updatedCandidate) {
+        throw new Error('Candidate not found after updateSession');
+      }
+
+      // Convertir en session et avancer au bloc 1
+      const session = candidateToSession(updatedCandidate);
+      const advancedSession = advanceBlock(session);
+      
+      // Mettre à jour le candidate avec la session avancée (state: 'collecting', currentBlock: 1)
+      candidateStore.updateSession(updatedCandidate.candidateId, {
+        state: advancedSession.state,
+        currentBlock: advancedSession.currentBlock,
+      });
+      updatedCandidate = candidateStore.get(updatedCandidate.candidateId);
+      if (!updatedCandidate) {
+        throw new Error('Candidate not found after advanceBlock');
+      }
+
+      // Mettre à jour l'UI state
       currentState = BLOC_01;
-      candidateStore.updateUIState(candidate.candidateId, {
+      candidateStore.updateUIState(updatedCandidate.candidateId, {
         step: currentState,
         lastQuestion: null,
         tutoiement: ui.tutoiement || undefined,
         identityDone: true,
       });
-      candidateStore.updateSession(candidate.candidateId, { state: 'collecting', currentBlock: 1 });
 
-      logTransition(candidate.candidateId, stateIn, currentState, event ? 'event' : 'message');
+      logTransition(updatedCandidate.candidateId, stateIn, currentState, 'event');
 
       // Enchaîner immédiatement avec première question BLOC_01
       return await executeAxiom({
-        candidate: candidateStore.get(candidate.candidateId)!,
+        candidate: candidateStore.get(updatedCandidate.candidateId)!,
         userMessage: null,
       });
     }
