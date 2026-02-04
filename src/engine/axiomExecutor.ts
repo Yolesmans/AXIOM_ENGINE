@@ -1137,15 +1137,23 @@ Toute sortie hors règles = invalide.`,
     // Si toujours vide → utiliser le texte du prompt directement (pas de fallback générique)
     if (!aiText) {
       const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
-      const preambuleMatch = FULL_AXIOM_PROMPT.match(/PRÉAMBULE MÉTIER[^]*?(?=🔒|🟢|$)/i);
+      const preambuleMatch = FULL_AXIOM_PROMPT.match(
+        /PRÉAMBULE MÉTIER[^]*?(?=🔒|🟢|$)/i
+      );
+
+      let extractedPreambule = '';
 
       if (preambuleMatch && preambuleMatch[0]) {
-        aiText = preambuleMatch[0]
+        extractedPreambule = preambuleMatch[0]
           .replace(
             /PRÉAMBULE MÉTIER[^]*?AFFICHAGE OBLIGATOIRE[^]*?CANDIDAT\)[^]*?/i,
             ''
           )
           .trim();
+      }
+
+      if (extractedPreambule) {
+        aiText = extractedPreambule;
       } else {
         // Texte du prompt (pas de fallback générique)
         aiText =
@@ -1265,15 +1273,23 @@ AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
     // Si toujours vide → utiliser le texte du prompt directement
     if (!aiText) {
       const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
-      const preambuleMatch = FULL_AXIOM_PROMPT.match(/PRÉAMBULE MÉTIER[^]*?(?=🔒|🟢|$)/i);
+      const preambuleMatch = FULL_AXIOM_PROMPT.match(
+        /PRÉAMBULE MÉTIER[^]*?(?=🔒|🟢|$)/i
+      );
+
+      let extractedPreambule = '';
 
       if (preambuleMatch && preambuleMatch[0]) {
-        aiText = preambuleMatch[0]
+        extractedPreambule = preambuleMatch[0]
           .replace(
             /PRÉAMBULE MÉTIER[^]*?AFFICHAGE OBLIGATOIRE[^]*?CANDIDAT\)[^]*?/i,
             ''
           )
           .trim();
+      }
+
+      if (extractedPreambule) {
+        aiText = extractedPreambule;
       } else {
         // Fallback minimal (texte du prompt)
         aiText =
