@@ -847,6 +847,7 @@ export const STEP_01_IDENTITY = 'STEP_01_IDENTITY';
 export const STEP_02_TONE = 'STEP_02_TONE';
 export const STEP_03_PREAMBULE = 'STEP_03_PREAMBULE';
 export const STEP_03_BLOC1 = 'STEP_03_BLOC1'; // wait_start_button
+export const PREAMBULE_DONE = 'PREAMBULE_DONE';
 export const BLOC_01 = 'BLOC_01';
 export const BLOC_02 = 'BLOC_02';
 export const BLOC_03 = 'BLOC_03';
@@ -1207,10 +1208,10 @@ Toute sortie hors règles = invalide.`,
     // PARTIE 4 — En UN SEUL RETURN
     return {
       response: aiText || '',
-      step: "STEP_03_BLOC1",
+      step: "PREAMBULE_DONE",
       lastQuestion: null,
       expectsAnswer: false,
-      autoContinue: true,
+      autoContinue: false,
     };
   }
 
@@ -1322,10 +1323,10 @@ AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
     logTransition(candidate.candidateId, stateIn, currentState, 'message');
     return {
       response: aiText || '',
-      step: currentState,
+      step: "PREAMBULE_DONE",
       lastQuestion: null,
       expectsAnswer: false,
-      autoContinue: true, // STEP_03_PREAMBULE s'auto-enchaîne vers STEP_03_BLOC1
+      autoContinue: false, // déclenchement explicite requis
     };
   }
 
@@ -1334,8 +1335,7 @@ AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
   // ============================================
   if (currentState === STEP_03_BLOC1) {
     // PARTIE 5 — Bouton "Je commence mon profil"
-    // Si POST /axiom avec message == null ET state == "wait_start_button"
-    if (event === 'START_BLOC_1' || userMessage === '__SYSTEM_START__' || userMessage === null) {
+    if (event === 'START_BLOC_1') {
       // state = "bloc_01"
       currentState = BLOC_01;
       candidateStore.updateUIState(candidate.candidateId, {
@@ -1359,7 +1359,7 @@ AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
     logTransition(candidate.candidateId, stateIn, currentState, 'message');
     return {
       response: '',
-      step: "STEP_03_BLOC1",
+      step: "PREAMBULE_DONE",
       lastQuestion: null,
       expectsAnswer: false,
       autoContinue: false,

@@ -510,8 +510,7 @@ app.post("/axiom", async (req: Request, res: Response) => {
     }
 
     // PARTIE 5 — Gérer les events techniques (boutons)
-    // Si POST /axiom avec message == null ET state == "wait_start_button"
-    if (event === "START_BLOC_1" || (!userMessage && !event && candidate.session.ui?.step === STEP_03_BLOC1)) {
+    if (event === "START_BLOC_1") {
       // START_BLOC_1 est un event, pas un auto-enchaînement
       const result = await executeAxiom({ candidate, userMessage: null, event: "START_BLOC_1" });
 

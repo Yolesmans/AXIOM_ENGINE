@@ -86,15 +86,8 @@ async function callAxiom(message, event = null) {
       addMessage('assistant', data.response);
     }
 
-    // ACTION 2 — Relance automatique si autoContinue === true
-    if (data.autoContinue === true) {
-      // Relancer immédiatement avec event START_BLOC_1
-      const autoContinueData = await callAxiom(null, "START_BLOC_1");
-      return autoContinueData;
-    }
-
     // Détection fin préambule → affichage bouton MVP
-    if (data.step === 'STEP_03_BLOC1' && data.expectsAnswer === false) {
+    if (data.step === 'PREAMBULE_DONE') {
       showStartButton = true;
       displayStartButton();
     } else if (data.step === 'STEP_99_MATCH_READY' && data.expectsAnswer === false) {
@@ -140,7 +133,7 @@ function displayStartButton() {
 
   buttonContainer.innerHTML = `
     <button id="mvp-start-button" type="button">
-      👉 Je commence mon profil
+      Je commence mon profil
     </button>
   `;
 
@@ -151,7 +144,7 @@ function displayStartButton() {
   if (startButton) {
     startButton.addEventListener('click', async () => {
       startButton.disabled = true;
-      await callAxiom(null);
+      await callAxiom(null, "START_BLOC_1");
     });
   }
 
@@ -272,7 +265,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       }
 
       // Détection fin préambule → affichage bouton MVP
-      if (data.step === 'STEP_03_BLOC1' && data.expectsAnswer === false) {
+      if (data.step === 'PREAMBULE_DONE') {
         showStartButton = true;
         displayStartButton();
         // Masquer le champ de saisie
