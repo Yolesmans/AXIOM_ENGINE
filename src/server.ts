@@ -162,6 +162,7 @@ app.get("/start", async (req: Request, res: Response) => {
 
     // Mapper les états vers les states de réponse
     let responseState: string = "collecting";
+    let responseStep = result.step;
     if (result.step === STEP_01_IDENTITY) {
       responseState = "identity";
     } else if (result.step === STEP_02_TONE) {
@@ -170,8 +171,10 @@ app.get("/start", async (req: Request, res: Response) => {
       responseState = "preambule";
     } else if (result.step === STEP_03_BLOC1) {
       responseState = "wait_start_button";
+      responseStep = "STEP_03_BLOC1";
     } else if (result.step === "PREAMBULE_DONE") {
       responseState = "wait_start_button";
+      responseStep = "PREAMBULE_DONE";
     } else if ([BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10].includes(result.step as any)) {
       responseState = "collecting";
     } else if (result.step === STEP_99_MATCH_READY) {
@@ -189,7 +192,7 @@ app.get("/start", async (req: Request, res: Response) => {
       state: responseState,
       currentBlock: candidate.session.currentBlock,
       response: finalResponse,
-      step: result.step,
+      step: responseStep,
       expectsAnswer: response ? result.expectsAnswer : false,
       autoContinue: result.autoContinue,
     });
