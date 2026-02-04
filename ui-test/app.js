@@ -28,7 +28,7 @@ function addMessage(role, text) {
 }
 
 // Fonction pour appeler l'API /axiom
-async function callAxiom(message) {
+async function callAxiom(message, event = null) {
   if (isWaiting || !sessionId) {
     return;
   }
@@ -49,18 +49,23 @@ async function callAxiom(message) {
   showStartButton = false;
 
   try {
+    const body = {
+      tenantId: tenantId,
+      posteId: posteId,
+      sessionId: sessionId,
+      message: message,
+    };
+    if (event) {
+      body.event = event;
+    }
+
     const response = await fetch(`${API_BASE_URL}/axiom`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'x-session-id': sessionId,
       },
-      body: JSON.stringify({
-        tenantId: tenantId,
-        posteId: posteId,
-        sessionId: sessionId,
-        message: message,
-      }),
+      body: JSON.stringify(body),
     });
 
     const data = await response.json();
@@ -79,6 +84,13 @@ async function callAxiom(message) {
     // Afficher la réponse (toujours présente)
     if (data.response) {
       addMessage('assistant', data.response);
+    }
+
+    // ACTION 2 — Relance automatique si autoContinue === true
+    if (data.autoContinue === true) {
+      // Relancer immédiatement avec event START_BLOC_1
+      const autoContinueData = await callAxiom(null, "START_BLOC_1");
+      return autoContinueData;
     }
 
     // Détection fin préambule → affichage bouton MVP

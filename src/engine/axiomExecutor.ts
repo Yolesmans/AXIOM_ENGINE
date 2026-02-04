@@ -1196,7 +1196,7 @@ Toute sortie hors règles = invalide.`,
       step: "STEP_03_BLOC1",
       lastQuestion: null,
       expectsAnswer: false,
-      autoContinue: false,
+      autoContinue: true,
     };
   }
 
