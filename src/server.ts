@@ -106,20 +106,34 @@ app.get("/start", async (req: Request, res: Response) => {
       });
     }
 
-    const sessionId = (req.headers["x-session-id"] as string) || querySessionId;
+    // Normaliser la lecture sessionId
+    const sessionIdHeader = (req.headers["x-session-id"] as string) || "";
+    const sessionIdHeaderTrim = sessionIdHeader.trim();
+    const querySessionIdTrim = querySessionId ? querySessionId.trim() : "";
 
-    let candidate;
     let finalSessionId: string;
+    if (sessionIdHeaderTrim !== "") {
+      finalSessionId = sessionIdHeaderTrim;
+    } else if (querySessionIdTrim !== "") {
+      finalSessionId = querySessionIdTrim;
+    } else {
+      finalSessionId = uuidv4();
+    }
 
-    if (!sessionId) {
+    let candidate = candidateStore.get(finalSessionId);
+    if (!candidate) {
+      candidate = await candidateStore.getAsync(finalSessionId);
+    }
+    let sessionReset = false;
+
+    // Ne jamais créer silencieusement une nouvelle session quand le client en a déjà une
+    if (sessionIdHeaderTrim !== "" && !candidate) {
+      // Store perdu (redémarrage) OU session invalide
       finalSessionId = uuidv4();
       candidate = candidateStore.create(finalSessionId, tenant as string);
-    } else {
-      finalSessionId = sessionId;
-      candidate = candidateStore.get(finalSessionId);
-      if (!candidate) {
-        candidate = candidateStore.create(finalSessionId, tenant as string);
-      }
+      sessionReset = true;
+    } else if (!candidate) {
+      candidate = candidateStore.create(finalSessionId, tenant as string);
     }
 
     if (!candidate) {
@@ -140,6 +154,9 @@ app.get("/start", async (req: Request, res: Response) => {
       });
       candidate = candidateStore.get(candidate.candidateId);
       if (!candidate) {
+        candidate = await candidateStore.getAsync(candidate.candidateId);
+      }
+      if (!candidate) {
         return res.status(500).json({
           error: "INTERNAL_ERROR",
           message: "Failed to update UI state",
@@ -154,21 +171,41 @@ app.get("/start", async (req: Request, res: Response) => {
         step: "STEP_01_IDENTITY",
         expectsAnswer: true,
         autoContinue: false,
+        ...(sessionReset ? { sessionReset: true } : {}),
+      });
+    }
+
+    // Empêcher /start de relancer le moteur si l'utilisateur est déjà au bouton
+    const currentStep = candidate.session.ui?.step;
+    if (currentStep === STEP_03_BLOC1 || currentStep === "PREAMBULE_DONE") {
+      return res.status(200).json({
+        sessionId: finalSessionId,
+        step: STEP_03_BLOC1,
+        state: "wait_start_button",
+        response: "",
+        expectsAnswer: false,
+        autoContinue: false,
+        currentBlock: candidate.session.currentBlock,
+        ...(sessionReset ? { sessionReset: true } : {}),
       });
     }
 
     // Si identité complétée, continuer normalement avec auto-enchaînement
     const result = await executeWithAutoContinue(candidate);
 
-    // Mapper les états vers les states de réponse
+    // Aligner le mapping /start sur le mapping /axiom
     let responseState: string = "collecting";
     let responseStep = result.step;
-    if (result.step === STEP_01_IDENTITY) {
+
+    if (result.step === STEP_01_IDENTITY || result.step === 'IDENTITY') {
       responseState = "identity";
+      responseStep = "STEP_01_IDENTITY";
     } else if (result.step === STEP_02_TONE) {
       responseState = "tone_choice";
+      responseStep = "STEP_02_TONE";
     } else if (result.step === STEP_03_PREAMBULE) {
       responseState = "preambule";
+      responseStep = "STEP_03_PREAMBULE";
     } else if (result.step === STEP_03_BLOC1) {
       responseState = "wait_start_button";
       responseStep = "STEP_03_BLOC1";
@@ -177,10 +214,11 @@ app.get("/start", async (req: Request, res: Response) => {
       responseStep = "PREAMBULE_DONE";
     } else if ([BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10].includes(result.step as any)) {
       responseState = "collecting";
+      // responseStep reste result.step
     } else if (result.step === STEP_99_MATCH_READY) {
       responseState = "match_ready";
     } else if (result.step === STEP_99_MATCHING || result.step === DONE_MATCHING) {
-      responseState = "completed";
+      responseState = "matching";
     }
 
     // C) CONTRAT DE SÉCURITÉ — Toujours renvoyer data.response non vide
@@ -195,6 +233,7 @@ app.get("/start", async (req: Request, res: Response) => {
       step: responseStep,
       expectsAnswer: response ? result.expectsAnswer : false,
       autoContinue: result.autoContinue,
+      ...(sessionReset ? { sessionReset: true } : {}),
     });
   } catch (error) {
     console.error("[start] error:", error);
@@ -324,6 +363,9 @@ app.post("/axiom", async (req: Request, res: Response) => {
       });
       candidate = candidateStore.get(candidate.candidateId);
       if (!candidate) {
+        candidate = await candidateStore.getAsync(candidate.candidateId);
+      }
+      if (!candidate) {
         return res.status(500).json({
           error: "INTERNAL_ERROR",
           message: "Failed to update UI state",
@@ -432,6 +474,9 @@ app.post("/axiom", async (req: Request, res: Response) => {
           step: STEP_02_TONE,
         });
         candidate = candidateStore.get(candidate.candidateId);
+      if (!candidate) {
+        candidate = await candidateStore.getAsync(candidate.candidateId);
+      }
         if (!candidate) {
           return res.status(500).json({
             error: "INTERNAL_ERROR",
@@ -448,6 +493,9 @@ app.post("/axiom", async (req: Request, res: Response) => {
 
         candidateStore.updateSession(candidate.candidateId, { state: "preamble" });
         candidate = candidateStore.get(candidate.candidateId);
+      if (!candidate) {
+        candidate = await candidateStore.getAsync(candidate.candidateId);
+      }
         if (!candidate) {
           return res.status(500).json({
             error: "INTERNAL_ERROR",
@@ -469,6 +517,9 @@ app.post("/axiom", async (req: Request, res: Response) => {
     }
 
     let candidate = candidateStore.get(sessionId);
+    if (!candidate) {
+      candidate = await candidateStore.getAsync(sessionId);
+    }
     if (!candidate) {
       candidate = candidateStore.create(sessionId, tenantId);
     } else {
@@ -508,6 +559,9 @@ app.post("/axiom", async (req: Request, res: Response) => {
       });
       candidate = candidateStore.get(candidate.candidateId);
       if (!candidate) {
+        candidate = await candidateStore.getAsync(candidate.candidateId);
+      }
+      if (!candidate) {
         return res.status(500).json({
           error: "INTERNAL_ERROR",
           message: "Failed to initialize UI state",
@@ -521,6 +575,9 @@ app.post("/axiom", async (req: Request, res: Response) => {
       const result = await executeAxiom({ candidate, userMessage: null, event: "START_BLOC_1" });
 
       candidate = candidateStore.get(candidate.candidateId);
+      if (!candidate) {
+        candidate = await candidateStore.getAsync(candidate.candidateId);
+      }
       if (!candidate) {
         return res.status(500).json({
           error: "INTERNAL_ERROR",

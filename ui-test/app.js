@@ -7,6 +7,7 @@ let tenantId = null;
 let posteId = null;
 let isWaiting = false;
 let showStartButton = false;
+let isInitializing = false;
 
 // Fonction pour obtenir la clé localStorage
 function getStorageKey() {
@@ -17,6 +18,22 @@ function getStorageKey() {
 function addMessage(role, text) {
   const messagesContainer = document.getElementById('messages');
   if (!messagesContainer) return;
+
+  // Anti-spam UI : ne pas empiler des cartes tone identiques
+  if (role === 'assistant') {
+    const lastMessage = messagesContainer.lastElementChild;
+    if (lastMessage && lastMessage.classList.contains('message-reveliom')) {
+      const lastText = lastMessage.querySelector('p')?.textContent || '';
+      const toneQuestion = 'Bienvenue dans AXIOM.\n' +
+        'On va découvrir qui tu es vraiment — pas ce qu\'il y a sur ton CV.\n' +
+        'Promis : je ne te juge pas. Je veux juste comprendre comment tu fonctionnes.\n\n' +
+        'On commence tranquille.\n' +
+        'Dis-moi : tu préfères qu\'on se tutoie ou qu\'on se vouvoie pour cette discussion ?';
+      if (lastText === toneQuestion && text === toneQuestion) {
+        return; // Skip duplicate
+      }
+    }
+  }
 
   const messageDiv = document.createElement('div');
   messageDiv.className = `message-bubble message-${role === 'assistant' ? 'reveliom' : 'user'}`;
@@ -59,12 +76,14 @@ async function callAxiom(message, event = null) {
       body.event = event;
     }
 
+    const headers = {
+      'Content-Type': 'application/json',
+      'x-session-id': sessionId || '',
+    };
+
     const response = await fetch(`${API_BASE_URL}/axiom`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-session-id': sessionId,
-      },
+      headers: headers,
       body: JSON.stringify(body),
     });
 
@@ -75,8 +94,8 @@ async function callAxiom(message, event = null) {
       typingIndicator.classList.add('hidden');
     }
 
-    // Mettre à jour sessionId si fourni
-    if (data.sessionId && data.sessionId !== sessionId) {
+    // Verrouiller sessionId : adopter immédiatement si fourni
+    if (data.sessionId && typeof data.sessionId === 'string' && data.sessionId.trim() !== '') {
       sessionId = data.sessionId;
       localStorage.setItem(getStorageKey(), sessionId);
     }
@@ -187,11 +206,18 @@ function displayMatchingButton() {
 
 // Initialisation au chargement
 window.addEventListener('DOMContentLoaded', async () => {
-  // Vérifier que #app existe
-  const app = document.getElementById('app');
-  if (!app) {
-    throw new Error('Element #app not found');
+  // Garde anti-double initialisation
+  if (isInitializing) {
+    return;
   }
+  isInitializing = true;
+
+  try {
+    // Vérifier que #app existe
+    const app = document.getElementById('app');
+    if (!app) {
+      throw new Error('Element #app not found');
+    }
 
   // Masquer le chat input au départ
   const chatForm = document.getElementById('chat-form');
@@ -241,23 +267,23 @@ window.addEventListener('DOMContentLoaded', async () => {
   const storageKey = getStorageKey();
   sessionId = localStorage.getItem(storageKey);
 
-  // Appeler /start avec header x-session-id si présent
-  try {
+  // Appeler /start avec header x-session-id (toujours envoyé)
     const headers = {
-      'Content-Type': 'application/json',
+      'x-session-id': sessionId || '',
     };
-    if (sessionId) {
-      headers['x-session-id'] = sessionId;
-    }
 
     const response = await fetch(`${API_BASE_URL}/start?tenant=${tenantId}&poste=${posteId}`, {
       headers: headers,
     });
     const data = await response.json();
 
-    if (data.sessionId) {
+    // Verrouiller sessionId : adopter immédiatement si fourni
+    if (data.sessionId && typeof data.sessionId === 'string' && data.sessionId.trim() !== '') {
       sessionId = data.sessionId;
       localStorage.setItem(storageKey, sessionId);
+    }
+
+    if (data.sessionId) {
 
       // AFFICHER IMMÉDIATEMENT le message AVANT toute condition
       if (data.response) {
@@ -376,6 +402,45 @@ window.addEventListener('DOMContentLoaded', async () => {
         }
       }
     }
+
+    // Initialiser le gestionnaire de formulaire de chat
+    const userInput = document.getElementById('user-input');
+    if (chatForm && userInput) {
+      chatForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        
+        const message = userInput.value.trim();
+        
+        if (!message || isWaiting || !sessionId) {
+          return;
+        }
+
+        // Afficher le message de l'utilisateur
+        addMessage('user', message);
+        userInput.value = '';
+
+        // Désactiver l'input
+        userInput.disabled = true;
+
+        try {
+          const data = await callAxiom(message);
+
+          // Réafficher l'input seulement si on attend une réponse et pas de bouton MVP
+          if (data.expectsAnswer === true && !showStartButton) {
+            userInput.disabled = false;
+          } else if (showStartButton) {
+            // Masquer le champ de saisie si le bouton MVP doit être affiché
+            if (chatForm) {
+              chatForm.style.display = 'none';
+            }
+          }
+        } catch (error) {
+          console.error('Erreur:', error);
+          // Réactiver l'input en cas d'erreur
+          userInput.disabled = false;
+        }
+      });
+    }
   } catch (error) {
     console.error('Erreur:', error);
     const messagesContainer = document.getElementById('messages');
@@ -387,44 +452,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       errorDiv.appendChild(errorP);
       messagesContainer.appendChild(errorDiv);
     }
-  }
-
-  // Initialiser le gestionnaire de formulaire de chat
-  const userInput = document.getElementById('user-input');
-  if (chatForm && userInput) {
-    chatForm.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      
-      const message = userInput.value.trim();
-      
-      if (!message || isWaiting || !sessionId) {
-        return;
-      }
-
-      // Afficher le message de l'utilisateur
-      addMessage('user', message);
-      userInput.value = '';
-
-      // Désactiver l'input
-      userInput.disabled = true;
-
-      try {
-        const data = await callAxiom(message);
-
-        // Réafficher l'input seulement si on attend une réponse et pas de bouton MVP
-        if (data.expectsAnswer === true && !showStartButton) {
-          userInput.disabled = false;
-        } else if (showStartButton) {
-          // Masquer le champ de saisie si le bouton MVP doit être affiché
-          if (chatForm) {
-            chatForm.style.display = 'none';
-          }
-        }
-      } catch (error) {
-        console.error('Erreur:', error);
-        // Réactiver l'input en cas d'erreur
-        userInput.disabled = false;
-      }
-    });
+  } finally {
+    isInitializing = false;
   }
 });
