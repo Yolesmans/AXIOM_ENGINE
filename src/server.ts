@@ -549,7 +549,16 @@ app.post("/axiom", async (req: Request, res: Response) => {
 
     // Gérer les messages utilisateur
     const userMessageText = userMessage || null;
-    const result = await executeAxiom({ candidate, userMessage: userMessageText });
+    const result = await executeWithAutoContinue(candidate, userMessageText);
+
+    // Recharger le candidate AVANT le mapping pour avoir l'état à jour
+    candidate = candidateStore.get(candidate.candidateId);
+    if (!candidate) {
+      return res.status(500).json({
+        error: "INTERNAL_ERROR",
+        message: "Failed to get candidate",
+      });
+    }
 
     // Mapper les états
     let responseState: string = "collecting";
@@ -566,6 +575,9 @@ app.post("/axiom", async (req: Request, res: Response) => {
     } else if (result.step === STEP_03_BLOC1) {
       responseState = "wait_start_button";
       responseStep = "STEP_03_BLOC1";
+    } else if (result.step === "PREAMBULE_DONE") {
+      responseState = "wait_start_button";
+      responseStep = "PREAMBULE_DONE";
     } else if ([BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10].includes(result.step as any)) {
       const blocNumber = [BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10].indexOf(result.step as any) + 1;
       responseState = `bloc_${blocNumber.toString().padStart(2, '0')}`;
@@ -576,14 +588,6 @@ app.post("/axiom", async (req: Request, res: Response) => {
       responseState = "matching";
     } else if (result.step === DONE_MATCHING) {
       responseState = "done";
-    }
-
-    candidate = candidateStore.get(candidate.candidateId);
-    if (!candidate) {
-      return res.status(500).json({
-        error: "INTERNAL_ERROR",
-        message: "Failed to get candidate",
-      });
     }
 
     // Mise à jour Google Sheet (sauf si on est en identity)
