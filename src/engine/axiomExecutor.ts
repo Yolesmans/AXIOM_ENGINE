@@ -1346,6 +1346,53 @@ AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
   }
 
   // ============================================
+  // TRANSITION EXPLICITE START_BLOC_1 → BLOC 1
+  // ============================================
+  if (event === "START_BLOC_1") {
+    // Transition FSM explicite vers le BLOC 1
+    currentState = BLOC_01;
+    
+    // Mettre la session en waiting_go avec currentBlock: 0
+    candidateStore.updateSession(candidate.candidateId, { state: 'waiting_go', currentBlock: 0 });
+    
+    // Récupérer le candidate mis à jour
+    let updatedCandidate = candidateStore.get(candidate.candidateId);
+    if (!updatedCandidate) {
+      throw new Error('Candidate not found after updateSession');
+    }
+
+    // Convertir en session et avancer au bloc 1
+    const session = candidateToSession(updatedCandidate);
+    const advancedSession = advanceBlock(session);
+    
+    // Mettre à jour le candidate avec la session avancée (state: 'collecting', currentBlock: 1)
+    candidateStore.updateSession(updatedCandidate.candidateId, {
+      state: advancedSession.state,
+      currentBlock: advancedSession.currentBlock,
+    });
+    updatedCandidate = candidateStore.get(updatedCandidate.candidateId);
+    if (!updatedCandidate) {
+      throw new Error('Candidate not found after advanceBlock');
+    }
+
+    // Mettre à jour l'UI state
+    candidateStore.updateUIState(updatedCandidate.candidateId, {
+      step: currentState,
+      lastQuestion: null,
+      tutoiement: ui.tutoiement || undefined,
+      identityDone: true,
+    });
+
+    logTransition(updatedCandidate.candidateId, stateIn, currentState, 'event');
+
+    // Enchaîner immédiatement avec première question BLOC_01
+    return await executeAxiom({
+      candidate: updatedCandidate,
+      userMessage: null,
+    });
+  }
+
+  // ============================================
   // STEP_03_BLOC1 (wait_start_button)
   // ============================================
   if (currentState === STEP_03_BLOC1) {
