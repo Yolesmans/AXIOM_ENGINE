@@ -1,6 +1,7 @@
 import type { AxiomState } from './session.js';
 import type { AnswerRecord } from './answer.js';
 import type { ConversationMessage } from './conversation.js';
+import type { QuestionQueue, AnswerMap } from './blocks.js';
 
 export interface CandidateIdentity {
   firstName: string;
@@ -39,4 +40,6 @@ export interface AxiomCandidate {
   finalProfileText?: string;
   matchingResult?: import('./matching.js').MatchingResult;
   tonePreference?: 'tutoiement' | 'vouvoiement';
+  blockQueues?: Record<number, QuestionQueue>;
+  answerMaps?: Record<number, AnswerMap>;
 }

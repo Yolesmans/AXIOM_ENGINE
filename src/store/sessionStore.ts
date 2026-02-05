@@ -3,6 +3,7 @@ import type { AxiomState } from '../types/session.js';
 import type { AnswerRecord } from '../types/answer.js';
 import type { MatchingResult } from '../types/matching.js';
 import type { ConversationMessage, ConversationMessageKind } from '../types/conversation.js';
+import type { QuestionQueue, AnswerMap } from '../types/blocks.js';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -114,6 +115,8 @@ class CandidateStore {
       answers: [],
       conversationHistory: [],
       blockSummaries: {},
+      blockQueues: {},
+      answerMaps: {},
     };
 
     this.candidates.set(candidateId, candidate);
@@ -417,6 +420,214 @@ class CandidateStore {
       kind: meta?.kind || 'other',
     };
     return this.appendConversationMessage(candidateId, message);
+  }
+
+  initQuestionQueue(candidateId: string, blockNumber: number): QuestionQueue {
+    const candidate = this.candidates.get(candidateId);
+    if (!candidate) {
+      throw new Error(`Candidate ${candidateId} not found`);
+    }
+
+    const blockQueues = candidate.blockQueues || {};
+    
+    // Si la queue existe déjà, la retourner
+    if (blockQueues[blockNumber]) {
+      return blockQueues[blockNumber];
+    }
+
+    // Sinon créer une queue vide
+    const nowISO = new Date().toISOString();
+    const queue: QuestionQueue = {
+      blockNumber,
+      questions: [],
+      cursorIndex: 0,
+      isComplete: false,
+      generatedAt: nowISO,
+      completedAt: null,
+    };
+
+    const updated: AxiomCandidate = {
+      ...candidate,
+      blockQueues: {
+        ...blockQueues,
+        [blockNumber]: queue,
+      },
+      session: {
+        ...candidate.session,
+        lastActivityAt: new Date(),
+      },
+    };
+
+    this.candidates.set(candidateId, updated);
+    this.persistCandidate(candidateId);
+    return queue;
+  }
+
+  setQuestionsForBlock(
+    candidateId: string,
+    blockNumber: number,
+    questions: string[],
+  ): QuestionQueue {
+    const candidate = this.candidates.get(candidateId);
+    if (!candidate) {
+      throw new Error(`Candidate ${candidateId} not found`);
+    }
+
+    // Appeler initQuestionQueue si nécessaire
+    const queue = this.initQuestionQueue(candidateId, blockNumber);
+
+    // Remplacer questions par le tableau fourni
+    const updatedQueue: QuestionQueue = {
+      ...queue,
+      questions,
+      cursorIndex: 0,
+      isComplete: false,
+      completedAt: null,
+    };
+
+    const blockQueues = candidate.blockQueues || {};
+    const updated: AxiomCandidate = {
+      ...candidate,
+      blockQueues: {
+        ...blockQueues,
+        [blockNumber]: updatedQueue,
+      },
+      session: {
+        ...candidate.session,
+        lastActivityAt: new Date(),
+      },
+    };
+
+    this.candidates.set(candidateId, updated);
+    this.persistCandidate(candidateId);
+    return updatedQueue;
+  }
+
+  advanceQuestionCursor(
+    candidateId: string,
+    blockNumber: number,
+  ): QuestionQueue | undefined {
+    const candidate = this.candidates.get(candidateId);
+    if (!candidate) {
+      return undefined;
+    }
+
+    const blockQueues = candidate.blockQueues || {};
+    const queue = blockQueues[blockNumber];
+
+    // Si queue absente -> undefined
+    if (!queue) {
+      return undefined;
+    }
+
+    // cursorIndex++
+    const updatedQueue: QuestionQueue = {
+      ...queue,
+      cursorIndex: queue.cursorIndex + 1,
+    };
+
+    const updated: AxiomCandidate = {
+      ...candidate,
+      blockQueues: {
+        ...blockQueues,
+        [blockNumber]: updatedQueue,
+      },
+      session: {
+        ...candidate.session,
+        lastActivityAt: new Date(),
+      },
+    };
+
+    this.candidates.set(candidateId, updated);
+    this.persistCandidate(candidateId);
+    return updatedQueue;
+  }
+
+  markBlockComplete(candidateId: string, blockNumber: number): void {
+    const candidate = this.candidates.get(candidateId);
+    if (!candidate) {
+      return;
+    }
+
+    const blockQueues = candidate.blockQueues || {};
+    const queue = blockQueues[blockNumber];
+
+    if (!queue) {
+      return;
+    }
+
+    const nowISO = new Date().toISOString();
+    const updatedQueue: QuestionQueue = {
+      ...queue,
+      isComplete: true,
+      completedAt: nowISO,
+    };
+
+    const updated: AxiomCandidate = {
+      ...candidate,
+      blockQueues: {
+        ...blockQueues,
+        [blockNumber]: updatedQueue,
+      },
+      session: {
+        ...candidate.session,
+        lastActivityAt: new Date(),
+      },
+    };
+
+    this.candidates.set(candidateId, updated);
+    this.persistCandidate(candidateId);
+  }
+
+  storeAnswerForBlock(
+    candidateId: string,
+    blockNumber: number,
+    questionIndex: number,
+    answer: string,
+  ): AnswerMap {
+    const candidate = this.candidates.get(candidateId);
+    if (!candidate) {
+      throw new Error(`Candidate ${candidateId} not found`);
+    }
+
+    const answerMaps = candidate.answerMaps || {};
+    let answerMap = answerMaps[blockNumber];
+
+    // Créer answerMaps[blockNumber] si absent
+    if (!answerMap) {
+      const nowISO = new Date().toISOString();
+      answerMap = {
+        blockNumber,
+        answers: {},
+        lastAnswerAt: nowISO,
+      };
+    }
+
+    // answers[questionIndex] = answer
+    const updatedAnswerMap: AnswerMap = {
+      ...answerMap,
+      answers: {
+        ...answerMap.answers,
+        [questionIndex]: answer,
+      },
+      lastAnswerAt: new Date().toISOString(),
+    };
+
+    const updated: AxiomCandidate = {
+      ...candidate,
+      answerMaps: {
+        ...answerMaps,
+        [blockNumber]: updatedAnswerMap,
+      },
+      session: {
+        ...candidate.session,
+        lastActivityAt: new Date(),
+      },
+    };
+
+    this.candidates.set(candidateId, updated);
+    this.persistCandidate(candidateId);
+    return updatedAnswerMap;
   }
 }
 
