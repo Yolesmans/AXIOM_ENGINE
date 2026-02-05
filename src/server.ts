@@ -653,9 +653,10 @@ app.post("/axiom", async (req: Request, res: Response) => {
       const orchestrator = new BlockOrchestrator();
       const result = await orchestrator.handleMessage(candidate, null, "START_BLOC_1");
 
-      candidate = candidateStore.get(candidate.candidateId);
+      const candidateId = candidate.candidateId;
+      candidate = candidateStore.get(candidateId);
       if (!candidate) {
-        candidate = await candidateStore.getAsync(candidate.candidateId);
+        candidate = await candidateStore.getAsync(candidateId);
       }
       if (!candidate) {
         return res.status(500).json({

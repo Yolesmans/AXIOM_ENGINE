@@ -56,12 +56,13 @@ export class BlockOrchestrator {
     const blockNumber = 1; // BLOC 1 uniquement
 
     // Recharger candidate pour avoir l'état à jour
-    let currentCandidate = candidateStore.get(candidate.candidateId);
+    const candidateId = candidate.candidateId;
+    let currentCandidate = candidateStore.get(candidateId);
     if (!currentCandidate) {
-      currentCandidate = await candidateStore.getAsync(candidate.candidateId);
+      currentCandidate = await candidateStore.getAsync(candidateId);
     }
     if (!currentCandidate) {
-      throw new Error(`Candidate ${candidate.candidateId} not found`);
+      throw new Error(`Candidate ${candidateId} not found`);
     }
 
     const queue = currentCandidate.blockQueues?.[blockNumber];
@@ -96,12 +97,13 @@ export class BlockOrchestrator {
       );
 
       // Recharger candidate après stockage
-      currentCandidate = candidateStore.get(currentCandidate.candidateId);
+      const candidateId = currentCandidate.candidateId;
+      currentCandidate = candidateStore.get(candidateId);
       if (!currentCandidate) {
-        currentCandidate = await candidateStore.getAsync(currentCandidate.candidateId);
+        currentCandidate = await candidateStore.getAsync(candidateId);
       }
       if (!currentCandidate) {
-        throw new Error(`Candidate ${candidate.candidateId} not found after storing answer`);
+        throw new Error(`Candidate ${candidateId} not found after storing answer`);
       }
 
       const finalQueue = currentCandidate.blockQueues?.[blockNumber];
