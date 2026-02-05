@@ -197,7 +197,7 @@ function displayMatchingButton() {
   if (matchingButton) {
     matchingButton.addEventListener('click', async () => {
       matchingButton.disabled = true;
-      await callAxiom(null);
+      await callAxiom(null, 'START_MATCHING');
     });
   }
 
