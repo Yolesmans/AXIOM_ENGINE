@@ -4,6 +4,14 @@ import { callOpenAI } from './openaiClient.js';
 import { BLOC_01, BLOC_02 } from '../engine/axiomExecutor.js';
 // getFullAxiomPrompt n'est pas exporté, on doit le reconstruire
 import { PROMPT_AXIOM_ENGINE, PROMPT_AXIOM_PROFIL } from '../engine/prompts.js';
+import {
+  validateTraitsSpecificity,
+  validateMotifsSpecificity,
+  validateSynthesis2B,
+  validateQuestion2A1,
+  validateQuestion2A3,
+  type ValidationResult
+} from './validators.js';
 
 function getFullAxiomPrompt(): string {
   return `${PROMPT_AXIOM_ENGINE}\n\n${PROMPT_AXIOM_PROFIL}`;
@@ -29,6 +37,68 @@ function buildConversationHistory(candidate: AxiomCandidate): Array<{ role: stri
   }
   
   if (candidate.answers && candidate.answers.length > 0) {
+    candidate.answers.forEach((answer) => {
+      messages.push({
+        role: 'user',
+        content: answer.message,
+      });
+    });
+  }
+  
+  return messages;
+}
+
+/**
+ * Construit l'historique conversationnel avec injection FORCÉE des réponses BLOC 2A
+ * 
+ * Garantit que même si conversationHistory est tronqué, les réponses BLOC 2A
+ * (médium, 3 œuvres, œuvre noyau) sont TOUJOURS injectées dans le contexte.
+ * 
+ * Utilisé pour BLOC 2B afin d'assurer la personnalisation des questions.
+ */
+function buildConversationHistoryForBlock2B(candidate: AxiomCandidate): Array<{ role: string; content: string }> {
+  const messages: Array<{ role: string; content: string }> = [];
+  
+  // TOUJOURS inclure les réponses BLOC 2A dans le contexte (INJECTION FORCÉE)
+  const answerMap = candidate.answerMaps?.[2];
+  if (answerMap && answerMap.answers) {
+    const answers = answerMap.answers;
+    const mediumAnswer = answers[0] || 'N/A';
+    const preferencesAnswer = answers[1] || 'N/A';
+    const coreWorkAnswer = answers[2] || 'N/A';
+    
+    messages.push({
+      role: 'system',
+      content: `CONTEXTE BLOC 2A (OBLIGATOIRE — INJECTION FORCÉE) :
+Médium choisi : ${mediumAnswer}
+Préférences (3 œuvres) : ${preferencesAnswer}
+Œuvre noyau : ${coreWorkAnswer}
+
+Ces informations sont CRITIQUES pour personnaliser les questions BLOC 2B.
+Chaque question doit être spécifique à ces œuvres.`
+    });
+    
+    console.log('[ORCHESTRATOR] BLOC 2A context injected:', {
+      medium: mediumAnswer,
+      preferences: preferencesAnswer,
+      coreWork: coreWorkAnswer
+    });
+  } else {
+    console.warn('[ORCHESTRATOR] BLOC 2A answers not found in AnswerMap. BLOC 2B cannot be personalized.');
+  }
+  
+  // Historique conversationnel standard
+  if (candidate.conversationHistory && candidate.conversationHistory.length > 0) {
+    const history = candidate.conversationHistory;
+    const recentHistory = history.slice(-MAX_CONV_MESSAGES);
+    
+    recentHistory.forEach((msg) => {
+      messages.push({
+        role: msg.role,
+        content: msg.content,
+      });
+    });
+  } else if (candidate.answers && candidate.answers.length > 0) {
     candidate.answers.forEach((answer) => {
       messages.push({
         role: 'user',
@@ -439,26 +509,49 @@ Format strict : 3 sections séparées, pas de narration continue.`,
     return this.handleBlock2A(currentCandidate, null, null);
   }
 
-  private async generateQuestion2A1(candidate: AxiomCandidate): Promise<string> {
+  private async generateQuestion2A1(candidate: AxiomCandidate, retryCount: number = 0): Promise<string> {
     const messages = buildConversationHistory(candidate);
     const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
+
+    const promptContent = retryCount > 0
+      ? `RÈGLE ABSOLUE AXIOM (RETRY - FORMAT STRICT) :
+Tu es en état BLOC_02 (BLOC 2A - Question 1).
+Génère UNE question simple demandant au candidat son médium préféré (Série ou Film).
+Format OBLIGATOIRE : Question à choix avec EXACTEMENT "A. Série" et "B. Film" sur lignes séparées.
+La question doit être claire et directe.
+IMPORTANT : La question DOIT contenir les deux options "A. Série" et "B. Film" explicitement.`
+      : `RÈGLE ABSOLUE AXIOM :
+Tu es en état BLOC_02 (BLOC 2A - Question 1).
+Génère UNE question simple demandant au candidat son médium préféré (Série ou Film).
+Format : Question à choix avec A. Série / B. Film sur lignes séparées.
+La question doit être claire et directe.`;
 
     const completion = await callOpenAI({
       messages: [
         { role: 'system', content: FULL_AXIOM_PROMPT },
         {
           role: 'system',
-          content: `RÈGLE ABSOLUE AXIOM :
-Tu es en état BLOC_02 (BLOC 2A - Question 1).
-Génère UNE question simple demandant au candidat son médium préféré (Série ou Film).
-Format : Question à choix avec A. Série / B. Film sur lignes séparées.
-La question doit être claire et directe.`,
+          content: promptContent,
         },
         ...messages,
       ],
     });
 
-    return completion.trim();
+    const question = completion.trim();
+    
+    // Validation avec retry contrôlé
+    const validation = validateQuestion2A1(question);
+    if (!validation.valid && retryCount < 1) {
+      console.warn('[ORCHESTRATOR] Question 2A.1 validation failed, retry:', validation.error);
+      return this.generateQuestion2A1(candidate, retryCount + 1);
+    }
+    
+    if (!validation.valid) {
+      console.error('[ORCHESTRATOR] Question 2A.1 validation failed after retry:', validation.error);
+      // Retourner quand même la question (avec warning)
+    }
+    
+    return question;
   }
 
   private async generateQuestion2A2(candidate: AxiomCandidate, mediumAnswer: string): Promise<string> {
@@ -493,31 +586,117 @@ La question doit être pertinente pour explorer les préférences en ${mediumTyp
     return completion.trim();
   }
 
-  private async generateQuestion2A3(candidate: AxiomCandidate, answers: Record<number, string>): Promise<string> {
+  private async generateQuestion2A3(candidate: AxiomCandidate, answers: Record<number, string>, retryCount: number = 0): Promise<string> {
     const messages = buildConversationHistory(candidate);
     const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
 
     const mediumAnswer = answers[0] || '';
     const preferencesAnswer = answers[1] || '';
 
-    const completion = await callOpenAI({
-      messages: [
-        { role: 'system', content: FULL_AXIOM_PROMPT },
-        {
-          role: 'system',
-          content: `RÈGLE ABSOLUE AXIOM :
+    const promptContent = retryCount > 0
+      ? `RÈGLE ABSOLUE AXIOM (RETRY - FORMAT STRICT) :
+Tu es en état BLOC_02 (BLOC 2A - Question 3).
+Le candidat a choisi : ${mediumAnswer}
+Ses préférences : ${preferencesAnswer}
+Génère UNE question demandant au candidat de choisir UNE œuvre centrale (noyau) parmi ses préférences.
+La question DOIT demander EXACTEMENT UNE œuvre (utilise les mots "une", "un", "seule", "unique").
+La question DOIT mentionner explicitement "œuvre", "série" ou "film".
+Format : Question ouverte demandant le nom de l'œuvre.
+La question doit permettre d'identifier l'œuvre la plus significative pour le candidat.`
+      : `RÈGLE ABSOLUE AXIOM :
 Tu es en état BLOC_02 (BLOC 2A - Question 3).
 Le candidat a choisi : ${mediumAnswer}
 Ses préférences : ${preferencesAnswer}
 Génère UNE question demandant au candidat de choisir UNE œuvre centrale (noyau) parmi ses préférences.
 La question doit être claire et demander une œuvre spécifique (nom d'une série ou d'un film).
 Format : Question ouverte demandant le nom de l'œuvre.
-La question doit permettre d'identifier l'œuvre la plus significative pour le candidat.`,
+La question doit permettre d'identifier l'œuvre la plus significative pour le candidat.`;
+
+    const completion = await callOpenAI({
+      messages: [
+        { role: 'system', content: FULL_AXIOM_PROMPT },
+        {
+          role: 'system',
+          content: promptContent,
         },
         ...messages,
       ],
     });
 
-    return completion.trim();
+    const question = completion.trim();
+    
+    // Validation avec retry contrôlé
+    const validation = validateQuestion2A3(question);
+    if (!validation.valid && retryCount < 1) {
+      console.warn('[ORCHESTRATOR] Question 2A.3 validation failed, retry:', validation.error);
+      return this.generateQuestion2A3(candidate, answers, retryCount + 1);
+    }
+    
+    if (!validation.valid) {
+      console.error('[ORCHESTRATOR] Question 2A.3 validation failed after retry:', validation.error);
+      // Retourner quand même la question (avec warning)
+    }
+    
+    return question;
+  }
+
+  /**
+   * MÉCANISME DE RETRY CONTRÔLÉ pour génération BLOC 2B
+   * 
+   * Retry max = 1
+   * Retry déclenché UNIQUEMENT si validation échoue
+   * Prompt renforcé au retry (sans changer la structure)
+   * 
+   * Cette fonction est un template pour les futures générations BLOC 2B.
+   * Elle n'est pas utilisée actuellement (BLOC 2B non implémenté).
+   */
+  private async generateWithRetry<T>(
+    generator: (retryCount: number) => Promise<T>,
+    validator: (result: T) => ValidationResult,
+    maxRetries: number = 1
+  ): Promise<T> {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const result = await generator(attempt);
+      const validation = validator(result);
+      
+      if (validation.valid) {
+        if (attempt > 0) {
+          console.log(`[ORCHESTRATOR] Validation succeeded after ${attempt} retry(ies)`);
+        }
+        return result;
+      }
+      
+      // Si dernière tentative, retourner quand même (avec warning)
+      if (attempt === maxRetries) {
+        console.error(`[ORCHESTRATOR] Validation failed after ${maxRetries} retry(ies):`, validation.error);
+        if (validation.details) {
+          console.error('[ORCHESTRATOR] Validation details:', validation.details);
+        }
+        return result; // Retourner quand même, mais loguer l'erreur
+      }
+      
+      // Retry avec prompt renforcé
+      console.warn(`[ORCHESTRATOR] Validation failed, retry ${attempt + 1}/${maxRetries}:`, validation.error);
+    }
+    
+    throw new Error('Failed to generate valid result after retries');
+  }
+
+  /**
+   * VALIDATEURS pour BLOC 2B (à utiliser lors de l'implémentation)
+   * 
+   * Ces fonctions sont des helpers pour valider les générations BLOC 2B.
+   * Elles utilisent les validateurs de validators.ts.
+   */
+  private validateTraitsForBlock2B(traitsWork1: string[], traitsWork2: string[], traitsWork3: string[]): ValidationResult {
+    return validateTraitsSpecificity(traitsWork1, traitsWork2, traitsWork3);
+  }
+
+  private validateMotifsForBlock2B(motifWork1: string, motifWork2: string, motifWork3: string): ValidationResult {
+    return validateMotifsSpecificity(motifWork1, motifWork2, motifWork3);
+  }
+
+  private validateSynthesisForBlock2B(content: string): ValidationResult {
+    return validateSynthesis2B(content);
   }
 }
