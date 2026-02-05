@@ -769,13 +769,20 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
     // ÉTAPE 2 — GÉNÉRATION DES QUESTIONS 2B (si pas encore générées)
     if (!queue || queue.questions.length === 0) {
       console.log('[ORCHESTRATOR] Generating BLOC 2B questions (API)');
-      const questions = await this.generateQuestions2B(currentCandidate, works, coreWorkAnswer);
       
-      // Validation sémantique des questions générées
-      const validationResult = await this.validateAndRetryQuestions2B(questions, works);
+      // Génération initiale
+      let questions = await this.generateQuestions2B(currentCandidate, works, coreWorkAnswer);
       
-      // Stocker les questions validées
-      candidateStore.setQuestionsForBlock(candidateId, blockNumber, validationResult.questions);
+      // Validation sémantique avec retry contrôlé (FAIL-FAST QUALITATIF)
+      const validatedQuestions = await this.validateAndRetryQuestions2B(
+        questions,
+        works,
+        currentCandidate,
+        coreWorkAnswer
+      );
+      
+      // Stocker UNIQUEMENT les questions validées
+      candidateStore.setQuestionsForBlock(candidateId, blockNumber, validatedQuestions);
       
       // Servir la première question
       return this.serveNextQuestion2B(candidateId, blockNumber);
@@ -980,12 +987,17 @@ Format de sortie OBLIGATOIRE :
   }
 
   /**
-   * Valide et retry les questions BLOC 2B si nécessaire
+   * Valide et retry les questions BLOC 2B si nécessaire (FAIL-FAST QUALITATIF)
+   * 
+   * RÈGLE ABSOLUE : Aucune question générique ne peut être servie.
+   * Si validation échoue → retry (max 1) → si échec → erreur assumée (pas de questions servies)
    */
   private async validateAndRetryQuestions2B(
     questions: string[],
-    works: string[]
-  ): Promise<{ questions: string[]; retried: boolean }> {
+    works: string[],
+    candidate: AxiomCandidate,
+    coreWork: string
+  ): Promise<string[]> {
     // Extraire motifs et traits pour validation
     const motifs: string[] = [];
     const traits: string[] = [];
@@ -1000,16 +1012,20 @@ Format de sortie OBLIGATOIRE :
     }
 
     // Validation motifs (besoin de 3 motifs, un par œuvre)
+    let motifsValid = true;
     if (motifs.length >= 3) {
       const motifsValidation = validateMotifsSpecificity(motifs[0], motifs[1], motifs[2]);
       if (!motifsValidation.valid) {
         console.error('[ORCHESTRATOR] [2B_VALIDATION_FAIL] reason=motifs', motifsValidation.error);
-        // Retry non implémenté pour la génération complète (complexe)
-        // On logue l'erreur mais on continue
+        motifsValid = false;
       }
+    } else {
+      console.error('[ORCHESTRATOR] [2B_VALIDATION_FAIL] reason=motifs - Less than 3 motifs found');
+      motifsValid = false;
     }
 
     // Validation traits (si on a des traits)
+    let traitsValid = true;
     if (traits.length >= 3) {
       // Grouper traits par œuvre (approximation)
       const traitsWork1 = traits.slice(0, Math.floor(traits.length / 3));
@@ -1019,12 +1035,204 @@ Format de sortie OBLIGATOIRE :
       const traitsValidation = validateTraitsSpecificity(traitsWork1, traitsWork2, traitsWork3);
       if (!traitsValidation.valid) {
         console.error('[ORCHESTRATOR] [2B_VALIDATION_FAIL] reason=traits', traitsValidation.error);
-        // Retry non implémenté pour la génération complète (complexe)
-        // On logue l'erreur mais on continue
+        traitsValid = false;
+      }
+    } else if (traits.length > 0) {
+      // Si on a des traits mais moins de 3, on considère que c'est valide (peut être normal selon nombre de personnages)
+      traitsValid = true;
+    }
+
+    // Si validation réussit → retourner questions
+    if (motifsValid && traitsValid) {
+      return questions;
+    }
+
+    // Si validation échoue → RETRY (max 1)
+    console.log('[ORCHESTRATOR] [2B_RETRY_TRIGGERED] retry=1');
+    
+    // Retry avec prompt renforcé
+    const retryQuestions = await this.generateQuestions2BWithRetry(candidate, works, coreWork, {
+      motifsFailed: !motifsValid,
+      traitsFailed: !traitsValid
+    });
+
+    // Re-valider après retry
+    const retryMotifs: string[] = [];
+    const retryTraits: string[] = [];
+    
+    for (const question of retryQuestions) {
+      if (question.includes('Qu\'est-ce qui t\'attire le PLUS dans')) {
+        retryMotifs.push(question);
+      } else if (question.includes('Chez') && question.includes('qu\'est-ce que tu apprécies')) {
+        retryTraits.push(question);
       }
     }
 
-    return { questions, retried: false };
+    let retryMotifsValid = true;
+    if (retryMotifs.length >= 3) {
+      const retryMotifsValidation = validateMotifsSpecificity(retryMotifs[0], retryMotifs[1], retryMotifs[2]);
+      if (!retryMotifsValidation.valid) {
+        console.error('[ORCHESTRATOR] [2B_VALIDATION_FAIL] fatal=true reason=motifs (after retry)', retryMotifsValidation.error);
+        retryMotifsValid = false;
+      }
+    } else {
+      console.error('[ORCHESTRATOR] [2B_VALIDATION_FAIL] fatal=true reason=motifs (after retry) - Less than 3 motifs found');
+      retryMotifsValid = false;
+    }
+
+    let retryTraitsValid = true;
+    if (retryTraits.length >= 3) {
+      const retryTraitsWork1 = retryTraits.slice(0, Math.floor(retryTraits.length / 3));
+      const retryTraitsWork2 = retryTraits.slice(Math.floor(retryTraits.length / 3), Math.floor(retryTraits.length * 2 / 3));
+      const retryTraitsWork3 = retryTraits.slice(Math.floor(retryTraits.length * 2 / 3));
+      
+      const retryTraitsValidation = validateTraitsSpecificity(retryTraitsWork1, retryTraitsWork2, retryTraitsWork3);
+      if (!retryTraitsValidation.valid) {
+        console.error('[ORCHESTRATOR] [2B_VALIDATION_FAIL] fatal=true reason=traits (after retry)', retryTraitsValidation.error);
+        retryTraitsValid = false;
+      }
+    }
+
+    // Si retry échoue aussi → ERREUR ASSUMÉE (pas de questions servies)
+    if (!retryMotifsValid || !retryTraitsValid) {
+      const failedReasons: string[] = [];
+      if (!retryMotifsValid) failedReasons.push('motifs');
+      if (!retryTraitsValid) failedReasons.push('traits');
+      
+      throw new Error(`BLOC 2B validation failed after retry. Reasons: ${failedReasons.join(', ')}. Cannot serve generic questions.`);
+    }
+
+    // Si retry réussit → retourner questions retry
+    return retryQuestions;
+  }
+
+  /**
+   * Génère les questions BLOC 2B avec prompt renforcé (retry)
+   */
+  private async generateQuestions2BWithRetry(
+    candidate: AxiomCandidate,
+    works: string[],
+    coreWork: string,
+    failedValidations: { motifsFailed: boolean; traitsFailed: boolean }
+  ): Promise<string[]> {
+    const messages = buildConversationHistoryForBlock2B(candidate);
+    const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
+
+    const failedReasons: string[] = [];
+    if (failedValidations.motifsFailed) failedReasons.push('motifs trop similaires entre œuvres');
+    if (failedValidations.traitsFailed) failedReasons.push('traits trop similaires entre personnages');
+
+    const completion = await callOpenAI({
+      messages: [
+        { role: 'system', content: FULL_AXIOM_PROMPT },
+        {
+          role: 'system',
+          content: `RÈGLE ABSOLUE AXIOM — BLOC 2B (RETRY - FORMAT STRICT) :
+
+La génération précédente a échoué la validation sémantique.
+Raisons : ${failedReasons.join(', ')}.
+
+Tu es en état BLOC_02 (BLOC 2B - Analyse projective).
+
+ŒUVRES DU CANDIDAT :
+- Œuvre #3 : ${works[2] || 'N/A'}
+- Œuvre #2 : ${works[1] || 'N/A'}
+- Œuvre #1 : ${works[0] || 'N/A'}
+- Œuvre noyau : ${coreWork}
+
+⚠️ RÈGLES ABSOLUES (NON NÉGOCIABLES) :
+
+1. AUCUNE question générique n'est autorisée.
+2. Chaque série/film a ses propres MOTIFS, générés par AXIOM.
+3. Chaque personnage a ses propres TRAITS, générés par AXIOM.
+4. Les propositions doivent être :
+   - spécifiques à l'œuvre ou au personnage,
+   - crédibles,
+   - distinctes entre elles.
+5. AXIOM n'utilise JAMAIS une liste standard réutilisable.
+
+⚠️ CRITIQUE — SPÉCIFICITÉ OBLIGATOIRE :
+
+- Les 5 propositions de motifs pour l'Œuvre #3 DOIVENT être DIFFÉRENTES de celles pour l'Œuvre #2, qui DOIVENT être DIFFÉRENTES de celles pour l'Œuvre #1.
+- Les traits pour le Personnage A de l'Œuvre #3 DOIVENT être DIFFÉRENTS des traits pour le Personnage B de l'Œuvre #3, qui DOIVENT être DIFFÉRENTS des traits pour le Personnage A de l'Œuvre #2.
+- Chaque œuvre a ses propres axes d'attraction UNIQUES.
+- Chaque personnage a ses propres traits UNIQUES, non recyclables.
+
+🟦 DÉROULÉ STRICT (POUR CHAQUE ŒUVRE, dans l'ordre #3 → #2 → #1) :
+
+ÉTAPE 1 — MOTIF PRINCIPAL :
+Pour chaque œuvre, génère la question : "Qu'est-ce qui t'attire le PLUS dans [NOM DE L'ŒUVRE] ?"
+Génère 5 propositions UNIQUES, spécifiques à cette œuvre.
+Ces propositions doivent représenter réellement l'œuvre (ascension, décor, ambiance, relations, rythme, morale, stratégie, quotidien, chaos, etc.).
+AXIOM choisit les axes pertinents, œuvre par œuvre.
+Format : A / B / C / D / E (1 lettre attendue)
+
+ÉTAPE 2 — PERSONNAGES PRÉFÉRÉS (1 à 3) :
+Pour chaque œuvre, génère la question : "Dans [NOM DE L'ŒUVRE], quels sont les 1 à 3 personnages qui te parlent le plus ?"
+Format : Question ouverte (pas de choix multiples).
+
+ÉTAPE 3 — TRAIT DOMINANT (PERSONNALISÉ À CHAQUE PERSONNAGE) :
+Pour CHAQUE personnage cité (1 à 3 par œuvre), génère la question : "Chez [NOM DU PERSONNAGE], qu'est-ce que tu apprécies le PLUS ?"
+Génère 5 TRAITS SPÉCIFIQUES À CE PERSONNAGE, qui :
+- correspondent à son rôle réel dans l'œuvre,
+- couvrent des dimensions différentes (émotionnelle, stratégique, relationnelle, morale, comportementale),
+- ne sont PAS recyclables pour un autre personnage.
+
+Format : A / B / C / D / E (1 seule réponse possible)
+
+ÉTAPE 4 — MICRO-RÉCAP ŒUVRE (factuel, 1-2 lignes) :
+Après motifs + personnages + traits pour une œuvre, génère un résumé factuel :
+"Sur [ŒUVRE], tu es surtout attiré par [motif choisi], et par des personnages que tu valorises pour [traits dominants observés]."
+
+Format de sortie OBLIGATOIRE :
+---QUESTION_SEPARATOR---
+[Question motif Œuvre #3]
+---QUESTION_SEPARATOR---
+[Question personnages Œuvre #3]
+---QUESTION_SEPARATOR---
+[Question traits Personnage 1 Œuvre #3] (si applicable)
+---QUESTION_SEPARATOR---
+[Question traits Personnage 2 Œuvre #3] (si applicable)
+---QUESTION_SEPARATOR---
+[Question traits Personnage 3 Œuvre #3] (si applicable)
+---QUESTION_SEPARATOR---
+[Micro-récap Œuvre #3]
+---QUESTION_SEPARATOR---
+[Question motif Œuvre #2]
+---QUESTION_SEPARATOR---
+[Question personnages Œuvre #2]
+---QUESTION_SEPARATOR---
+[Question traits Personnage 1 Œuvre #2] (si applicable)
+---QUESTION_SEPARATOR---
+[Question traits Personnage 2 Œuvre #2] (si applicable)
+---QUESTION_SEPARATOR---
+[Question traits Personnage 3 Œuvre #2] (si applicable)
+---QUESTION_SEPARATOR---
+[Micro-récap Œuvre #2]
+---QUESTION_SEPARATOR---
+[Question motif Œuvre #1]
+---QUESTION_SEPARATOR---
+[Question personnages Œuvre #1]
+---QUESTION_SEPARATOR---
+[Question traits Personnage 1 Œuvre #1] (si applicable)
+---QUESTION_SEPARATOR---
+[Question traits Personnage 2 Œuvre #1] (si applicable)
+---QUESTION_SEPARATOR---
+[Question traits Personnage 3 Œuvre #1] (si applicable)
+---QUESTION_SEPARATOR---
+[Micro-récap Œuvre #1]`
+        },
+        ...messages,
+      ],
+    });
+
+    // Parser les questions
+    const questions = completion
+      .split('---QUESTION_SEPARATOR---')
+      .map(q => q.trim())
+      .filter(q => q.length > 0);
+
+    return questions;
   }
 
   /**
