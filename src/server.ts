@@ -737,6 +737,73 @@ app.post("/axiom", async (req: Request, res: Response) => {
       
       if (result.step === BLOC_01) {
         responseState = "collecting";
+      } else if (result.step === BLOC_02) {
+        responseState = "collecting";
+      }
+
+      try {
+        const trackingRow = candidateToLiveTrackingRow(candidate);
+        await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+      } catch (error) {
+        console.error("Error updating live tracking:", error);
+      }
+
+      return res.status(200).json({
+        sessionId: candidate.candidateId,
+        currentBlock: candidate.session.currentBlock,
+        state: responseState,
+        response: result.response || '',
+        step: responseStep,
+        expectsAnswer: result.expectsAnswer,
+        autoContinue: result.autoContinue,
+      });
+    }
+
+    // PHASE 2A : Déléguer BLOC 2A à l'orchestrateur
+    if (candidate.session.ui?.step === BLOC_02 && candidate.session.currentBlock === 2) {
+      // Enregistrer le message utilisateur dans conversationHistory AVANT d'appeler l'orchestrateur
+      if (userMessageText) {
+        const candidateIdForUserMessage = candidate.candidateId;
+        candidateStore.appendUserMessage(candidateIdForUserMessage, userMessageText, {
+          block: 2,
+          step: BLOC_02,
+          kind: 'other',
+        });
+        // Recharger candidate après enregistrement
+        candidate = candidateStore.get(candidateIdForUserMessage);
+        if (!candidate) {
+          candidate = await candidateStore.getAsync(candidateIdForUserMessage);
+        }
+        if (!candidate) {
+          return res.status(500).json({
+            error: "INTERNAL_ERROR",
+            message: "Failed to store user message",
+          });
+        }
+      }
+      
+      const orchestrator = new BlockOrchestrator();
+      const result = await orchestrator.handleMessage(candidate, userMessageText, null);
+      
+      // Recharger le candidate AVANT le mapping pour avoir l'état à jour
+      const candidateIdAfterExecution = candidate.candidateId;
+      candidate = candidateStore.get(candidateIdAfterExecution);
+      if (!candidate) {
+        candidate = await candidateStore.getAsync(candidateIdAfterExecution);
+      }
+      if (!candidate) {
+        return res.status(500).json({
+          error: "INTERNAL_ERROR",
+          message: "Failed to get candidate",
+        });
+      }
+
+      // Mapper les états
+      let responseState: string = "collecting";
+      let responseStep = result.step;
+      
+      if (result.step === BLOC_01) {
+        responseState = "collecting";
         candidateStore.updateSession(candidate.candidateId, { state: "collecting", currentBlock: 1 });
       } else if (result.step === BLOC_02) {
         responseState = "collecting";

@@ -53,7 +53,17 @@ export class BlockOrchestrator {
     userMessage: string | null,
     event: string | null,
   ): Promise<OrchestratorResult> {
-    const blockNumber = 1; // BLOC 1 uniquement
+    // Déterminer le bloc en cours
+    const currentBlock = candidate.session.currentBlock || 1;
+    const currentStep = candidate.session.ui?.step || '';
+    
+    // Détecter BLOC 2A (première partie du BLOC 2)
+    if (currentBlock === 2 && (currentStep === BLOC_02 || currentStep === '')) {
+      return this.handleBlock2A(candidate, userMessage, event);
+    }
+    
+    // BLOC 1 (logique existante)
+    const blockNumber = 1;
 
     // Recharger candidate pour avoir l'état à jour
     const candidateId = candidate.candidateId;
@@ -263,6 +273,246 @@ Produis le MIROIR INTERPRÉTATIF ACTIF de fin de bloc, conforme au format strict
 3️⃣ Validation ouverte : "Dis-moi si ça te parle, ou s'il y a une nuance importante que je n'ai pas vue."
 
 Format strict : 3 sections séparées, pas de narration continue.`,
+        },
+        ...messages,
+      ],
+    });
+
+    return completion.trim();
+  }
+
+  // ============================================
+  // BLOC 2A — Gestion séquentielle adaptative
+  // ============================================
+  private async handleBlock2A(
+    candidate: AxiomCandidate,
+    userMessage: string | null,
+    event: string | null,
+  ): Promise<OrchestratorResult> {
+    const blockNumber = 2;
+    const candidateId = candidate.candidateId;
+
+    // Recharger candidate pour avoir l'état à jour
+    let currentCandidate = candidateStore.get(candidateId);
+    if (!currentCandidate) {
+      currentCandidate = await candidateStore.getAsync(candidateId);
+    }
+    if (!currentCandidate) {
+      throw new Error(`Candidate ${candidateId} not found`);
+    }
+
+    // Récupérer les réponses existantes du BLOC 2A
+    const answerMap = currentCandidate.answerMaps?.[blockNumber];
+    const answers = answerMap?.answers || {};
+    const answeredCount = Object.keys(answers).length;
+
+    // Cas 1 : Aucune réponse encore → Générer question 2A.1 (Médium)
+    if (answeredCount === 0) {
+      console.log('[ORCHESTRATOR] generate question 2A.1 - Médium (API)');
+      const question = await this.generateQuestion2A1(currentCandidate);
+      
+      // Enregistrer la question dans conversationHistory
+      candidateStore.appendAssistantMessage(candidateId, question, {
+        block: blockNumber,
+        step: BLOC_02,
+        kind: 'question',
+      });
+
+      // Mettre à jour UI state
+      candidateStore.updateUIState(candidateId, {
+        step: BLOC_02,
+        lastQuestion: question,
+        identityDone: true,
+      });
+
+      return {
+        response: question,
+        step: BLOC_02,
+        expectsAnswer: true,
+        autoContinue: false,
+      };
+    }
+
+    // Cas 2 : Réponse utilisateur reçue
+    if (userMessage) {
+      // Stocker la réponse
+      const questionIndex = answeredCount; // Index de la question qui vient d'être posée
+      candidateStore.storeAnswerForBlock(candidateId, blockNumber, questionIndex, userMessage);
+
+      // Recharger candidate après stockage
+      currentCandidate = candidateStore.get(candidateId);
+      if (!currentCandidate) {
+        currentCandidate = await candidateStore.getAsync(candidateId);
+      }
+      if (!currentCandidate) {
+        throw new Error(`Candidate ${candidateId} not found after storing answer`);
+      }
+
+      const updatedAnswerMap = currentCandidate.answerMaps?.[blockNumber];
+      const updatedAnswers = updatedAnswerMap?.answers || {};
+      const updatedAnsweredCount = Object.keys(updatedAnswers).length;
+
+      // Si 1 réponse → Générer question 2A.2 (adaptée)
+      if (updatedAnsweredCount === 1) {
+        console.log('[ORCHESTRATOR] generate question 2A.2 - Préférences adaptées (API)');
+        const mediumAnswer = updatedAnswers[0] || '';
+        const question = await this.generateQuestion2A2(currentCandidate, mediumAnswer);
+        
+        candidateStore.appendAssistantMessage(candidateId, question, {
+          block: blockNumber,
+          step: BLOC_02,
+          kind: 'question',
+        });
+
+        candidateStore.updateUIState(candidateId, {
+          step: BLOC_02,
+          lastQuestion: question,
+          identityDone: true,
+        });
+
+        return {
+          response: question,
+          step: BLOC_02,
+          expectsAnswer: true,
+          autoContinue: false,
+        };
+      }
+
+      // Si 2 réponses → Générer question 2A.3 (Œuvre noyau)
+      if (updatedAnsweredCount === 2) {
+        console.log('[ORCHESTRATOR] generate question 2A.3 - Œuvre noyau (API)');
+        const question = await this.generateQuestion2A3(currentCandidate, updatedAnswers);
+        
+        candidateStore.appendAssistantMessage(candidateId, question, {
+          block: blockNumber,
+          step: BLOC_02,
+          kind: 'question',
+        });
+
+        candidateStore.updateUIState(candidateId, {
+          step: BLOC_02,
+          lastQuestion: question,
+          identityDone: true,
+        });
+
+        return {
+          response: question,
+          step: BLOC_02,
+          expectsAnswer: true,
+          autoContinue: false,
+        };
+      }
+
+      // Si 3 réponses → Fin du BLOC 2A, transition vers BLOC 2B
+      if (updatedAnsweredCount === 3) {
+        console.log('[ORCHESTRATOR] BLOC 2A terminé, transition vers BLOC 2B');
+        candidateStore.markBlockComplete(candidateId, blockNumber);
+
+        // Mettre à jour UI state pour BLOC 2B (sans l'implémenter)
+        candidateStore.updateUIState(candidateId, {
+          step: BLOC_02, // Reste en BLOC_02 pour l'instant
+          lastQuestion: null,
+          identityDone: true,
+        });
+
+        return {
+          response: 'BLOC 2A terminé. Transition vers BLOC 2B (non implémenté).',
+          step: BLOC_02,
+          expectsAnswer: false,
+          autoContinue: false,
+        };
+      }
+    }
+
+    // Cas 3 : Pas de message utilisateur → Retourner la dernière question si disponible
+    const lastQuestion = currentCandidate.session.ui?.lastQuestion;
+    if (lastQuestion) {
+      return {
+        response: lastQuestion,
+        step: BLOC_02,
+        expectsAnswer: true,
+        autoContinue: false,
+      };
+    }
+
+    // Par défaut, générer la première question
+    return this.handleBlock2A(currentCandidate, null, null);
+  }
+
+  private async generateQuestion2A1(candidate: AxiomCandidate): Promise<string> {
+    const messages = buildConversationHistory(candidate);
+    const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
+
+    const completion = await callOpenAI({
+      messages: [
+        { role: 'system', content: FULL_AXIOM_PROMPT },
+        {
+          role: 'system',
+          content: `RÈGLE ABSOLUE AXIOM :
+Tu es en état BLOC_02 (BLOC 2A - Question 1).
+Génère UNE question simple demandant au candidat son médium préféré (Série ou Film).
+Format : Question à choix avec A. Série / B. Film sur lignes séparées.
+La question doit être claire et directe.`,
+        },
+        ...messages,
+      ],
+    });
+
+    return completion.trim();
+  }
+
+  private async generateQuestion2A2(candidate: AxiomCandidate, mediumAnswer: string): Promise<string> {
+    const messages = buildConversationHistory(candidate);
+    const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
+
+    // Déterminer le type de médium (Série ou Film)
+    const isSeries = mediumAnswer.toLowerCase().includes('série') || 
+                     mediumAnswer.toLowerCase().includes('serie') ||
+                     mediumAnswer.toLowerCase().includes('a.') ||
+                     mediumAnswer.toLowerCase().includes('a');
+
+    const mediumType = isSeries ? 'série' : 'film';
+
+    const completion = await callOpenAI({
+      messages: [
+        { role: 'system', content: FULL_AXIOM_PROMPT },
+        {
+          role: 'system',
+          content: `RÈGLE ABSOLUE AXIOM :
+Tu es en état BLOC_02 (BLOC 2A - Question 2).
+Le candidat a choisi : ${mediumType}.
+Génère UNE question adaptée demandant ses préférences en ${mediumType}s.
+La question doit être personnalisée selon le choix du candidat (séries ou films).
+Format : Question ouverte ou à choix multiples (A/B/C/D/E si choix).
+La question doit être pertinente pour explorer les préférences en ${mediumType}s.`,
+        },
+        ...messages,
+      ],
+    });
+
+    return completion.trim();
+  }
+
+  private async generateQuestion2A3(candidate: AxiomCandidate, answers: Record<number, string>): Promise<string> {
+    const messages = buildConversationHistory(candidate);
+    const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
+
+    const mediumAnswer = answers[0] || '';
+    const preferencesAnswer = answers[1] || '';
+
+    const completion = await callOpenAI({
+      messages: [
+        { role: 'system', content: FULL_AXIOM_PROMPT },
+        {
+          role: 'system',
+          content: `RÈGLE ABSOLUE AXIOM :
+Tu es en état BLOC_02 (BLOC 2A - Question 3).
+Le candidat a choisi : ${mediumAnswer}
+Ses préférences : ${preferencesAnswer}
+Génère UNE question demandant au candidat de choisir UNE œuvre centrale (noyau) parmi ses préférences.
+La question doit être claire et demander une œuvre spécifique (nom d'une série ou d'un film).
+Format : Question ouverte demandant le nom de l'œuvre.
+La question doit permettre d'identifier l'œuvre la plus significative pour le candidat.`,
         },
         ...messages,
       ],
