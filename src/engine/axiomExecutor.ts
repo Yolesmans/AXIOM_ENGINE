@@ -933,7 +933,11 @@ function deriveStateFromConversationHistory(candidate: AxiomCandidate): string {
   const lastAssistant = history.filter(m => m.role === 'assistant').pop();
   
   if (!lastAssistant) {
-    // Aucun message assistant → STEP_01_IDENTITY
+    // Aucun message assistant encore dans l'historique.
+    // Règle métier : si l'identité est complétée, on doit enchaîner vers la question tone.
+    if (candidate.identity?.completedAt) {
+      return STEP_02_TONE;
+    }
     return STEP_01_IDENTITY;
   }
   
@@ -1094,6 +1098,15 @@ export async function executeAxiom(
   
   // Dériver l'état depuis conversationHistory
   const derivedState = deriveStateFromConversationHistory(candidate);
+  
+  // Log de diagnostic temporaire
+  console.info("[AXIOM][DERIVE_STATE]", {
+    candidateId: candidate.candidateId,
+    identityDone: !!candidate.identity?.completedAt,
+    historyLen: (candidate.conversationHistory || []).length,
+    hasLastAssistant: !!(candidate.conversationHistory || []).slice().reverse().find(m => m.role === "assistant"),
+    derivedState,
+  });
   
   if (!ui) {
     // UI n'existe pas → Créer depuis l'historique
