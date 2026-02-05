@@ -1,7 +1,7 @@
 import type { AxiomCandidate } from '../types/candidate.js';
 import { candidateStore } from '../store/sessionStore.js';
 import { callOpenAI } from './openaiClient.js';
-import { BLOC_01, BLOC_02 } from '../engine/axiomExecutor.js';
+import { BLOC_01, BLOC_02, BLOC_03 } from '../engine/axiomExecutor.js';
 // getFullAxiomPrompt n'est pas exporté, on doit le reconstruire
 import { PROMPT_AXIOM_ENGINE, PROMPT_AXIOM_PROFIL } from '../engine/prompts.js';
 import {
@@ -216,7 +216,11 @@ export class BlockOrchestrator {
           kind: 'mirror',
         });
 
-        // Mettre à jour UI state
+        // Mettre à jour session (currentBlock) ET UI state
+        candidateStore.updateSession(currentCandidate.candidateId, {
+          state: "collecting",
+          currentBlock: 2,
+        });
         candidateStore.updateUIState(currentCandidate.candidateId, {
           step: BLOC_02,
           lastQuestion: null,
@@ -484,25 +488,6 @@ Format strict : 3 sections séparées, pas de narration continue.`,
         };
       }
 
-      // Si 3 réponses → Fin du BLOC 2A, transition vers BLOC 2B
-      if (updatedAnsweredCount === 3) {
-        console.log('[ORCHESTRATOR] BLOC 2A terminé, transition vers BLOC 2B');
-        candidateStore.markBlockComplete(candidateId, blockNumber);
-
-        // Mettre à jour UI state pour BLOC 2B (sans l'implémenter)
-        candidateStore.updateUIState(candidateId, {
-          step: BLOC_02, // Reste en BLOC_02 pour l'instant
-          lastQuestion: null,
-          identityDone: true,
-        });
-
-        return {
-          response: 'BLOC 2A terminé. Transition vers BLOC 2B (non implémenté).',
-          step: BLOC_02,
-          expectsAnswer: false,
-          autoContinue: false,
-        };
-      }
     }
 
     // Cas 3 : Pas de message utilisateur → Retourner la dernière question si disponible
@@ -824,20 +809,24 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
         // Enregistrer le miroir dans conversationHistory
         candidateStore.appendAssistantMessage(candidateId, mirror, {
           block: blockNumber,
-          step: BLOC_02,
+          step: BLOC_03,
           kind: 'mirror',
         });
 
-        // Mettre à jour UI state
+        // Mettre à jour session (currentBlock) ET UI state
+        candidateStore.updateSession(candidateId, {
+          state: "collecting",
+          currentBlock: 3,
+        });
         candidateStore.updateUIState(candidateId, {
-          step: BLOC_02,
+          step: BLOC_03,
           lastQuestion: null,
           identityDone: true,
         });
 
         return {
           response: mirror,
-          step: BLOC_02,
+          step: BLOC_03,
           expectsAnswer: false,
           autoContinue: false,
         };
@@ -921,6 +910,174 @@ Format : Question ouverte (pas de choix multiples).
 
 ÉTAPE 3 — TRAIT DOMINANT (PERSONNALISÉ À CHAQUE PERSONNAGE) :
 Pour CHAQUE personnage cité (1 à 3 par œuvre), génère la question : "Chez [NOM DU PERSONNAGE], qu'est-ce que tu apprécies le PLUS ?"
+Génère 5 TRAITS SPÉCIFIQUES À CE PERSONNAGE, qui :
+- correspondent à son rôle réel dans l'œuvre,
+- couvrent des dimensions différentes (émotionnelle, stratégique, relationnelle, morale, comportementale),
+- ne sont PAS recyclables pour un autre personnage.
+
+⚠️ CRITIQUE : Les traits pour le Personnage A de l'Œuvre #3 doivent être DIFFÉRENTS des traits pour le Personnage B de l'Œuvre #3, qui doivent être DIFFÉRENTS des traits pour le Personnage A de l'Œuvre #2.
+Chaque personnage a ses propres traits uniques.
+
+Format : A / B / C / D / E (1 seule réponse possible)
+
+ÉTAPE 4 — MICRO-RÉCAP ŒUVRE (factuel, 1-2 lignes) :
+Après motifs + personnages + traits pour une œuvre, génère un résumé factuel :
+"Sur [ŒUVRE], tu es surtout attiré par [motif choisi], et par des personnages que tu valorises pour [traits dominants observés]."
+
+Format de sortie OBLIGATOIRE :
+---QUESTION_SEPARATOR---
+[Question motif Œuvre #3]
+---QUESTION_SEPARATOR---
+[Question personnages Œuvre #3]
+---QUESTION_SEPARATOR---
+[Question traits Personnage 1 Œuvre #3] (si applicable)
+---QUESTION_SEPARATOR---
+[Question traits Personnage 2 Œuvre #3] (si applicable)
+---QUESTION_SEPARATOR---
+[Question traits Personnage 3 Œuvre #3] (si applicable)
+---QUESTION_SEPARATOR---
+[Micro-récap Œuvre #3]
+---QUESTION_SEPARATOR---
+[Question motif Œuvre #2]
+---QUESTION_SEPARATOR---
+[Question personnages Œuvre #2]
+---QUESTION_SEPARATOR---
+[Question traits Personnage 1 Œuvre #2] (si applicable)
+---QUESTION_SEPARATOR---
+[Question traits Personnage 2 Œuvre #2] (si applicable)
+---QUESTION_SEPARATOR---
+[Question traits Personnage 3 Œuvre #2] (si applicable)
+---QUESTION_SEPARATOR---
+[Micro-récap Œuvre #2]
+---QUESTION_SEPARATOR---
+[Question motif Œuvre #1]
+---QUESTION_SEPARATOR---
+[Question personnages Œuvre #1]
+---QUESTION_SEPARATOR---
+[Question traits Personnage 1 Œuvre #1] (si applicable)
+---QUESTION_SEPARATOR---
+[Question traits Personnage 2 Œuvre #1] (si applicable)
+---QUESTION_SEPARATOR---
+[Question traits Personnage 3 Œuvre #1] (si applicable)
+---QUESTION_SEPARATOR---
+[Micro-récap Œuvre #1]`
+        },
+        ...messages,
+      ],
+    });
+
+    // Parser les questions
+    let questions = completion
+      .split('---QUESTION_SEPARATOR---')
+      .map(q => q.trim())
+      .filter(q => q.length > 0);
+
+    // Validation réconciliation personnages (C6)
+    const characterValidation = this.validateCharacterNames(questions);
+    if (!characterValidation.valid) {
+      console.warn('[ORCHESTRATOR] Character names validation failed, retry with reinforced prompt');
+      // Retry avec prompt renforcé mentionnant explicitement réconciliation
+      questions = await this.generateQuestions2BWithReconciliation(candidate, works, coreWork);
+    }
+
+    return questions;
+  }
+
+  /**
+   * Valide que les noms de personnages sont canoniques (pas de descriptions)
+   */
+  private validateCharacterNames(questions: string[]): ValidationResult {
+    // Détecter descriptions au lieu de noms canoniques
+    const descriptions = ['le chef', 'son associée', 'celui qui', 'l\'autre frère', 'l\'autre', 'celui', 'celle'];
+    const hasDescriptions = questions.some(q => 
+      descriptions.some(desc => q.toLowerCase().includes(desc))
+    );
+    
+    if (hasDescriptions) {
+      return {
+        valid: false,
+        error: 'Descriptions détectées au lieu de noms canoniques'
+      };
+    }
+    
+    return { valid: true };
+  }
+
+  /**
+   * Génère les questions BLOC 2B avec prompt renforcé pour réconciliation personnages
+   */
+  private async generateQuestions2BWithReconciliation(
+    candidate: AxiomCandidate,
+    works: string[],
+    coreWork: string
+  ): Promise<string[]> {
+    const messages = buildConversationHistoryForBlock2B(candidate);
+    const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
+
+    const completion = await callOpenAI({
+      messages: [
+        { role: 'system', content: FULL_AXIOM_PROMPT },
+        {
+          role: 'system',
+          content: `RÈGLE ABSOLUE AXIOM — BLOC 2B (CRITIQUE — RETRY RÉCONCILIATION) :
+
+Tu es en état BLOC_02 (BLOC 2B - Analyse projective).
+
+ŒUVRES DU CANDIDAT :
+- Œuvre #3 : ${works[2] || 'N/A'}
+- Œuvre #2 : ${works[1] || 'N/A'}
+- Œuvre #1 : ${works[0] || 'N/A'}
+- Œuvre noyau : ${coreWork}
+
+⚠️ RÈGLE CRITIQUE — RÉCONCILIATION PERSONNAGES (NON NÉGOCIABLE) :
+
+Si le candidat décrit un personnage (ex: "le chef", "son associée", "celui qui ne ment jamais"),
+AXIOM DOIT :
+- identifier sans ambiguïté le personnage correspondant dans l'œuvre,
+- remplacer la description par le NOM CANONIQUE officiel du personnage,
+- utiliser exclusivement ce nom canonique dans toutes les questions suivantes.
+
+EXEMPLES :
+- "le chef" → "Tommy Shelby" (Peaky Blinders)
+- "son associée" → "Alicia Florrick" (The Good Wife)
+- "celui qui ne ment jamais" → "Ned Stark" (Game of Thrones)
+
+⚠️ INTERDICTIONS :
+- JAMAIS utiliser de descriptions floues dans les questions
+- JAMAIS utiliser "l'autre", "celui", "celle" sans nom
+- TOUJOURS utiliser le nom complet et officiel du personnage
+
+⚠️ RÈGLES ABSOLUES (NON NÉGOCIABLES) :
+
+1. AUCUNE question générique n'est autorisée.
+2. Chaque série/film a ses propres MOTIFS, générés par AXIOM.
+3. Chaque personnage a ses propres TRAITS, générés par AXIOM.
+4. Les propositions doivent être :
+   - spécifiques à l'œuvre ou au personnage,
+   - crédibles,
+   - distinctes entre elles.
+5. AXIOM n'utilise JAMAIS une liste standard réutilisable.
+6. 1 choix obligatoire par question (sauf "je passe" explicite).
+
+🟦 DÉROULÉ STRICT (POUR CHAQUE ŒUVRE, dans l'ordre #3 → #2 → #1) :
+
+ÉTAPE 1 — MOTIF PRINCIPAL :
+Pour chaque œuvre, génère la question : "Qu'est-ce qui t'attire le PLUS dans [NOM DE L'ŒUVRE] ?"
+Génère 5 propositions UNIQUES, spécifiques à cette œuvre.
+Ces propositions doivent représenter réellement l'œuvre (ascension, décor, ambiance, relations, rythme, morale, stratégie, quotidien, chaos, etc.).
+AXIOM choisit les axes pertinents, œuvre par œuvre.
+Format : A / B / C / D / E (1 lettre attendue)
+
+⚠️ CRITIQUE : Les 5 propositions pour l'Œuvre #3 doivent être DIFFÉRENTES des propositions pour l'Œuvre #2, qui doivent être DIFFÉRENTES de celles pour l'Œuvre #1.
+Chaque œuvre a ses propres axes d'attraction.
+
+ÉTAPE 2 — PERSONNAGES PRÉFÉRÉS (1 à 3) :
+Pour chaque œuvre, génère la question : "Dans [NOM DE L'ŒUVRE], quels sont les 1 à 3 personnages qui te parlent le plus ?"
+Format : Question ouverte (pas de choix multiples).
+
+ÉTAPE 3 — TRAIT DOMINANT (PERSONNALISÉ À CHAQUE PERSONNAGE) :
+Pour CHAQUE personnage cité (1 à 3 par œuvre), génère la question : "Chez [NOM DU PERSONNAGE], qu'est-ce que tu apprécies le PLUS ?"
+⚠️ IMPORTANT : Utilise TOUJOURS le NOM CANONIQUE du personnage, jamais une description.
 Génère 5 TRAITS SPÉCIFIQUES À CE PERSONNAGE, qui :
 - correspondent à son rôle réel dans l'œuvre,
 - couvrent des dimensions différentes (émotionnelle, stratégique, relationnelle, morale, comportementale),
