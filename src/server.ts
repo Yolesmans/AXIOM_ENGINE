@@ -24,7 +24,7 @@ import {
   STEP_99_MATCHING,
   DONE_MATCHING,
 } from "./engine/axiomExecutor.js";
-import { BlockOrchestrator } from "./services/blockOrchestrator.js";
+import { BlockOrchestrator, type OrchestratorResult } from "./services/blockOrchestrator.js";
 import { z } from "zod";
 import { IdentitySchema } from "./validators/identity.js";
 import { candidateToLiveTrackingRow, googleSheetsLiveTrackingService } from "./services/googleSheetsService.js";
@@ -692,6 +692,20 @@ app.post("/axiom", async (req: Request, res: Response) => {
     // Gérer les messages utilisateur
     const userMessageText = userMessage || null;
     
+    // Garde : Si step === STEP_03_BLOC1 ET userMessage présent ET event !== START_BLOC_1
+    // → Ignorer le message ou retourner erreur explicite
+    if (candidate.session.ui?.step === STEP_03_BLOC1 && userMessageText && event !== 'START_BLOC_1') {
+      return res.status(200).json({
+        sessionId: candidate.candidateId,
+        currentBlock: candidate.session.currentBlock,
+        state: "wait_start_button",
+        response: "Pour commencer le profil, clique sur le bouton 'Je commence mon profil' ci-dessus.",
+        step: STEP_03_BLOC1,
+        expectsAnswer: false,
+        autoContinue: false,
+      });
+    }
+    
     // PHASE 2 : Déléguer BLOC 1 à l'orchestrateur
     if (candidate.session.ui?.step === BLOC_01 || candidate.session.currentBlock === 1) {
       // Enregistrer le message utilisateur dans conversationHistory AVANT d'appeler l'orchestrateur
@@ -783,7 +797,29 @@ app.post("/axiom", async (req: Request, res: Response) => {
       }
       
       const orchestrator = new BlockOrchestrator();
-      const result = await orchestrator.handleMessage(candidate, userMessageText, null);
+      let result: OrchestratorResult;
+      
+      try {
+        result = await orchestrator.handleMessage(candidate, userMessageText, null);
+      } catch (error) {
+        // Gérer spécifiquement erreur validation BLOC 2B
+        if (error instanceof Error && error.message.includes('BLOC 2B validation failed')) {
+          console.error('[ORCHESTRATOR] [2B_VALIDATION_FAIL] fatal=true', error.message);
+          
+          return res.status(200).json({
+            sessionId: candidate.candidateId,
+            currentBlock: candidate.session.currentBlock,
+            state: "collecting",
+            response: "Une erreur technique est survenue lors de la génération des questions. Veuillez réessayer ou contacter le support.",
+            step: BLOC_02,
+            expectsAnswer: false,
+            autoContinue: false,
+          });
+        }
+        
+        // Re-throw autres erreurs
+        throw error;
+      }
       
       // Recharger le candidate AVANT le mapping pour avoir l'état à jour
       const candidateIdAfterExecution = candidate.candidateId;
