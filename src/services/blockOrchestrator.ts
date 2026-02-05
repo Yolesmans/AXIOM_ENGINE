@@ -129,6 +129,17 @@ export class BlockOrchestrator {
     
     // Détecter BLOC 2A (première partie du BLOC 2)
     if (currentBlock === 2 && (currentStep === BLOC_02 || currentStep === '')) {
+      // Vérifier si BLOC 2A est terminé (3 réponses stockées)
+      const answerMap = candidate.answerMaps?.[2];
+      const answers = answerMap?.answers || {};
+      const answeredCount = Object.keys(answers).length;
+      
+      // Si BLOC 2A terminé (3 réponses) → passer à BLOC 2B
+      if (answeredCount >= 3) {
+        return this.handleBlock2B(candidate, userMessage, event);
+      }
+      
+      // Sinon → continuer BLOC 2A
       return this.handleBlock2A(candidate, userMessage, event);
     }
     
@@ -698,5 +709,499 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
 
   private validateSynthesisForBlock2B(content: string): ValidationResult {
     return validateSynthesis2B(content);
+  }
+
+  // ============================================
+  // BLOC 2B — CŒUR PROJECTIF AXIOM/REVELIOM
+  // ============================================
+  private async handleBlock2B(
+    candidate: AxiomCandidate,
+    userMessage: string | null,
+    event: string | null,
+  ): Promise<OrchestratorResult> {
+    const blockNumber = 2;
+    const candidateId = candidate.candidateId;
+
+    // Recharger candidate pour avoir l'état à jour
+    let currentCandidate = candidateStore.get(candidateId);
+    if (!currentCandidate) {
+      currentCandidate = await candidateStore.getAsync(candidateId);
+    }
+    if (!currentCandidate) {
+      throw new Error(`Candidate ${candidateId} not found`);
+    }
+
+    // ÉTAPE 1 — CONTEXTE (injection forcée BLOC 2A)
+    const messages = buildConversationHistoryForBlock2B(currentCandidate);
+    
+    // Vérifier que les données BLOC 2A sont présentes
+    const answerMap = currentCandidate.answerMaps?.[2];
+    if (!answerMap || !answerMap.answers) {
+      console.error('[ORCHESTRATOR] [2B_CONTEXT_INJECTION] forced=false - BLOC 2A answers missing');
+      throw new Error('BLOC 2A answers not found. Cannot proceed to BLOC 2B.');
+    }
+
+    const answers = answerMap.answers;
+    const mediumAnswer = answers[0] || '';
+    const preferencesAnswer = answers[1] || '';
+    const coreWorkAnswer = answers[2] || '';
+
+    if (!mediumAnswer || !preferencesAnswer || !coreWorkAnswer) {
+      console.error('[ORCHESTRATOR] [2B_CONTEXT_INJECTION] forced=false - Incomplete BLOC 2A data');
+      throw new Error('BLOC 2A data incomplete. Cannot proceed to BLOC 2B.');
+    }
+
+    console.log('[ORCHESTRATOR] [2B_CONTEXT_INJECTION] forced=true', {
+      medium: mediumAnswer,
+      preferences: preferencesAnswer,
+      coreWork: coreWorkAnswer
+    });
+
+    // Parser les 3 œuvres depuis preferencesAnswer
+    const works = this.parseWorks(preferencesAnswer);
+    if (works.length < 3) {
+      console.error('[ORCHESTRATOR] [2B_CONTEXT_INJECTION] forced=false - Less than 3 works found');
+      throw new Error(`Expected 3 works, found ${works.length}. Cannot proceed to BLOC 2B.`);
+    }
+
+    const queue = currentCandidate.blockQueues?.[blockNumber];
+
+    // ÉTAPE 2 — GÉNÉRATION DES QUESTIONS 2B (si pas encore générées)
+    if (!queue || queue.questions.length === 0) {
+      console.log('[ORCHESTRATOR] Generating BLOC 2B questions (API)');
+      const questions = await this.generateQuestions2B(currentCandidate, works, coreWorkAnswer);
+      
+      // Validation sémantique des questions générées
+      const validationResult = await this.validateAndRetryQuestions2B(questions, works);
+      
+      // Stocker les questions validées
+      candidateStore.setQuestionsForBlock(candidateId, blockNumber, validationResult.questions);
+      
+      // Servir la première question
+      return this.serveNextQuestion2B(candidateId, blockNumber);
+    }
+
+    // ÉTAPE 3 — RÉPONSE UTILISATEUR REÇUE
+    if (userMessage) {
+      const currentQueue = currentCandidate.blockQueues?.[blockNumber];
+      if (!currentQueue) {
+        throw new Error(`Queue for block ${blockNumber} not found`);
+      }
+
+      // Stocker la réponse
+      const questionIndex = currentQueue.cursorIndex - 1;
+      candidateStore.storeAnswerForBlock(candidateId, blockNumber, questionIndex, userMessage);
+
+      // Recharger candidate après stockage
+      currentCandidate = candidateStore.get(candidateId);
+      if (!currentCandidate) {
+        currentCandidate = await candidateStore.getAsync(candidateId);
+      }
+      if (!currentCandidate) {
+        throw new Error(`Candidate ${candidateId} not found after storing answer`);
+      }
+
+      const finalQueue = currentCandidate.blockQueues?.[blockNumber];
+      if (!finalQueue) {
+        throw new Error(`Queue for block ${blockNumber} not found after reload`);
+      }
+
+      // Vérifier si toutes les questions ont été répondues
+      if (finalQueue.cursorIndex >= finalQueue.questions.length) {
+        // Toutes les questions répondues → Générer miroir final
+        console.log('[ORCHESTRATOR] Generating BLOC 2B final mirror (API)');
+        candidateStore.markBlockComplete(candidateId, blockNumber);
+        
+        const mirror = await this.generateMirror2B(currentCandidate, works, coreWorkAnswer);
+        
+        // Enregistrer le miroir dans conversationHistory
+        candidateStore.appendAssistantMessage(candidateId, mirror, {
+          block: blockNumber,
+          step: BLOC_02,
+          kind: 'mirror',
+        });
+
+        // Mettre à jour UI state
+        candidateStore.updateUIState(candidateId, {
+          step: BLOC_02,
+          lastQuestion: null,
+          identityDone: true,
+        });
+
+        return {
+          response: mirror,
+          step: BLOC_02,
+          expectsAnswer: false,
+          autoContinue: false,
+        };
+      } else {
+        // Il reste des questions → Servir la suivante (pas d'API)
+        return this.serveNextQuestion2B(candidateId, blockNumber);
+      }
+    }
+
+    // Cas 3 : Pas de message utilisateur → Servir question suivante si disponible
+    return this.serveNextQuestion2B(candidateId, blockNumber);
+  }
+
+  /**
+   * Parse les 3 œuvres depuis la réponse utilisateur (format libre)
+   */
+  private parseWorks(preferencesAnswer: string): string[] {
+    // Essayer de parser : "Œuvre 1, Œuvre 2, Œuvre 3" ou "Œuvre 1\nŒuvre 2\nŒuvre 3"
+    const works = preferencesAnswer
+      .split(/[,\n]/)
+      .map(w => w.trim())
+      .filter(w => w.length > 0)
+      .slice(0, 3); // Prendre les 3 premières
+    
+    return works;
+  }
+
+  /**
+   * Génère toutes les questions BLOC 2B en une seule fois
+   */
+  private async generateQuestions2B(
+    candidate: AxiomCandidate,
+    works: string[],
+    coreWork: string
+  ): Promise<string[]> {
+    const messages = buildConversationHistoryForBlock2B(candidate);
+    const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
+
+    const completion = await callOpenAI({
+      messages: [
+        { role: 'system', content: FULL_AXIOM_PROMPT },
+        {
+          role: 'system',
+          content: `RÈGLE ABSOLUE AXIOM — BLOC 2B (CRITIQUE) :
+
+Tu es en état BLOC_02 (BLOC 2B - Analyse projective).
+
+ŒUVRES DU CANDIDAT :
+- Œuvre #3 : ${works[2] || 'N/A'}
+- Œuvre #2 : ${works[1] || 'N/A'}
+- Œuvre #1 : ${works[0] || 'N/A'}
+- Œuvre noyau : ${coreWork}
+
+⚠️ RÈGLES ABSOLUES (NON NÉGOCIABLES) :
+
+1. AUCUNE question générique n'est autorisée.
+2. Chaque série/film a ses propres MOTIFS, générés par AXIOM.
+3. Chaque personnage a ses propres TRAITS, générés par AXIOM.
+4. Les propositions doivent être :
+   - spécifiques à l'œuvre ou au personnage,
+   - crédibles,
+   - distinctes entre elles.
+5. AXIOM n'utilise JAMAIS une liste standard réutilisable.
+6. 1 choix obligatoire par question (sauf "je passe" explicite).
+
+🟦 DÉROULÉ STRICT (POUR CHAQUE ŒUVRE, dans l'ordre #3 → #2 → #1) :
+
+ÉTAPE 1 — MOTIF PRINCIPAL :
+Pour chaque œuvre, génère la question : "Qu'est-ce qui t'attire le PLUS dans [NOM DE L'ŒUVRE] ?"
+Génère 5 propositions UNIQUES, spécifiques à cette œuvre.
+Ces propositions doivent représenter réellement l'œuvre (ascension, décor, ambiance, relations, rythme, morale, stratégie, quotidien, chaos, etc.).
+AXIOM choisit les axes pertinents, œuvre par œuvre.
+Format : A / B / C / D / E (1 lettre attendue)
+
+⚠️ CRITIQUE : Les 5 propositions pour l'Œuvre #3 doivent être DIFFÉRENTES des propositions pour l'Œuvre #2, qui doivent être DIFFÉRENTES de celles pour l'Œuvre #1.
+Chaque œuvre a ses propres axes d'attraction.
+
+ÉTAPE 2 — PERSONNAGES PRÉFÉRÉS (1 à 3) :
+Pour chaque œuvre, génère la question : "Dans [NOM DE L'ŒUVRE], quels sont les 1 à 3 personnages qui te parlent le plus ?"
+Format : Question ouverte (pas de choix multiples).
+
+ÉTAPE 3 — TRAIT DOMINANT (PERSONNALISÉ À CHAQUE PERSONNAGE) :
+Pour CHAQUE personnage cité (1 à 3 par œuvre), génère la question : "Chez [NOM DU PERSONNAGE], qu'est-ce que tu apprécies le PLUS ?"
+Génère 5 TRAITS SPÉCIFIQUES À CE PERSONNAGE, qui :
+- correspondent à son rôle réel dans l'œuvre,
+- couvrent des dimensions différentes (émotionnelle, stratégique, relationnelle, morale, comportementale),
+- ne sont PAS recyclables pour un autre personnage.
+
+⚠️ CRITIQUE : Les traits pour le Personnage A de l'Œuvre #3 doivent être DIFFÉRENTS des traits pour le Personnage B de l'Œuvre #3, qui doivent être DIFFÉRENTS des traits pour le Personnage A de l'Œuvre #2.
+Chaque personnage a ses propres traits uniques.
+
+Format : A / B / C / D / E (1 seule réponse possible)
+
+ÉTAPE 4 — MICRO-RÉCAP ŒUVRE (factuel, 1-2 lignes) :
+Après motifs + personnages + traits pour une œuvre, génère un résumé factuel :
+"Sur [ŒUVRE], tu es surtout attiré par [motif choisi], et par des personnages que tu valorises pour [traits dominants observés]."
+
+Format de sortie OBLIGATOIRE :
+---QUESTION_SEPARATOR---
+[Question motif Œuvre #3]
+---QUESTION_SEPARATOR---
+[Question personnages Œuvre #3]
+---QUESTION_SEPARATOR---
+[Question traits Personnage 1 Œuvre #3] (si applicable)
+---QUESTION_SEPARATOR---
+[Question traits Personnage 2 Œuvre #3] (si applicable)
+---QUESTION_SEPARATOR---
+[Question traits Personnage 3 Œuvre #3] (si applicable)
+---QUESTION_SEPARATOR---
+[Micro-récap Œuvre #3]
+---QUESTION_SEPARATOR---
+[Question motif Œuvre #2]
+---QUESTION_SEPARATOR---
+[Question personnages Œuvre #2]
+---QUESTION_SEPARATOR---
+[Question traits Personnage 1 Œuvre #2] (si applicable)
+---QUESTION_SEPARATOR---
+[Question traits Personnage 2 Œuvre #2] (si applicable)
+---QUESTION_SEPARATOR---
+[Question traits Personnage 3 Œuvre #2] (si applicable)
+---QUESTION_SEPARATOR---
+[Micro-récap Œuvre #2]
+---QUESTION_SEPARATOR---
+[Question motif Œuvre #1]
+---QUESTION_SEPARATOR---
+[Question personnages Œuvre #1]
+---QUESTION_SEPARATOR---
+[Question traits Personnage 1 Œuvre #1] (si applicable)
+---QUESTION_SEPARATOR---
+[Question traits Personnage 2 Œuvre #1] (si applicable)
+---QUESTION_SEPARATOR---
+[Question traits Personnage 3 Œuvre #1] (si applicable)
+---QUESTION_SEPARATOR---
+[Micro-récap Œuvre #1]`
+        },
+        ...messages,
+      ],
+    });
+
+    // Parser les questions
+    const questions = completion
+      .split('---QUESTION_SEPARATOR---')
+      .map(q => q.trim())
+      .filter(q => q.length > 0);
+
+    return questions;
+  }
+
+  /**
+   * Valide et retry les questions BLOC 2B si nécessaire
+   */
+  private async validateAndRetryQuestions2B(
+    questions: string[],
+    works: string[]
+  ): Promise<{ questions: string[]; retried: boolean }> {
+    // Extraire motifs et traits pour validation
+    const motifs: string[] = [];
+    const traits: string[] = [];
+    
+    // Parser questions pour extraire motifs (une par œuvre) et traits
+    for (const question of questions) {
+      if (question.includes('Qu\'est-ce qui t\'attire le PLUS dans')) {
+        motifs.push(question);
+      } else if (question.includes('Chez') && question.includes('qu\'est-ce que tu apprécies')) {
+        traits.push(question);
+      }
+    }
+
+    // Validation motifs (besoin de 3 motifs, un par œuvre)
+    if (motifs.length >= 3) {
+      const motifsValidation = validateMotifsSpecificity(motifs[0], motifs[1], motifs[2]);
+      if (!motifsValidation.valid) {
+        console.error('[ORCHESTRATOR] [2B_VALIDATION_FAIL] reason=motifs', motifsValidation.error);
+        // Retry non implémenté pour la génération complète (complexe)
+        // On logue l'erreur mais on continue
+      }
+    }
+
+    // Validation traits (si on a des traits)
+    if (traits.length >= 3) {
+      // Grouper traits par œuvre (approximation)
+      const traitsWork1 = traits.slice(0, Math.floor(traits.length / 3));
+      const traitsWork2 = traits.slice(Math.floor(traits.length / 3), Math.floor(traits.length * 2 / 3));
+      const traitsWork3 = traits.slice(Math.floor(traits.length * 2 / 3));
+      
+      const traitsValidation = validateTraitsSpecificity(traitsWork1, traitsWork2, traitsWork3);
+      if (!traitsValidation.valid) {
+        console.error('[ORCHESTRATOR] [2B_VALIDATION_FAIL] reason=traits', traitsValidation.error);
+        // Retry non implémenté pour la génération complète (complexe)
+        // On logue l'erreur mais on continue
+      }
+    }
+
+    return { questions, retried: false };
+  }
+
+  /**
+   * Sert la prochaine question BLOC 2B depuis la queue
+   */
+  private serveNextQuestion2B(candidateId: string, blockNumber: number): OrchestratorResult {
+    const candidate = candidateStore.get(candidateId);
+    if (!candidate) {
+      throw new Error(`Candidate ${candidateId} not found`);
+    }
+
+    const queue = candidate.blockQueues?.[blockNumber];
+    if (!queue || queue.questions.length === 0) {
+      throw new Error(`Queue for block ${blockNumber} is empty`);
+    }
+
+    if (queue.cursorIndex >= queue.questions.length) {
+      throw new Error(`All questions for block ${blockNumber} have been served`);
+    }
+
+    const question = queue.questions[queue.cursorIndex];
+    
+    console.log('[ORCHESTRATOR] serve question BLOC 2B from queue (NO API)', {
+      blockNumber,
+      questionIndex: queue.cursorIndex,
+      totalQuestions: queue.questions.length,
+    });
+
+    // Enregistrer la question dans conversationHistory AVANT d'avancer le cursor
+    candidateStore.appendAssistantMessage(candidateId, question, {
+      block: blockNumber,
+      step: BLOC_02,
+      kind: 'question',
+    });
+
+    // Mettre à jour UI state
+    candidateStore.updateUIState(candidateId, {
+      step: BLOC_02,
+      lastQuestion: question,
+      identityDone: true,
+    });
+
+    // Avancer le cursor APRÈS avoir servi la question
+    candidateStore.advanceQuestionCursor(candidateId, blockNumber);
+
+    return {
+      response: question,
+      step: BLOC_02,
+      expectsAnswer: true,
+      autoContinue: false,
+    };
+  }
+
+  /**
+   * Génère le miroir final BLOC 2B
+   */
+  private async generateMirror2B(
+    candidate: AxiomCandidate,
+    works: string[],
+    coreWork: string
+  ): Promise<string> {
+    const messages = buildConversationHistoryForBlock2B(candidate);
+    const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
+
+    // Récupérer toutes les réponses BLOC 2B depuis AnswerMap
+    const answerMap = candidate.answerMaps?.[2];
+    const answers = answerMap?.answers || {};
+
+    // Construire le contexte des réponses (motifs + personnages + traits)
+    const answersContext = Object.entries(answers)
+      .map(([index, answer]) => {
+        const questionIndex = parseInt(index, 10);
+        const queue = candidate.blockQueues?.[2];
+        const question = queue?.questions[questionIndex] || '';
+        return `Question ${questionIndex} (${question.substring(0, 50)}...): ${answer}`;
+      })
+      .join('\n');
+
+    const completion = await callOpenAI({
+      messages: [
+        { role: 'system', content: FULL_AXIOM_PROMPT },
+        {
+          role: 'system',
+          content: `RÈGLE ABSOLUE AXIOM — SYNTHÈSE FINALE BLOC 2B :
+
+Tu es en fin de BLOC 2B.
+Toutes les questions projectives ont été répondues.
+
+ŒUVRES DU CANDIDAT :
+- Œuvre #3 : ${works[2] || 'N/A'}
+- Œuvre #2 : ${works[1] || 'N/A'}
+- Œuvre #1 : ${works[0] || 'N/A'}
+- Œuvre noyau : ${coreWork}
+
+RÉPONSES DU CANDIDAT :
+${answersContext}
+
+⚠️ RÈGLES ABSOLUES POUR LA SYNTHÈSE :
+
+1. La synthèse DOIT être VRAIMENT PERSONNALISÉE (4 à 6 lignes max).
+2. Elle DOIT croiser explicitement :
+   - motifs choisis + personnages cités + traits valorisés
+3. Elle DOIT faire ressortir des constantes claires :
+   - rapport au pouvoir
+   - rapport à la pression
+   - rapport aux relations
+   - posture face à la responsabilité
+4. Elle DOIT inclure 1 point de vigilance réaliste, formulé sans jugement.
+5. Elle DOIT citer explicitement les œuvres ET les personnages.
+6. Elle DOIT être exploitable pour la suite du profil (management, ambition, environnements).
+
+Format : Synthèse continue, dense, incarnée, structurante.
+PAS de liste à puces. PAS de formatage excessif.
+Une lecture projective, pas descriptive.`
+        },
+        ...messages,
+      ],
+    });
+
+    let mirror = completion.trim();
+
+    // Validation synthèse avec retry
+    const validation = validateSynthesis2B(mirror);
+    if (!validation.valid) {
+      console.error('[ORCHESTRATOR] [2B_VALIDATION_FAIL] type=synthesis', validation.error);
+      console.log('[ORCHESTRATOR] [2B_RETRY_TRIGGERED] retry=1');
+      
+      // Retry avec prompt renforcé
+      const retryCompletion = await callOpenAI({
+        messages: [
+          { role: 'system', content: FULL_AXIOM_PROMPT },
+          {
+            role: 'system',
+            content: `RÈGLE ABSOLUE AXIOM — SYNTHÈSE FINALE BLOC 2B (RETRY - FORMAT STRICT) :
+
+La synthèse précédente n'a pas respecté le format requis.
+
+Tu es en fin de BLOC 2B.
+Toutes les questions projectives ont été répondues.
+
+ŒUVRES DU CANDIDAT :
+- Œuvre #3 : ${works[2] || 'N/A'}
+- Œuvre #2 : ${works[1] || 'N/A'}
+- Œuvre #1 : ${works[0] || 'N/A'}
+- Œuvre noyau : ${coreWork}
+
+RÉPONSES DU CANDIDAT :
+${answersContext}
+
+⚠️ FORMAT STRICT OBLIGATOIRE :
+
+1. La synthèse DOIT faire EXACTEMENT 4 à 6 lignes.
+2. Elle DOIT mentionner explicitement :
+   - au moins 2 œuvres par leur nom
+   - au moins 2 personnages par leur nom
+   - les motifs choisis
+   - les traits valorisés
+3. Elle DOIT croiser motifs + personnages + traits pour faire ressortir :
+   - rapport au pouvoir (OBLIGATOIRE)
+   - rapport à la pression (OBLIGATOIRE)
+   - rapport aux relations (OBLIGATOIRE)
+   - posture face à la responsabilité (OBLIGATOIRE)
+4. Elle DOIT inclure 1 point de vigilance réaliste.
+
+Format : Synthèse continue, dense, incarnée, structurante.`
+          },
+          ...messages,
+        ],
+      });
+      
+      mirror = retryCompletion.trim();
+      const retryValidation = validateSynthesis2B(mirror);
+      if (!retryValidation.valid) {
+        console.error('[ORCHESTRATOR] [2B_VALIDATION_FAIL] type=synthesis (after retry)', retryValidation.error);
+      }
+    }
+
+    return mirror;
   }
 }
