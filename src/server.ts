@@ -24,6 +24,7 @@ import {
   STEP_99_MATCHING,
   DONE_MATCHING,
 } from "./engine/axiomExecutor.js";
+import { BlockOrchestrator } from "./services/blockOrchestrator.js";
 import { z } from "zod";
 import { IdentitySchema } from "./validators/identity.js";
 import { candidateToLiveTrackingRow, googleSheetsLiveTrackingService } from "./services/googleSheetsService.js";
@@ -648,13 +649,13 @@ app.post("/axiom", async (req: Request, res: Response) => {
 
     // PARTIE 5 — Gérer les events techniques (boutons)
     if (event === "START_BLOC_1") {
-      // START_BLOC_1 est un event, pas un auto-enchaînement
-      const candidateIdBeforeReload = candidate.candidateId;
-      const result = await executeAxiom({ candidate, userMessage: null, event: "START_BLOC_1" });
+      // START_BLOC_1 → Déléguer à l'orchestrateur pour BLOC 1
+      const orchestrator = new BlockOrchestrator();
+      const result = await orchestrator.handleMessage(candidate, null, "START_BLOC_1");
 
-      candidate = candidateStore.get(candidateIdBeforeReload);
+      candidate = candidateStore.get(candidate.candidateId);
       if (!candidate) {
-        candidate = await candidateStore.getAsync(candidateIdBeforeReload);
+        candidate = await candidateStore.getAsync(candidate.candidateId);
       }
       if (!candidate) {
         return res.status(500).json({
@@ -689,6 +690,81 @@ app.post("/axiom", async (req: Request, res: Response) => {
 
     // Gérer les messages utilisateur
     const userMessageText = userMessage || null;
+    
+    // PHASE 2 : Déléguer BLOC 1 à l'orchestrateur
+    if (candidate.session.ui?.step === BLOC_01 || candidate.session.currentBlock === 1) {
+      // Enregistrer le message utilisateur dans conversationHistory AVANT d'appeler l'orchestrateur
+      if (userMessageText) {
+        const candidateIdForUserMessage = candidate.candidateId;
+        candidateStore.appendUserMessage(candidateIdForUserMessage, userMessageText, {
+          block: 1,
+          step: BLOC_01,
+          kind: 'other',
+        });
+        // Recharger candidate après enregistrement
+        candidate = candidateStore.get(candidateIdForUserMessage);
+        if (!candidate) {
+          candidate = await candidateStore.getAsync(candidateIdForUserMessage);
+        }
+        if (!candidate) {
+          return res.status(500).json({
+            error: "INTERNAL_ERROR",
+            message: "Failed to store user message",
+          });
+        }
+      }
+      
+      const orchestrator = new BlockOrchestrator();
+      const result = await orchestrator.handleMessage(candidate, userMessageText, null);
+      
+      // Recharger le candidate AVANT le mapping pour avoir l'état à jour
+      const candidateIdAfterExecution = candidate.candidateId;
+      candidate = candidateStore.get(candidateIdAfterExecution);
+      if (!candidate) {
+        candidate = await candidateStore.getAsync(candidateIdAfterExecution);
+      }
+      if (!candidate) {
+        return res.status(500).json({
+          error: "INTERNAL_ERROR",
+          message: "Failed to get candidate",
+        });
+      }
+
+      // Mapper les états
+      let responseState: string = "collecting";
+      let responseStep = result.step;
+      
+      if (result.step === BLOC_01) {
+        responseState = "collecting";
+        candidateStore.updateSession(candidate.candidateId, { state: "collecting", currentBlock: 1 });
+      } else if (result.step === BLOC_02) {
+        responseState = "collecting";
+        candidateStore.updateSession(candidate.candidateId, { state: "collecting", currentBlock: 2 });
+      }
+
+      // Mise à jour Google Sheet
+      if (candidate.identity.completedAt) {
+        try {
+          const trackingRow = candidateToLiveTrackingRow(candidate);
+          await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+        } catch (error) {
+          console.error("[axiom] live tracking error:", error);
+        }
+      }
+
+      const response = result.response || '';
+      const finalResponse = response || "Une erreur technique est survenue. Recharge la page.";
+
+      return res.status(200).json({
+        sessionId: candidate.candidateId,
+        currentBlock: candidate.session.currentBlock,
+        state: responseState,
+        response: finalResponse,
+        step: responseStep,
+        expectsAnswer: response ? result.expectsAnswer : false,
+        autoContinue: result.autoContinue,
+      });
+    }
     
     // Enregistrer le message utilisateur dans conversationHistory AVANT d'appeler le moteur
     if (userMessageText) {
