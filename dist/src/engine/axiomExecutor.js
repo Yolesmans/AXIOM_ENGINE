@@ -888,6 +888,51 @@ function deriveStepFromHistory(candidate) {
     // Règle 5 : Sinon → nouveau candidat, identité
     return STEP_01_IDENTITY;
 }
+// ============================================
+// HELPER : Dérivation d'état depuis conversationHistory (source de vérité n°1)
+// ============================================
+function deriveStateFromConversationHistory(candidate) {
+    const history = candidate.conversationHistory || [];
+    // Si aucun historique → STEP_01_IDENTITY
+    if (history.length === 0) {
+        return STEP_01_IDENTITY;
+    }
+    // Trouver le dernier message assistant
+    const lastAssistant = history.filter(m => m.role === 'assistant').pop();
+    if (!lastAssistant) {
+        // Aucun message assistant → STEP_01_IDENTITY
+        return STEP_01_IDENTITY;
+    }
+    // Dériver selon le type de message
+    if (lastAssistant.kind === 'tone') {
+        // Question tone posée → Vérifier si réponse utilisateur existe
+        const toneResponse = history.find(m => m.role === 'user' &&
+            m.createdAt > lastAssistant.createdAt);
+        if (toneResponse) {
+            // Réponse tone donnée → Préambule ou STEP_03_BLOC1
+            const preambule = history.find(m => m.kind === 'preambule');
+            if (preambule) {
+                return STEP_03_BLOC1; // Préambule généré → Attente bouton
+            }
+            return STEP_03_PREAMBULE; // Préambule pas encore généré
+        }
+        return STEP_02_TONE; // Question tone posée, réponse attendue
+    }
+    if (lastAssistant.kind === 'preambule') {
+        // Préambule généré → STEP_03_BLOC1 (attente bouton)
+        return STEP_03_BLOC1;
+    }
+    if (lastAssistant.kind === 'question') {
+        // Question bloc posée → Vérifier dans quel bloc
+        const lastUserMessage = history.filter(m => m.role === 'user').pop();
+        if (lastUserMessage?.block) {
+            return `BLOC_${String(lastUserMessage.block).padStart(2, '0')}`;
+        }
+        return BLOC_01;
+    }
+    // Fallback : utiliser deriveStepFromHistory existant
+    return deriveStepFromHistory(candidate);
+}
 export const BLOC_02 = 'BLOC_02';
 export const BLOC_03 = 'BLOC_03';
 export const BLOC_04 = 'BLOC_04';
@@ -966,16 +1011,22 @@ function logTransition(sessionId, stateIn, stateOut, inputType) {
 // EXÉCUTEUR PRINCIPAL (FSM STRICTE)
 // ============================================
 export async function executeAxiom(input) {
-    const { candidate, userMessage, event } = input;
-    // PRIORITÉ A3 : INIT ÉTAT avec dérivation depuis l'historique
-    // INTERDICTION : Ne jamais fallback vers STEP_02_TONE sans analyser l'historique
+    const { candidate: inputCandidate, userMessage, event } = input;
+    let candidate = inputCandidate;
+    // PRIORITÉ A3 : INIT ÉTAT avec dérivation depuis conversationHistory (source de vérité n°1)
+    // Synchronisation automatique FSM ← Historique
     let ui = candidate.session.ui;
+    // Dériver l'état depuis conversationHistory
+    const derivedState = deriveStateFromConversationHistory(candidate);
     if (!ui) {
-        // Dériver l'état depuis l'historique
-        const derivedStep = deriveStepFromHistory(candidate);
+        // UI n'existe pas → Créer depuis l'historique
         ui = {
-            step: derivedStep,
-            lastQuestion: null,
+            step: derivedState,
+            lastQuestion: (() => {
+                const history = candidate.conversationHistory || [];
+                const lastAssistant = history.filter(m => m.role === 'assistant').pop();
+                return lastAssistant?.content || null;
+            })(),
             identityDone: !!candidate.identity.completedAt,
         };
         // Persister immédiatement l'état dérivé
@@ -984,9 +1035,30 @@ export async function executeAxiom(input) {
         const updatedCandidate = candidateStore.get(candidate.candidateId);
         if (updatedCandidate && updatedCandidate.session.ui) {
             ui = updatedCandidate.session.ui;
+            candidate = updatedCandidate;
         }
     }
-    let currentState = ui.step;
+    else {
+        // UI existe → Vérifier si synchronisée avec l'historique
+        if (ui.step !== derivedState) {
+            // Désynchronisation détectée → Synchroniser
+            const lastAssistant = (candidate.conversationHistory || []).filter(m => m.role === 'assistant').pop();
+            candidateStore.updateUIState(candidate.candidateId, {
+                step: derivedState,
+                lastQuestion: lastAssistant?.content || ui.lastQuestion,
+                tutoiement: ui.tutoiement || undefined,
+                identityDone: ui.identityDone || !!candidate.identity.completedAt,
+            });
+            // Recharger le candidate
+            const updatedCandidate = candidateStore.get(candidate.candidateId);
+            if (updatedCandidate && updatedCandidate.session.ui) {
+                ui = updatedCandidate.session.ui;
+                candidate = updatedCandidate;
+            }
+        }
+    }
+    // UTILISER L'ÉTAT DÉRIVÉ (pas ui.step directement comme garde bloquante)
+    let currentState = derivedState;
     const stateIn = currentState;
     // ============================================
     // STEP_01_IDENTITY
@@ -1231,7 +1303,10 @@ AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
     // ============================================
     // STEP_03_BLOC1 (wait_start_button)
     // ============================================
-    if (currentState === STEP_03_BLOC1) {
+    // Vérifier si préambule existe dans l'historique (source de vérité n°1)
+    const preambuleInHistory = candidate.conversationHistory?.find(m => m.kind === 'preambule');
+    const canStartBloc1 = currentState === STEP_03_BLOC1 || preambuleInHistory !== undefined;
+    if (canStartBloc1) {
         // PARTIE 5 — Bouton "Je commence mon profil"
         if (event === 'START_BLOC_1') {
             // Mettre à jour l'état UI vers BLOC_01
@@ -1338,10 +1413,11 @@ Toute sortie hors règles = invalide.`,
             };
         }
         // Si message texte reçu → ignorer (on attend le bouton)
-        logTransition(candidate.candidateId, stateIn, currentState, 'message');
+        // MAIS : Si préambule existe dans l'historique, on est bien en STEP_03_BLOC1
+        logTransition(candidate.candidateId, stateIn, STEP_03_BLOC1, 'message');
         return {
             response: '',
-            step: "PREAMBULE_DONE",
+            step: STEP_03_BLOC1,
             lastQuestion: null,
             expectsAnswer: false,
             autoContinue: false,
