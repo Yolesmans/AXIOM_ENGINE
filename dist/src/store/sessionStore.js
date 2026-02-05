@@ -94,6 +94,7 @@ class CandidateStore {
                 lastActivityAt: now,
             },
             answers: [],
+            conversationHistory: [],
             blockSummaries: {},
         };
         this.candidates.set(candidateId, candidate);
@@ -277,6 +278,45 @@ class CandidateStore {
         this.candidates.set(candidateId, updated);
         this.persistCandidate(candidateId);
         return updated;
+    }
+    appendConversationMessage(candidateId, message) {
+        const candidate = this.candidates.get(candidateId);
+        if (!candidate) {
+            return undefined;
+        }
+        const updated = {
+            ...candidate,
+            conversationHistory: [...(candidate.conversationHistory || []), message],
+            session: {
+                ...candidate.session,
+                lastActivityAt: new Date(),
+            },
+        };
+        this.candidates.set(candidateId, updated);
+        this.persistCandidate(candidateId);
+        return updated;
+    }
+    appendUserMessage(candidateId, content, meta) {
+        const message = {
+            role: 'user',
+            content,
+            createdAt: new Date().toISOString(),
+            block: meta?.block,
+            step: meta?.step,
+            kind: meta?.kind || 'other',
+        };
+        return this.appendConversationMessage(candidateId, message);
+    }
+    appendAssistantMessage(candidateId, content, meta) {
+        const message = {
+            role: 'assistant',
+            content,
+            createdAt: new Date().toISOString(),
+            block: meta?.block,
+            step: meta?.step,
+            kind: meta?.kind || 'other',
+        };
+        return this.appendConversationMessage(candidateId, message);
     }
 }
 export const candidateStore = new CandidateStore();

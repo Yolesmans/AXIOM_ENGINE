@@ -1,5 +1,6 @@
 import type { AxiomState } from './session.js';
 import type { AnswerRecord } from './answer.js';
+import type { ConversationMessage } from './conversation.js';
 
 export interface CandidateIdentity {
   firstName: string;
@@ -32,6 +33,7 @@ export interface AxiomCandidate {
 
   // DONNÉES PRIVÉES - JAMAIS EXPOSÉES
   answers: AnswerRecord[];
+  conversationHistory: ConversationMessage[];
   blockSummaries: Record<string, unknown>;
   finalProfile?: Record<string, unknown>;
   finalProfileText?: string;

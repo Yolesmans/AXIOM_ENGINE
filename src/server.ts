@@ -371,6 +371,12 @@ app.post("/axiom", async (req: Request, res: Response) => {
         candidate = candidateStore.create(sessionId, tenantId);
       }
 
+      // Enregistrer le message utilisateur (identité) dans conversationHistory
+      candidateStore.appendUserMessage(candidate.candidateId, messageText, {
+        step: STEP_01_IDENTITY,
+        kind: 'other',
+      });
+
       candidate = candidateStore.updateIdentity(candidate.candidateId, {
         firstName: identityValidation.data.firstName,
         lastName: identityValidation.data.lastName,
@@ -485,6 +491,12 @@ app.post("/axiom", async (req: Request, res: Response) => {
             details: identityValidation.error.flatten(),
           });
         }
+
+        // Enregistrer le message utilisateur (identité) dans conversationHistory
+        candidateStore.appendUserMessage(candidate.candidateId, `Prénom: ${identityValidation.data.firstName}\nNom: ${identityValidation.data.lastName}\nEmail: ${identityValidation.data.email}`, {
+          step: STEP_01_IDENTITY,
+          kind: 'other',
+        });
 
         candidate = candidateStore.updateIdentity(candidate.candidateId, {
           firstName: identityValidation.data.firstName,
@@ -677,10 +689,36 @@ app.post("/axiom", async (req: Request, res: Response) => {
 
     // Gérer les messages utilisateur
     const userMessageText = userMessage || null;
+    
+    // Enregistrer le message utilisateur dans conversationHistory AVANT d'appeler le moteur
+    if (userMessageText) {
+      const candidateIdForUserMessage = candidate.candidateId;
+      candidateStore.appendUserMessage(candidateIdForUserMessage, userMessageText, {
+        block: candidate.session.currentBlock,
+        step: candidate.session.ui?.step,
+        kind: 'other',
+      });
+      // Recharger candidate après enregistrement
+      candidate = candidateStore.get(candidateIdForUserMessage);
+      if (!candidate) {
+        candidate = await candidateStore.getAsync(candidateIdForUserMessage);
+      }
+      if (!candidate) {
+        return res.status(500).json({
+          error: "INTERNAL_ERROR",
+          message: "Failed to store user message",
+        });
+      }
+    }
+    
     const result = await executeWithAutoContinue(candidate, userMessageText);
 
     // Recharger le candidate AVANT le mapping pour avoir l'état à jour
-    candidate = candidateStore.get(candidate.candidateId);
+    const candidateIdAfterExecution = candidate.candidateId;
+    candidate = candidateStore.get(candidateIdAfterExecution);
+    if (!candidate) {
+      candidate = await candidateStore.getAsync(candidateIdAfterExecution);
+    }
     if (!candidate) {
       return res.status(500).json({
         error: "INTERNAL_ERROR",

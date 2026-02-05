@@ -834,6 +834,36 @@ export const STEP_03_BLOC1 = 'STEP_03_BLOC1'; // wait_start_button
 export const PREAMBULE_DONE = 'PREAMBULE_DONE';
 export const BLOC_01 = 'BLOC_01';
 // ============================================
+// HELPER : Construction historique conversationnel pour OpenAI
+// ============================================
+const MAX_CONV_MESSAGES = 40;
+function buildConversationHistory(candidate) {
+    const messages = [];
+    // Utiliser conversationHistory si disponible
+    if (candidate.conversationHistory && candidate.conversationHistory.length > 0) {
+        const history = candidate.conversationHistory;
+        // Prendre les N derniers messages (cap à MAX_CONV_MESSAGES)
+        const recentHistory = history.slice(-MAX_CONV_MESSAGES);
+        recentHistory.forEach((msg) => {
+            messages.push({
+                role: msg.role,
+                content: msg.content,
+            });
+        });
+        return messages;
+    }
+    // Fallback sur answers (rétrocompatibilité)
+    if (candidate.answers && candidate.answers.length > 0) {
+        candidate.answers.forEach((answer) => {
+            messages.push({
+                role: 'user',
+                content: answer.message,
+            });
+        });
+    }
+    return messages;
+}
+// ============================================
 // HELPER : Dérivation d'état depuis l'historique
 // ============================================
 // PRIORITÉ A : Empêcher les retours en arrière
@@ -1018,6 +1048,13 @@ export async function executeAxiom(input) {
                 'Promis : je ne te juge pas. Je veux juste comprendre comment tu fonctionnes.\n\n' +
                 'On commence tranquille.\n' +
                 'Dis-moi : tu préfères qu\'on se tutoie ou qu\'on se vouvoie pour cette discussion ?';
+            // Enregistrer la réponse assistant
+            if (toneQuestion) {
+                candidateStore.appendAssistantMessage(candidate.candidateId, toneQuestion, {
+                    step: currentState,
+                    kind: 'tone',
+                });
+            }
             logTransition(candidate.candidateId, stateIn, currentState, 'message');
             return {
                 response: toneQuestion,
@@ -1033,6 +1070,13 @@ export async function executeAxiom(input) {
             // Indécidable → répéter
             const toneQuestion = 'On commence tranquille.\n' +
                 'Dis-moi : tu préfères qu\'on se tutoie ou qu\'on se vouvoie pour cette discussion ?';
+            // Enregistrer la réponse assistant
+            if (toneQuestion) {
+                candidateStore.appendAssistantMessage(candidate.candidateId, toneQuestion, {
+                    step: currentState,
+                    kind: 'tone',
+                });
+            }
             logTransition(candidate.candidateId, stateIn, currentState, 'message');
             return {
                 response: toneQuestion,
@@ -1071,6 +1115,7 @@ export async function executeAxiom(input) {
     if (currentState === STEP_03_PREAMBULE) {
         // Charger et exécuter le préambule STRICTEMENT
         let aiText = null;
+        const messages = buildConversationHistory(candidate);
         try {
             const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
             const completion = await callOpenAI({
@@ -1085,6 +1130,7 @@ Tu NE POSES PAS de question.
 Tu affiches uniquement le préambule, mot pour mot selon les instructions.
 AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
                     },
+                    ...messages,
                 ],
             });
             if (typeof completion === 'string' && completion.trim()) {
@@ -1110,6 +1156,7 @@ Tu NE POSES PAS de question.
 Tu affiches uniquement le préambule, mot pour mot selon les instructions.
 AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
                         },
+                        ...messages,
                     ],
                 });
                 if (typeof completion === 'string' && completion.trim()) {
@@ -1165,6 +1212,13 @@ AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
             tutoiement: ui.tutoiement || undefined,
             identityDone: true,
         });
+        // Enregistrer la réponse assistant (préambule)
+        if (aiText) {
+            candidateStore.appendAssistantMessage(candidate.candidateId, aiText, {
+                step: STEP_03_BLOC1,
+                kind: 'preambule',
+            });
+        }
         logTransition(candidate.candidateId, stateIn, currentState, 'message');
         return {
             response: aiText || '',
@@ -1196,10 +1250,7 @@ AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
             }
             // Appeler OpenAI EXACTEMENT comme dans la section "BLOCS 1 à 10" avec userMessage = null
             const blocNumber = 1;
-            const messages = [];
-            updatedCandidate.answers.forEach((answer) => {
-                messages.push({ role: 'user', content: answer.message });
-            });
+            const messages = buildConversationHistory(updatedCandidate);
             let aiText = null;
             try {
                 const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
@@ -1302,11 +1353,9 @@ Toute sortie hors règles = invalide.`,
     const blocStates = [BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10];
     if (blocStates.includes(currentState)) {
         const blocNumber = blocStates.indexOf(currentState) + 1;
-        // Construire l'historique
-        const messages = [];
-        candidate.answers.forEach((answer) => {
-            messages.push({ role: 'user', content: answer.message });
-        });
+        // Construire l'historique depuis conversationHistory
+        const messages = buildConversationHistory(candidate);
+        // Ajouter le message utilisateur actuel s'il existe (sera stocké après)
         if (userMessage) {
             messages.push({ role: 'user', content: userMessage });
         }
@@ -1389,7 +1438,7 @@ Toute sortie hors règles = invalide.`,
         if (expectsAnswer) {
             lastQuestion = aiText;
         }
-        // Stocker la réponse si message utilisateur
+        // Stocker la réponse utilisateur
         if (userMessage) {
             const answerRecord = {
                 block: blocNumber,
@@ -1397,6 +1446,12 @@ Toute sortie hors règles = invalide.`,
                 createdAt: new Date().toISOString(),
             };
             candidateStore.addAnswer(candidate.candidateId, answerRecord);
+            // AUSSI stocker dans conversationHistory
+            candidateStore.appendUserMessage(candidate.candidateId, userMessage, {
+                block: blocNumber,
+                step: currentState,
+                kind: 'other',
+            });
         }
         // Déterminer l'état suivant
         let nextState = currentState;
@@ -1416,11 +1471,27 @@ Toute sortie hors règles = invalide.`,
             tutoiement: ui.tutoiement || undefined,
             identityDone: true,
         });
+        // Enregistrer la réponse assistant APRÈS avoir déterminé nextState
+        if (aiText) {
+            candidateStore.appendAssistantMessage(candidate.candidateId, aiText, {
+                block: blocNumber,
+                step: nextState,
+                kind: expectsAnswer ? 'question' : 'mirror',
+            });
+        }
         logTransition(candidate.candidateId, stateIn, nextState, userMessage ? 'message' : 'event');
         // Si fin du bloc 10 → transition automatique
         if (nextState === STEP_99_MATCH_READY) {
+            const finalResponse = (aiText || '') + '\n\nProfil terminé. Quand tu es prêt, génère ton matching.';
+            // Enregistrer la réponse assistant finale
+            if (finalResponse) {
+                candidateStore.appendAssistantMessage(candidate.candidateId, finalResponse, {
+                    step: nextState,
+                    kind: 'other',
+                });
+            }
             return {
-                response: (aiText || '') + '\n\nProfil terminé. Quand tu es prêt, génère ton matching.',
+                response: finalResponse,
                 step: nextState,
                 lastQuestion: null,
                 expectsAnswer: false,
@@ -1472,10 +1543,7 @@ Toute sortie hors règles = invalide.`,
         let aiText = null;
         try {
             const MATCHING_PROMPT = getMatchingPrompt();
-            const messages = [];
-            candidate.answers.forEach((answer) => {
-                messages.push({ role: 'user', content: answer.message });
-            });
+            const messages = buildConversationHistory(candidate);
             // Ajouter la synthèse finale si disponible
             if (candidate.finalProfileText) {
                 messages.push({ role: 'system', content: `SYNTHÈSE FINALE AXIOM:\n${candidate.finalProfileText}` });
@@ -1497,10 +1565,7 @@ Toute sortie hors règles = invalide.`,
         if (!aiText) {
             try {
                 const MATCHING_PROMPT = getMatchingPrompt();
-                const messages = [];
-                candidate.answers.forEach((answer) => {
-                    messages.push({ role: 'user', content: answer.message });
-                });
+                const messages = buildConversationHistory(candidate);
                 if (candidate.finalProfileText) {
                     messages.push({ role: 'system', content: `SYNTHÈSE FINALE AXIOM:\n${candidate.finalProfileText}` });
                 }
@@ -1530,6 +1595,13 @@ Toute sortie hors règles = invalide.`,
             tutoiement: ui.tutoiement || undefined,
             identityDone: true,
         });
+        // Enregistrer la réponse assistant (matching)
+        if (aiText) {
+            candidateStore.appendAssistantMessage(candidate.candidateId, aiText, {
+                step: currentState,
+                kind: 'matching',
+            });
+        }
         logTransition(candidate.candidateId, stateIn, currentState, 'message');
         return {
             response: aiText || '',

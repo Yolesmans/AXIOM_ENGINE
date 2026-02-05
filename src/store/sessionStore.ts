@@ -2,6 +2,7 @@ import type { AxiomCandidate, CandidateIdentity } from '../types/candidate.js';
 import type { AxiomState } from '../types/session.js';
 import type { AnswerRecord } from '../types/answer.js';
 import type { MatchingResult } from '../types/matching.js';
+import type { ConversationMessage, ConversationMessageKind } from '../types/conversation.js';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -111,6 +112,7 @@ class CandidateStore {
         lastActivityAt: now,
       },
       answers: [],
+      conversationHistory: [],
       blockSummaries: {},
     };
 
@@ -352,6 +354,69 @@ class CandidateStore {
     this.candidates.set(candidateId, updated);
     this.persistCandidate(candidateId);
     return updated;
+  }
+
+  appendConversationMessage(
+    candidateId: string,
+    message: ConversationMessage,
+  ): AxiomCandidate | undefined {
+    const candidate = this.candidates.get(candidateId);
+    if (!candidate) {
+      return undefined;
+    }
+
+    const updated: AxiomCandidate = {
+      ...candidate,
+      conversationHistory: [...(candidate.conversationHistory || []), message],
+      session: {
+        ...candidate.session,
+        lastActivityAt: new Date(),
+      },
+    };
+
+    this.candidates.set(candidateId, updated);
+    this.persistCandidate(candidateId);
+    return updated;
+  }
+
+  appendUserMessage(
+    candidateId: string,
+    content: string,
+    meta?: {
+      block?: number;
+      step?: string;
+      kind?: ConversationMessageKind;
+    },
+  ): AxiomCandidate | undefined {
+    const message: ConversationMessage = {
+      role: 'user',
+      content,
+      createdAt: new Date().toISOString(),
+      block: meta?.block,
+      step: meta?.step,
+      kind: meta?.kind || 'other',
+    };
+    return this.appendConversationMessage(candidateId, message);
+  }
+
+  appendAssistantMessage(
+    candidateId: string,
+    content: string,
+    meta?: {
+      block?: number;
+      step?: string;
+      kind?: ConversationMessageKind;
+    },
+  ): AxiomCandidate | undefined {
+    const message: ConversationMessage = {
+      role: 'assistant',
+      content,
+      createdAt: new Date().toISOString(),
+      block: meta?.block,
+      step: meta?.step,
+      kind: meta?.kind || 'other',
+    };
+    return this.appendConversationMessage(candidateId, message);
   }
 }
 
