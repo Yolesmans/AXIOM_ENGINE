@@ -30,6 +30,9 @@ import { IdentitySchema } from "./validators/identity.js";
 import { candidateToLiveTrackingRow, googleSheetsLiveTrackingService } from "./services/googleSheetsService.js";
 import type { AnswerRecord } from "./types/answer.js";
 import type { AxiomCandidate } from "./types/candidate.js";
+import { callOpenAIStream } from "./services/openaiClient.js";
+import { parseMirrorSections } from "./services/parseMirrorSections.js";
+import { validateMirrorREVELIOM } from "./services/validateMirrorReveliom.js";
 
 console.log("BOOT SERVER START");
 
@@ -966,6 +969,62 @@ app.post("/axiom", async (req: Request, res: Response) => {
       expectsAnswer: false,
       autoContinue: false,
     });
+  }
+});
+
+// POST /axiom/stream — SSE hybrid streaming (mirrors, final profile, matching only)
+app.post("/axiom/stream", async (req: Request, res: Response) => {
+  // Headers SSE obligatoires
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+
+  try {
+    const parsed = AxiomBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.write(`event: error\n`);
+      res.write(`data: ${JSON.stringify({ error: "BAD_REQUEST", details: parsed.error.flatten() })}\n\n`);
+      res.end();
+      return;
+    }
+
+    const {
+      tenantId,
+      posteId,
+      sessionId: providedSessionId,
+      identity: providedIdentity,
+      message: userMessage,
+      event,
+    } = parsed.data;
+
+    const sessionId = (req.headers["x-session-id"] as string) || providedSessionId;
+    if (!sessionId) {
+      res.write(`event: error\n`);
+      res.write(`data: ${JSON.stringify({ error: "MISSING_SESSION_ID", message: "sessionId requis" })}\n\n`);
+      res.end();
+      return;
+    }
+
+    try {
+      getPostConfig(tenantId, posteId);
+    } catch (error) {
+      res.write(`event: error\n`);
+      res.write(`data: ${JSON.stringify({ error: "INVALID_POSTE", message: error instanceof Error ? error.message : "Invalid posteId" })}\n\n`);
+      res.end();
+      return;
+    }
+
+    // Pour l'instant, cette route refuse le streaming pour tous les types
+    // L'implémentation complète nécessitera de modifier executeAxiom et blockOrchestrator
+    // pour accepter un paramètre "stream: boolean" et utiliser callOpenAIStream
+    res.write(`event: error\n`);
+    res.write(`data: ${JSON.stringify({ error: "NOT_IMPLEMENTED", message: "Streaming route not yet fully implemented. Use /axiom for now." })}\n\n`);
+    res.end();
+  } catch (error) {
+    console.error("[axiom/stream] error:", error);
+    res.write(`event: error\n`);
+    res.write(`data: ${JSON.stringify({ error: "INTERNAL_ERROR", message: "Streaming error" })}\n\n`);
+    res.end();
   }
 });
 

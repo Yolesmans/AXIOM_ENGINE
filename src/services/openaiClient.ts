@@ -47,3 +47,28 @@ export async function callOpenAI(params: {
 
   return content.trim();
 }
+
+export async function* callOpenAIStream(params: {
+  messages: Array<{ role: string; content: string }>;
+}): AsyncGenerator<string, string, unknown> {
+  const stream = await client.chat.completions.create({
+    model: 'gpt-4o-mini',
+    messages: params.messages.map((msg) => ({
+      role: msg.role as 'system' | 'user' | 'assistant',
+      content: msg.content,
+    })),
+    temperature: 0.7,
+    stream: true,
+  });
+
+  let fullContent = '';
+  for await (const chunk of stream) {
+    const content = chunk.choices[0]?.delta?.content;
+    if (content) {
+      fullContent += content;
+      yield content;
+    }
+  }
+
+  return fullContent.trim();
+}
