@@ -1773,7 +1773,8 @@ Réécris en conformité stricte REVELIOM :
 Format strict : 3 sections séparées, pas de narration continue.`,
                 },
                 ...messages,
-              });
+              ]
+            });
               
             mirror = retryCompletion.trim();
             retries++;
