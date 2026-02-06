@@ -12,6 +12,7 @@ import {
   validateQuestion2A3,
   type ValidationResult
 } from './validators.js';
+import { validateMirrorREVELIOM, type MirrorValidationResult } from './validateMirrorReveliom.js';
 
 function getFullAxiomPrompt(): string {
   return `${PROMPT_AXIOM_ENGINE}\n\n${PROMPT_AXIOM_PROFIL}`;
@@ -115,6 +116,8 @@ export interface OrchestratorResult {
   step: string;
   expectsAnswer: boolean;
   autoContinue: boolean;
+  progressiveDisplay?: boolean;
+  mirrorSections?: string[];
 }
 
 export class BlockOrchestrator {
@@ -251,11 +254,16 @@ export class BlockOrchestrator {
           identityDone: true,
         });
 
+        // Parser le miroir en sections pour affichage progressif
+        const mirrorSections = this.parseMirrorSections(mirror);
+        
         return {
           response: mirror + '\n\n' + firstQuestion2A,
           step: BLOC_02,
           expectsAnswer: true,
           autoContinue: false,
+          progressiveDisplay: mirrorSections.length > 0,
+          mirrorSections: mirrorSections.length > 0 ? mirrorSections : undefined,
         };
       } else {
         // Il reste des questions → Servir la suivante (pas d'API)
@@ -352,6 +360,33 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
     };
   }
 
+  /**
+   * Parse un miroir REVELIOM en sections (1️⃣, 2️⃣, 3️⃣)
+   */
+  private parseMirrorSections(mirror: string): string[] {
+    const sections: string[] = [];
+    
+    // Section 1️⃣
+    const section1Match = mirror.match(/1️⃣[^\n]*\n([^2️⃣]*)/s);
+    if (section1Match) {
+      sections.push('1️⃣ Lecture implicite\n\n' + section1Match[1].trim());
+    }
+    
+    // Section 2️⃣
+    const section2Match = mirror.match(/2️⃣[^\n]*\n([^3️⃣]*)/s);
+    if (section2Match) {
+      sections.push('2️⃣ Déduction personnalisée\n\n' + section2Match[1].trim());
+    }
+    
+    // Section 3️⃣
+    const section3Match = mirror.match(/3️⃣[^\n]*\n(.*)/s);
+    if (section3Match) {
+      sections.push('3️⃣ Validation ouverte\n\n' + section3Match[1].trim());
+    }
+    
+    return sections;
+  }
+
   private async generateMirrorForBlock1(candidate: AxiomCandidate): Promise<string> {
     const messages = buildConversationHistory(candidate);
     const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
@@ -365,29 +400,100 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
       .map(([index, answer]) => `Question ${index}: ${answer}`)
       .join('\n');
 
-    const completion = await callOpenAI({
-      messages: [
-        { role: 'system', content: FULL_AXIOM_PROMPT },
-        {
-          role: 'system',
-          content: `RÈGLE ABSOLUE AXIOM :
+    let mirror = '';
+    let retries = 0;
+    const maxRetries = 1;
+
+    while (retries <= maxRetries) {
+      const completion = await callOpenAI({
+        messages: [
+          { role: 'system', content: FULL_AXIOM_PROMPT },
+          {
+            role: 'system',
+            content: retries === 0
+              ? `RÈGLE ABSOLUE AXIOM — MIROIR INTERPRÉTATIF ACTIF :
+
 Tu es en fin de BLOC 1.
 Toutes les questions du BLOC 1 ont été répondues.
+
 Réponses du candidat :
 ${answersContext}
 
-Produis le MIROIR INTERPRÉTATIF ACTIF de fin de bloc, conforme au format strict :
-1️⃣ Lecture implicite (20 mots max) : ce que les réponses révèlent du fonctionnement réel.
-2️⃣ Déduction personnalisée (25 mots max) : manière probable d'agir en situation réelle.
-3️⃣ Validation ouverte : "Dis-moi si ça te parle, ou s'il y a une nuance importante que je n'ai pas vue."
+⚠️ FORMAT STRICT OBLIGATOIRE (NON NÉGOCIABLE) :
+
+1️⃣ Lecture implicite
+- 1 phrase UNIQUE
+- MAXIMUM 20 MOTS EXACTEMENT
+- Position interprétative claire (lecture en creux)
+- Interdiction : paraphrase, reformulation, liste de faits, résumé descriptif
+
+2️⃣ Déduction personnalisée
+- 1 phrase UNIQUE
+- MAXIMUM 25 MOTS EXACTEMENT
+- Lecture en creux OBLIGATOIRE : « ce n'est probablement pas X, mais plutôt Y »
+- Interdiction : neutralité, psychologie générique, diagnostic, projection métier
+
+3️⃣ Validation ouverte
+- Phrase STRICTEMENT IDENTIQUE :
+« Dis-moi si ça te parle, ou s'il y a une nuance importante que je n'ai pas vue. »
+
+⚠️ INTERDICTIONS ABSOLUES :
+- Plus de 2 phrases d'analyse au total
+- Narration continue
+- Ton explicatif ou pédagogique
+- Synthèse globale
+- Conclusion
+- Cohérence globale implicite
+- Projection vers un métier, un cadre ou une compatibilité
+
+⚠️ PORTÉE DU MIROIR :
+- STRICTEMENT local et provisoire
+- JAMAIS une conclusion
+- JAMAIS une lecture globale
+- Peut contenir des tensions NON résolues
+- Peut être contredit par les blocs suivants
+
+Le miroir doit fonctionner comme un SIGNAL FAIBLE.
+Toute sortie hors format = ERREUR.`
+              : `RÈGLE ABSOLUE AXIOM — RETRY MIROIR BLOC 1 (FORMAT STRICT OBLIGATOIRE)
+
+⚠️ ERREURS DÉTECTÉES : ${mirror ? 'Miroir non conforme' : 'Première tentative'}
+
+Tu es en fin de BLOC 1.
+Réponses du candidat :
+${answersContext}
+
+Réécris en conformité stricte REVELIOM :
+- Section 1️⃣ : EXACTEMENT 20 mots maximum, 1 phrase unique
+- Section 2️⃣ : EXACTEMENT 25 mots maximum, 1 phrase unique
+- Lecture en creux obligatoire : "ce n'est probablement pas X, mais plutôt Y"
+- Aucune synthèse, conclusion, cohérence globale, projection métier
+- Pas de texte additionnel
 
 Format strict : 3 sections séparées, pas de narration continue.`,
-        },
-        ...messages,
-      ],
-    });
+          },
+          ...messages,
+        ],
+      });
 
-    return completion.trim();
+      mirror = completion.trim();
+      const validation = validateMirrorREVELIOM(mirror);
+
+      if (validation.valid) {
+        return mirror;
+      }
+
+      if (retries < maxRetries) {
+        console.warn(`[ORCHESTRATOR] Miroir BLOC 1 non conforme, retry ${retries + 1}/${maxRetries}`, validation.errors);
+        retries++;
+      } else {
+        console.error(`[ORCHESTRATOR] Miroir BLOC 1 non conforme après ${maxRetries} retries`, validation.errors);
+        // Fail-soft : servir quand même le miroir retry avec log d'erreur
+        return mirror;
+      }
+    }
+
+    return mirror;
   }
 
   // ============================================
@@ -865,11 +971,16 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
           event: undefined,
         });
 
+        // Parser le miroir en sections pour affichage progressif (si format REVELIOM)
+        const mirrorSections = this.parseMirrorSections(mirror);
+        
         return {
           response: mirror + '\n\n' + nextResult.response,
           step: nextResult.step,
           expectsAnswer: nextResult.expectsAnswer,
           autoContinue: false,
+          progressiveDisplay: mirrorSections.length > 0,
+          mirrorSections: mirrorSections.length > 0 ? mirrorSections : undefined,
         };
       } else {
         // Il reste des questions → Servir la suivante (pas d'API)
