@@ -1888,10 +1888,12 @@ Toute sortie hors règles = invalide.`,
 export async function executeWithAutoContinue(
   candidate: AxiomCandidate,
   userMessage: string | null = null,
+  event: string | null = null,
 ): Promise<ExecuteAxiomResult> {
   let result = await executeAxiom({
     candidate,
     userMessage: userMessage,
+    event: event || undefined,
   });
 
   // 🔁 AUTO-ENCHAÎNEMENT FSM STRICT
@@ -1910,6 +1912,7 @@ export async function executeWithAutoContinue(
     result = await executeAxiom({
       candidate: updatedCandidate,
       userMessage: null,
+      event: undefined,
     });
   }
 

@@ -891,7 +891,7 @@ app.post("/axiom", async (req: Request, res: Response) => {
       }
     }
     
-    const result = await executeWithAutoContinue(candidate, userMessageText);
+    const result = await executeWithAutoContinue(candidate, userMessageText, event || null);
 
     // Recharger le candidate AVANT le mapping pour avoir l'état à jour
     const candidateIdAfterExecution = candidate.candidateId;
