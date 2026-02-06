@@ -1,7 +1,7 @@
 import type { AxiomCandidate } from '../types/candidate.js';
 import { candidateStore } from '../store/sessionStore.js';
 import { callOpenAI } from './openaiClient.js';
-import { BLOC_01, BLOC_02, BLOC_03 } from '../engine/axiomExecutor.js';
+import { BLOC_01, BLOC_02, BLOC_03, executeAxiom } from '../engine/axiomExecutor.js';
 // getFullAxiomPrompt n'est pas exporté, on doit le reconstruire
 import { PROMPT_AXIOM_ENGINE, PROMPT_AXIOM_PROFIL } from '../engine/prompts.js';
 import {
@@ -227,10 +227,34 @@ export class BlockOrchestrator {
           identityDone: true,
         });
 
-        return {
-          response: mirror,
+        // Recharger le candidate pour avoir l'état à jour
+        const updatedCandidate = candidateStore.get(currentCandidate.candidateId);
+        if (!updatedCandidate) {
+          throw new Error(`Candidate ${currentCandidate.candidateId} not found after mirror`);
+        }
+
+        // Générer immédiatement la première question BLOC 2A
+        console.log('[ORCHESTRATOR] generate question 2A.1 immediately after BLOC 1 mirror');
+        const firstQuestion2A = await this.generateQuestion2A1(updatedCandidate, 0);
+        
+        // Enregistrer la question dans conversationHistory
+        candidateStore.appendAssistantMessage(updatedCandidate.candidateId, firstQuestion2A, {
+          block: 2,
           step: BLOC_02,
-          expectsAnswer: false,
+          kind: 'question',
+        });
+
+        // Mettre à jour UI state avec la question
+        candidateStore.updateUIState(updatedCandidate.candidateId, {
+          step: BLOC_02,
+          lastQuestion: firstQuestion2A,
+          identityDone: true,
+        });
+
+        return {
+          response: mirror + '\n\n' + firstQuestion2A,
+          step: BLOC_02,
+          expectsAnswer: true,
           autoContinue: false,
         };
       } else {
@@ -824,10 +848,27 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
           identityDone: true,
         });
 
+        // Recharger le candidate pour avoir l'état à jour
+        let updatedCandidate = candidateStore.get(candidateId);
+        if (!updatedCandidate) {
+          updatedCandidate = await candidateStore.getAsync(candidateId);
+        }
+        if (!updatedCandidate) {
+          throw new Error(`Candidate ${candidateId} not found after mirror`);
+        }
+
+        // Appeler executeAxiom() pour générer la première question BLOC 3
+        console.log('[ORCHESTRATOR] generate first question BLOC 3 immediately after BLOC 2B mirror');
+        const nextResult = await executeAxiom({
+          candidate: updatedCandidate,
+          userMessage: null,
+          event: null,
+        });
+
         return {
-          response: mirror,
-          step: BLOC_03,
-          expectsAnswer: false,
+          response: mirror + '\n\n' + nextResult.response,
+          step: nextResult.step,
+          expectsAnswer: nextResult.expectsAnswer,
           autoContinue: false,
         };
       } else {
