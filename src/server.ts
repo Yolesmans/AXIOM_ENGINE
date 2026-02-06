@@ -66,6 +66,29 @@ function deriveStepFromHistory(candidate: AxiomCandidate): string {
   return STEP_01_IDENTITY;
 }
 
+// ============================================
+// HELPER : Mapping step → state (source unique de vérité)
+// ============================================
+function mapStepToState(step: string): string {
+  if (step === STEP_03_BLOC1) {
+    return "wait_start_button";
+  }
+
+  if ([BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10].includes(step as any)) {
+    return "collecting";
+  }
+
+  if (step === STEP_99_MATCH_READY) {
+    return "match_ready";
+  }
+
+  if (step === STEP_99_MATCHING || step === DONE_MATCHING) {
+    return "matching";
+  }
+
+  return "idle";
+}
+
 const app = express();
 
 // BODY PARSER
@@ -257,30 +280,9 @@ app.get("/start", async (req: Request, res: Response) => {
     // Si identité complétée, continuer normalement avec auto-enchaînement
     const result = await executeWithAutoContinue(candidate);
 
-    // Aligner le mapping /start sur le mapping /axiom
-    let responseState: string = "collecting";
-    let responseStep = result.step;
-
-    if (result.step === STEP_01_IDENTITY || result.step === 'IDENTITY') {
-      responseState = "identity";
-      responseStep = "STEP_01_IDENTITY";
-    } else if (result.step === STEP_02_TONE) {
-      responseState = "tone_choice";
-      responseStep = "STEP_02_TONE";
-    } else if (result.step === STEP_03_PREAMBULE) {
-      responseState = "preambule";
-      responseStep = "STEP_03_PREAMBULE";
-    } else if (result.step === STEP_03_BLOC1) {
-      responseState = "wait_start_button";
-      responseStep = "STEP_03_BLOC1";
-    } else if ([BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10].includes(result.step as any)) {
-      responseState = "collecting";
-      // responseStep reste result.step
-    } else if (result.step === STEP_99_MATCH_READY) {
-      responseState = "match_ready";
-    } else if (result.step === STEP_99_MATCHING || result.step === DONE_MATCHING) {
-      responseState = "matching";
-    }
+    // Utiliser la fonction unique de mapping
+    const responseState = mapStepToState(result.step);
+    const responseStep = result.step;
 
     // C) CONTRAT DE SÉCURITÉ — Toujours renvoyer data.response non vide
     const response = result.response || '';
@@ -745,15 +747,9 @@ app.post("/axiom", async (req: Request, res: Response) => {
         });
       }
 
-      // Mapper les états
-      let responseState: string = "collecting";
-      let responseStep = result.step;
-      
-      if (result.step === BLOC_01) {
-        responseState = "collecting";
-      } else if (result.step === BLOC_02) {
-        responseState = "collecting";
-      }
+      // Utiliser la fonction unique de mapping
+      const responseState = mapStepToState(result.step);
+      const responseStep = result.step;
 
       try {
         const trackingRow = candidateToLiveTrackingRow(candidate);
@@ -834,15 +830,14 @@ app.post("/axiom", async (req: Request, res: Response) => {
         });
       }
 
-      // Mapper les états
-      let responseState: string = "collecting";
-      let responseStep = result.step;
+      // Utiliser la fonction unique de mapping
+      const responseState = mapStepToState(result.step);
+      const responseStep = result.step;
       
+      // Mise à jour session pour BLOC 1 et 2
       if (result.step === BLOC_01) {
-        responseState = "collecting";
         candidateStore.updateSession(candidate.candidateId, { state: "collecting", currentBlock: 1 });
       } else if (result.step === BLOC_02) {
-        responseState = "collecting";
         candidateStore.updateSession(candidate.candidateId, { state: "collecting", currentBlock: 2 });
       }
 
@@ -906,31 +901,14 @@ app.post("/axiom", async (req: Request, res: Response) => {
       });
     }
 
-    // Mapper les états
-    let responseState: string = "collecting";
-    let responseStep = result.step;
+    // Utiliser la fonction unique de mapping
+    const responseState = mapStepToState(result.step);
+    const responseStep = result.step;
     
-    // FSM STRICTE — Mapper les états
-    if (result.step === STEP_01_IDENTITY || result.step === 'IDENTITY') {
-      responseState = "identity";
-      responseStep = "STEP_01_IDENTITY";
-    } else if (result.step === STEP_02_TONE) {
-      responseState = "tone_choice";
-    } else if (result.step === STEP_03_PREAMBULE) {
-      responseState = "preambule";
-    } else if (result.step === STEP_03_BLOC1) {
-      responseState = "wait_start_button";
-      responseStep = "STEP_03_BLOC1";
-    } else if ([BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10].includes(result.step as any)) {
+    // Mise à jour session pour les blocs (si nécessaire)
+    if ([BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10].includes(result.step as any)) {
       const blocNumber = [BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10].indexOf(result.step as any) + 1;
-      responseState = `bloc_${blocNumber.toString().padStart(2, '0')}`;
       candidateStore.updateSession(candidate.candidateId, { state: "collecting", currentBlock: blocNumber });
-    } else if (result.step === STEP_99_MATCH_READY) {
-      responseState = "match_ready";
-    } else if (result.step === STEP_99_MATCHING) {
-      responseState = "matching";
-    } else if (result.step === DONE_MATCHING) {
-      responseState = "done";
     }
 
     // Mise à jour Google Sheet (sauf si on est en identity)
