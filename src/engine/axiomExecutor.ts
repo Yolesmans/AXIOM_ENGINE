@@ -845,7 +845,6 @@ export const STEP_01_IDENTITY = 'STEP_01_IDENTITY';
 export const STEP_02_TONE = 'STEP_02_TONE';
 export const STEP_03_PREAMBULE = 'STEP_03_PREAMBULE';
 export const STEP_03_BLOC1 = 'STEP_03_BLOC1'; // wait_start_button
-export const PREAMBULE_DONE = 'PREAMBULE_DONE';
 export const BLOC_01 = 'BLOC_01';
 
 // ============================================
