@@ -387,50 +387,49 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
           {
             role: 'system',
             content: retries === 0
-              ? `RÈGLE ABSOLUE AXIOM — MIROIR INTERPRÉTATIF ACTIF :
+              ? `RÈGLE ABSOLUE AXIOM — MIROIR INTERPRÉTATIF ACTIF (REVELIOM)
 
-Tu es en fin de BLOC 1.
+Tu es en FIN DE BLOC 1.
 Toutes les questions du BLOC 1 ont été répondues.
 
 Réponses du candidat :
 ${answersContext}
 
-⚠️ FORMAT STRICT OBLIGATOIRE (NON NÉGOCIABLE) :
+⚠️ FORMAT STRICT OBLIGATOIRE — NON NÉGOCIABLE
 
 1️⃣ Lecture implicite
-- 1 phrase UNIQUE
-- MAXIMUM 20 MOTS EXACTEMENT
-- Position interprétative claire (lecture en creux)
-- Interdiction : paraphrase, reformulation, liste de faits, résumé descriptif
+- UNE SEULE phrase
+- MAXIMUM 20 mots EXACTEMENT
+- Position interprétative claire
+- Lecture en creux obligatoire (ce n'est probablement pas X, mais plutôt Y)
+- Interdiction ABSOLUE de paraphraser ou résumer les réponses
 
 2️⃣ Déduction personnalisée
-- 1 phrase UNIQUE
-- MAXIMUM 25 MOTS EXACTEMENT
-- Lecture en creux OBLIGATOIRE : « ce n'est probablement pas X, mais plutôt Y »
-- Interdiction : neutralité, psychologie générique, diagnostic, projection métier
+- UNE SEULE phrase
+- MAXIMUM 25 mots EXACTEMENT
+- Explicite une tension, un moteur ou un besoin implicite
+- Lecture en creux obligatoire
+- Interdiction de psychologie générique, diagnostic ou neutralité descriptive
 
 3️⃣ Validation ouverte
-- Phrase STRICTEMENT IDENTIQUE :
-« Dis-moi si ça te parle, ou s'il y a une nuance importante que je n'ai pas vue. »
+- Phrase EXACTE et INCHANGÉE :
+"Dis-moi si ça te parle, ou s'il y a une nuance importante que je n'ai pas vue."
 
-⚠️ INTERDICTIONS ABSOLUES :
-- Plus de 2 phrases d'analyse au total
-- Narration continue
-- Ton explicatif ou pédagogique
-- Synthèse globale
-- Conclusion
-- Cohérence globale implicite
-- Projection vers un métier, un cadre ou une compatibilité
+⚠️ INTERDICTIONS ABSOLUES
+- Plus de deux phrases d'analyse au total
+- Toute narration continue
+- Toute formulation de synthèse
+- Toute cohérence globale implicite
+- Toute projection métier, rôle, cadre ou compatibilité
 
-⚠️ PORTÉE DU MIROIR :
-- STRICTEMENT local et provisoire
-- JAMAIS une conclusion
-- JAMAIS une lecture globale
-- Peut contenir des tensions NON résolues
-- Peut être contredit par les blocs suivants
+⚠️ PORTÉE DU MIROIR
+- Ce miroir est STRICTEMENT LOCAL et PROVISOIRE
+- Il n'est JAMAIS une conclusion
+- Il peut contenir des tensions NON RÉSOLUES
+- Il peut être contredit par les blocs suivants
 
-Le miroir doit fonctionner comme un SIGNAL FAIBLE.
-Toute sortie hors format = ERREUR.`
+Ce miroir doit fonctionner comme un SIGNAL FAIBLE.
+Il ne doit JAMAIS suffire à "comprendre le profil".`
               : `RÈGLE ABSOLUE AXIOM — RETRY MIROIR BLOC 1 (FORMAT STRICT OBLIGATOIRE)
 
 ⚠️ ERREURS DÉTECTÉES DANS LE MIROIR PRÉCÉDENT :
