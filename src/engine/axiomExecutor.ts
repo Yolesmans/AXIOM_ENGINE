@@ -1809,6 +1809,38 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
       identityDone: true,
     });
     
+    // Mise à jour currentBlock pour BLOCS 3-10 (source de vérité unique)
+    if (
+      [
+        BLOC_03,
+        BLOC_04,
+        BLOC_05,
+        BLOC_06,
+        BLOC_07,
+        BLOC_08,
+        BLOC_09,
+        BLOC_10,
+      ].includes(nextState as any)
+    ) {
+      const nextBlocNumber =
+        [
+          BLOC_01,
+          BLOC_02,
+          BLOC_03,
+          BLOC_04,
+          BLOC_05,
+          BLOC_06,
+          BLOC_07,
+          BLOC_08,
+          BLOC_09,
+          BLOC_10,
+        ].indexOf(nextState as any) + 1;
+
+      candidateStore.updateSession(candidate.candidateId, {
+        currentBlock: nextBlocNumber,
+      });
+    }
+    
     // Enregistrer la réponse assistant APRÈS avoir déterminé nextState
     if (aiText) {
       candidateStore.appendAssistantMessage(candidate.candidateId, aiText, {

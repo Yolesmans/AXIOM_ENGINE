@@ -456,7 +456,6 @@ app.post("/axiom", async (req: Request, res: Response) => {
         responseState = "wait_start_button";
       } else if (result.step === BLOC_01) {
         responseState = "collecting";
-        candidateStore.updateSession(candidate.candidateId, { state: "collecting", currentBlock: 1 });
       }
 
       candidate = candidateStore.get(candidate.candidateId);
@@ -833,13 +832,6 @@ app.post("/axiom", async (req: Request, res: Response) => {
       // Utiliser la fonction unique de mapping
       const responseState = mapStepToState(result.step);
       const responseStep = result.step;
-      
-      // Mise à jour session pour BLOC 1 et 2
-      if (result.step === BLOC_01) {
-        candidateStore.updateSession(candidate.candidateId, { state: "collecting", currentBlock: 1 });
-      } else if (result.step === BLOC_02) {
-        candidateStore.updateSession(candidate.candidateId, { state: "collecting", currentBlock: 2 });
-      }
 
       // Mise à jour Google Sheet
       if (candidate.identity.completedAt) {
@@ -904,12 +896,6 @@ app.post("/axiom", async (req: Request, res: Response) => {
     // Utiliser la fonction unique de mapping
     const responseState = mapStepToState(result.step);
     const responseStep = result.step;
-    
-    // Mise à jour session pour les blocs (si nécessaire)
-    if ([BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10].includes(result.step as any)) {
-      const blocNumber = [BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10].indexOf(result.step as any) + 1;
-      candidateStore.updateSession(candidate.candidateId, { state: "collecting", currentBlock: blocNumber });
-    }
 
     // Mise à jour Google Sheet (sauf si on est en identity)
     if (responseState !== "identity" && candidate.identity.completedAt) {
