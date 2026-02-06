@@ -115,18 +115,8 @@ async function callAxiom(message, event = null) {
           setTimeout(() => {
             addMessage('assistant', data.mirrorSections[2]);
             
-            // PUIS afficher la question suivante (si elle existe dans data.response après le miroir)
-            // Le backend concatène miroir + question dans response, on extrait la partie question
-            const responseParts = data.response.split('\n\n');
-            if (responseParts.length > 1) {
-              // Il y a du contenu supplémentaire (probablement une question)
-              const questionPart = responseParts.slice(1).join('\n\n');
-              if (questionPart.trim()) {
-                setTimeout(() => {
-                  addMessage('assistant', questionPart.trim());
-                }, 900);
-              }
-            }
+            // La question suivante (si elle existe) sera affichée via un appel API séparé
+            // Aucun parsing heuristique du texte du miroir
           }, 900);
         }, 900);
       } else {
