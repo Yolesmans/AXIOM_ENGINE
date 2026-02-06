@@ -104,6 +104,10 @@ async function callAxiom(message, event = null) {
     if (data.response) {
       // Affichage progressif des miroirs REVELIOM
       if (data.progressiveDisplay === true && Array.isArray(data.mirrorSections) && data.mirrorSections.length === 3) {
+        // Reconstruire le miroir complet pour extraire la question suivante
+        const fullMirror = data.mirrorSections.join('\n\n');
+        const questionAfterMirror = data.response.replace(fullMirror, '').replace(/^\n\n+/, '').trim();
+        
         // Afficher section 1️⃣
         addMessage('assistant', data.mirrorSections[0]);
         
@@ -115,8 +119,12 @@ async function callAxiom(message, event = null) {
           setTimeout(() => {
             addMessage('assistant', data.mirrorSections[2]);
             
-            // La question suivante (si elle existe) sera affichée via un appel API séparé
-            // Aucun parsing heuristique du texte du miroir
+            // Afficher la question suivante APRÈS la section 3️⃣ (si elle existe)
+            if (questionAfterMirror) {
+              setTimeout(() => {
+                addMessage('assistant', questionAfterMirror);
+              }, 100);
+            }
           }, 900);
         }, 900);
       } else {

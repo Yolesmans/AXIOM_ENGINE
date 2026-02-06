@@ -263,8 +263,8 @@ export class BlockOrchestrator {
           step: BLOC_02,
           expectsAnswer: true,
           autoContinue: false,
-          progressiveDisplay: mirrorSections.length > 0,
-          mirrorSections: mirrorSections.length > 0 ? mirrorSections : undefined,
+          progressiveDisplay: mirrorSections.length === 3,
+          mirrorSections: mirrorSections.length === 3 ? mirrorSections : undefined,
         };
       } else {
         // Il reste des questions → Servir la suivante (pas d'API)
@@ -953,8 +953,8 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
           step: nextResult.step,
           expectsAnswer: nextResult.expectsAnswer,
           autoContinue: false,
-          progressiveDisplay: mirrorSections.length > 0,
-          mirrorSections: mirrorSections.length > 0 ? mirrorSections : undefined,
+          progressiveDisplay: mirrorSections.length === 3,
+          mirrorSections: mirrorSections.length === 3 ? mirrorSections : undefined,
         };
       } else {
         // Il reste des questions → Servir la suivante (pas d'API)

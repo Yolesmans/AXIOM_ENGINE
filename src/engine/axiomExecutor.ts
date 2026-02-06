@@ -1847,7 +1847,7 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
     
     if (aiText && !expectsAnswer && blocNumber >= 3 && blocNumber <= 9) {
       const sections = parseMirrorSections(aiText);
-      if (sections.length > 0) {
+      if (sections.length === 3) {
         progressiveDisplay = true;
         mirrorSections = sections;
       }

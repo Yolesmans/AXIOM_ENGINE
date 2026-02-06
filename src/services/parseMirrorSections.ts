@@ -1,31 +1,13 @@
-/**
- * Parse un miroir REVELIOM en sections (1️⃣, 2️⃣, 3️⃣)
- * Fonction PURE : pas de side effects
- */
 export function parseMirrorSections(mirror: string): string[] {
-  // Section 1 = de "1️⃣" jusqu'avant "2️⃣"
-  const section1Match = mirror.match(/1️⃣[\s\S]*?\n([\s\S]*?)(?=2️⃣)/);
-  // Section 2 = de "2️⃣" jusqu'avant "3️⃣"
-  const section2Match = mirror.match(/2️⃣[\s\S]*?\n([\s\S]*?)(?=3️⃣)/);
-  // Section 3 = de "3️⃣" jusqu'à la fin
-  const section3Match = mirror.match(/3️⃣[\s\S]*?\n([\s\S]*)/);
-
   const sections: string[] = [];
 
-  if (section1Match) {
-    sections.push(section1Match[1].trim());
-  }
-  if (section2Match) {
-    sections.push(section2Match[1].trim());
-  }
-  if (section3Match) {
-    sections.push(section3Match[1].trim());
-  }
+  const s1 = mirror.match(/1️⃣[^\n]*\n([^2️⃣]*)/s);
+  const s2 = mirror.match(/2️⃣[^\n]*\n([^3️⃣]*)/s);
+  const s3 = mirror.match(/3️⃣[^\n]*\n(.*)/s);
 
-  // Si parsing échoue, fallback = [mirror]
-  if (sections.length !== 3) {
-    return [mirror];
-  }
+  if (s1) sections.push("1️⃣ Lecture implicite\n\n" + s1[1].trim());
+  if (s2) sections.push("2️⃣ Déduction personnalisée\n\n" + s2[1].trim());
+  if (s3) sections.push("3️⃣ Validation ouverte\n\n" + s3[1].trim());
 
   return sections;
 }
