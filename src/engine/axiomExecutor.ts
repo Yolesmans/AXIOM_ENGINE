@@ -1753,7 +1753,7 @@ Toute sortie hors règles = invalide.`,
         if (retries < maxRetries) {
           console.warn(`[AXIOM_EXECUTOR] Miroir BLOC ${blocNumber} non conforme, retry ${retries + 1}/${maxRetries}`, validation.errors);
           
-          // Retry avec prompt renforcé
+          // Retry avec prompt renforcé incluant les erreurs et le miroir invalide
           try {
             const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
             const retryCompletion = await callOpenAI({
@@ -1763,17 +1763,14 @@ Toute sortie hors règles = invalide.`,
                   role: 'system',
                   content: `RÈGLE ABSOLUE AXIOM — RETRY MIROIR BLOC ${blocNumber} (FORMAT STRICT OBLIGATOIRE)
 
-⚠️ ERREURS DÉTECTÉES : ${validation.errors.join(', ')}
+⚠️ ERREURS DÉTECTÉES DANS LE MIROIR PRÉCÉDENT :
+${validation.errors.map(e => `- ${e}`).join('\n')}
+
+Miroir invalide précédent :
+${mirror}
 
 Tu es en fin de BLOC ${blocNumber}.
-Réécris en conformité stricte REVELIOM :
-- Section 1️⃣ : EXACTEMENT 20 mots maximum, 1 phrase unique
-- Section 2️⃣ : EXACTEMENT 25 mots maximum, 1 phrase unique
-- Lecture en creux obligatoire : "ce n'est probablement pas X, mais plutôt Y"
-- Aucune synthèse, conclusion, cohérence globale, projection métier
-- Pas de texte additionnel
-
-Format strict : 3 sections séparées, pas de narration continue.`,
+Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en creux. Aucun mot interdit. Aucun texte additionnel.`,
                 },
                 ...messages,
               ]
@@ -1786,8 +1783,8 @@ Format strict : 3 sections séparées, pas de narration continue.`,
             break;
           }
         } else {
-          console.error(`[AXIOM_EXECUTOR] Miroir BLOC ${blocNumber} non conforme après ${maxRetries} retries`, validation.errors);
           // Fail-soft : servir quand même le miroir retry avec log d'erreur
+          console.warn(`[REVELIOM][BLOC${blocNumber}] Miroir invalide après retry :`, validation.errors);
           aiText = mirror;
           break;
         }

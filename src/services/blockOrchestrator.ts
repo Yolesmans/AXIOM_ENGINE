@@ -403,6 +403,7 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
     let mirror = '';
     let retries = 0;
     const maxRetries = 1;
+    let lastValidationErrors: string[] = [];
 
     while (retries <= maxRetries) {
       const completion = await callOpenAI({
@@ -457,20 +458,17 @@ Le miroir doit fonctionner comme un SIGNAL FAIBLE.
 Toute sortie hors format = ERREUR.`
               : `RÈGLE ABSOLUE AXIOM — RETRY MIROIR BLOC 1 (FORMAT STRICT OBLIGATOIRE)
 
-⚠️ ERREURS DÉTECTÉES : ${mirror ? 'Miroir non conforme' : 'Première tentative'}
+⚠️ ERREURS DÉTECTÉES DANS LE MIROIR PRÉCÉDENT :
+${lastValidationErrors.map(e => `- ${e}`).join('\n')}
+
+Miroir invalide précédent :
+${mirror}
 
 Tu es en fin de BLOC 1.
 Réponses du candidat :
 ${answersContext}
 
-Réécris en conformité stricte REVELIOM :
-- Section 1️⃣ : EXACTEMENT 20 mots maximum, 1 phrase unique
-- Section 2️⃣ : EXACTEMENT 25 mots maximum, 1 phrase unique
-- Lecture en creux obligatoire : "ce n'est probablement pas X, mais plutôt Y"
-- Aucune synthèse, conclusion, cohérence globale, projection métier
-- Pas de texte additionnel
-
-Format strict : 3 sections séparées, pas de narration continue.`,
+Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en creux. Aucun mot interdit. Aucun texte additionnel.`,
           },
           ...messages,
         ],
@@ -483,12 +481,14 @@ Format strict : 3 sections séparées, pas de narration continue.`,
         return mirror;
       }
 
+      lastValidationErrors = validation.errors;
+
       if (retries < maxRetries) {
         console.warn(`[ORCHESTRATOR] Miroir BLOC 1 non conforme, retry ${retries + 1}/${maxRetries}`, validation.errors);
         retries++;
       } else {
-        console.error(`[ORCHESTRATOR] Miroir BLOC 1 non conforme après ${maxRetries} retries`, validation.errors);
         // Fail-soft : servir quand même le miroir retry avec log d'erreur
+        console.warn("[REVELIOM][BLOC1] Miroir invalide après retry :", validation.errors);
         return mirror;
       }
     }
