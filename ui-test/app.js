@@ -102,7 +102,37 @@ async function callAxiom(message, event = null) {
 
     // Afficher la réponse (toujours présente)
     if (data.response) {
-      addMessage('assistant', data.response);
+      // Affichage progressif des miroirs REVELIOM
+      if (data.progressiveDisplay === true && Array.isArray(data.mirrorSections) && data.mirrorSections.length === 3) {
+        // Afficher section 1️⃣
+        addMessage('assistant', data.mirrorSections[0]);
+        
+        // Attendre 900ms puis afficher section 2️⃣
+        setTimeout(() => {
+          addMessage('assistant', data.mirrorSections[1]);
+          
+          // Attendre 900ms puis afficher section 3️⃣
+          setTimeout(() => {
+            addMessage('assistant', data.mirrorSections[2]);
+            
+            // PUIS afficher la question suivante (si elle existe dans data.response après le miroir)
+            // Le backend concatène miroir + question dans response, on extrait la partie question
+            const responseParts = data.response.split('\n\n');
+            if (responseParts.length > 1) {
+              // Il y a du contenu supplémentaire (probablement une question)
+              const questionPart = responseParts.slice(1).join('\n\n');
+              if (questionPart.trim()) {
+                setTimeout(() => {
+                  addMessage('assistant', questionPart.trim());
+                }, 900);
+              }
+            }
+          }, 900);
+        }, 900);
+      } else {
+        // Affichage normal (pas de découpage progressif)
+        addMessage('assistant', data.response);
+      }
     }
 
     // Détection fin préambule → affichage bouton MVP

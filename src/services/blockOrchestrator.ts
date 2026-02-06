@@ -13,6 +13,7 @@ import {
   type ValidationResult
 } from './validators.js';
 import { validateMirrorREVELIOM, type MirrorValidationResult } from './validateMirrorReveliom.js';
+import { parseMirrorSections } from './parseMirrorSections.js';
 
 function getFullAxiomPrompt(): string {
   return `${PROMPT_AXIOM_ENGINE}\n\n${PROMPT_AXIOM_PROFIL}`;
@@ -255,7 +256,7 @@ export class BlockOrchestrator {
         });
 
         // Parser le miroir en sections pour affichage progressif
-        const mirrorSections = this.parseMirrorSections(mirror);
+        const mirrorSections = parseMirrorSections(mirror);
         
         return {
           response: mirror + '\n\n' + firstQuestion2A,
@@ -360,32 +361,6 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
     };
   }
 
-  /**
-   * Parse un miroir REVELIOM en sections (1️⃣, 2️⃣, 3️⃣)
-   */
-  private parseMirrorSections(mirror: string): string[] {
-    const sections: string[] = [];
-    
-    // Section 1️⃣
-    const section1Match = mirror.match(/1️⃣[^\n]*\n([^2️⃣]*)/s);
-    if (section1Match) {
-      sections.push('1️⃣ Lecture implicite\n\n' + section1Match[1].trim());
-    }
-    
-    // Section 2️⃣
-    const section2Match = mirror.match(/2️⃣[^\n]*\n([^3️⃣]*)/s);
-    if (section2Match) {
-      sections.push('2️⃣ Déduction personnalisée\n\n' + section2Match[1].trim());
-    }
-    
-    // Section 3️⃣
-    const section3Match = mirror.match(/3️⃣[^\n]*\n(.*)/s);
-    if (section3Match) {
-      sections.push('3️⃣ Validation ouverte\n\n' + section3Match[1].trim());
-    }
-    
-    return sections;
-  }
 
   private async generateMirrorForBlock1(candidate: AxiomCandidate): Promise<string> {
     const messages = buildConversationHistory(candidate);
@@ -972,7 +947,7 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
         });
 
         // Parser le miroir en sections pour affichage progressif (si format REVELIOM)
-        const mirrorSections = this.parseMirrorSections(mirror);
+        const mirrorSections = parseMirrorSections(mirror);
         
         return {
           response: mirror + '\n\n' + nextResult.response,

@@ -5,34 +5,9 @@ import { candidateStore } from '../store/sessionStore.js';
 import { advanceBlock } from './axiomEngine.js';
 import { candidateToSession, updateCandidateFromSession } from '../utils/candidateAdapter.js';
 import { validateMirrorREVELIOM, type MirrorValidationResult } from '../services/validateMirrorReveliom.js';
+import { parseMirrorSections } from '../services/parseMirrorSections.js';
 import { getFullAxiomPrompt, getMatchingPrompt } from './prompts.js';
 
-/**
- * Parse un miroir REVELIOM en sections (1️⃣, 2️⃣, 3️⃣)
- */
-function parseMirrorSections(mirror: string): string[] {
-  const sections: string[] = [];
-  
-  // Section 1️⃣
-  const section1Match = mirror.match(/1️⃣[^\n]*\n([^2️⃣]*)/s);
-  if (section1Match) {
-    sections.push('1️⃣ Lecture implicite\n\n' + section1Match[1].trim());
-  }
-  
-  // Section 2️⃣
-  const section2Match = mirror.match(/2️⃣[^\n]*\n([^3️⃣]*)/s);
-  if (section2Match) {
-    sections.push('2️⃣ Déduction personnalisée\n\n' + section2Match[1].trim());
-  }
-  
-  // Section 3️⃣
-  const section3Match = mirror.match(/3️⃣[^\n]*\n(.*)/s);
-  if (section3Match) {
-    sections.push('3️⃣ Validation ouverte\n\n' + section3Match[1].trim());
-  }
-  
-  return sections;
-}
 
 function extractPreambuleFromPrompt(prompt: string): string {
   const match = prompt.match(/PRÉAMBULE MÉTIER[^]*?(?=🔒|🟢|$)/i);
