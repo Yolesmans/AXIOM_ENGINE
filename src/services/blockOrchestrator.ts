@@ -862,7 +862,7 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
         const nextResult = await executeAxiom({
           candidate: updatedCandidate,
           userMessage: null,
-          event: null,
+          event: undefined,
         });
 
         return {
