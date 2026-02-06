@@ -4,6 +4,35 @@ import type { AnswerRecord } from '../types/answer.js';
 import { candidateStore } from '../store/sessionStore.js';
 import { advanceBlock } from './axiomEngine.js';
 import { candidateToSession, updateCandidateFromSession } from '../utils/candidateAdapter.js';
+import { validateMirrorREVELIOM, type MirrorValidationResult } from '../services/validateMirrorReveliom.js';
+import { getFullAxiomPrompt, getMatchingPrompt } from './prompts.js';
+
+/**
+ * Parse un miroir REVELIOM en sections (1️⃣, 2️⃣, 3️⃣)
+ */
+function parseMirrorSections(mirror: string): string[] {
+  const sections: string[] = [];
+  
+  // Section 1️⃣
+  const section1Match = mirror.match(/1️⃣[^\n]*\n([^2️⃣]*)/s);
+  if (section1Match) {
+    sections.push('1️⃣ Lecture implicite\n\n' + section1Match[1].trim());
+  }
+  
+  // Section 2️⃣
+  const section2Match = mirror.match(/2️⃣[^\n]*\n([^3️⃣]*)/s);
+  if (section2Match) {
+    sections.push('2️⃣ Déduction personnalisée\n\n' + section2Match[1].trim());
+  }
+  
+  // Section 3️⃣
+  const section3Match = mirror.match(/3️⃣[^\n]*\n(.*)/s);
+  if (section3Match) {
+    sections.push('3️⃣ Validation ouverte\n\n' + section3Match[1].trim());
+  }
+  
+  return sections;
+}
 
 function extractPreambuleFromPrompt(prompt: string): string {
   const match = prompt.match(/PRÉAMBULE MÉTIER[^]*?(?=🔒|🟢|$)/i);
@@ -831,15 +860,7 @@ Aucune analyse supplémentaire.
 
 Le matching est terminé.`;
 
-// Fonction pour obtenir le prompt complet (mémoire uniquement)
-function getFullAxiomPrompt(): string {
-  return `${PROMPT_AXIOM_ENGINE}\n\n${PROMPT_AXIOM_PROFIL}`;
-}
-
-// Fonction pour obtenir le prompt matching (mémoire uniquement)
-function getMatchingPrompt(): string {
-  return PROMPT_AXIOM_MATCHING;
-}
+// Les fonctions getFullAxiomPrompt() et getMatchingPrompt() sont importées depuis './prompts.js'
 
 // ============================================
 // ÉTATS STRICTS (FSM)
@@ -998,6 +1019,8 @@ export interface ExecuteAxiomResult {
   expectsAnswer: boolean;
   autoContinue: boolean;
   showStartButton?: boolean;
+  progressiveDisplay?: boolean;
+  mirrorSections?: string[];
 }
 
 export interface ExecuteAxiomInput {
@@ -1582,7 +1605,48 @@ Toute sortie hors règles = invalide.`,
           { role: 'system', content: FULL_AXIOM_PROMPT },
           {
             role: 'system',
-            content: `RÈGLE ABSOLUE AXIOM :
+            content: blocNumber >= 3 && blocNumber <= 9
+              ? `RÈGLE ABSOLUE AXIOM — MIROIR INTERPRÉTATIF ACTIF (REVELIOM)
+
+Tu es en fin de BLOC ${blocNumber}.
+Toutes les questions du BLOC ${blocNumber} ont été répondues.
+
+⚠️ FUSION CUMULATIVE OBLIGATOIRE
+Tu DOIS fusionner ce que tu observes ici avec les miroirs des blocs précédents présents dans l'historique.
+Tu montres une compréhension qui progresse, MAIS tu restes local et provisoire : aucune lecture globale avant la fin du parcours.
+
+⚠️ FORMAT STRICT OBLIGATOIRE (NON NÉGOCIABLE)
+
+1️⃣ Lecture implicite
+- EXACTEMENT 1 phrase unique
+- Maximum 20 mots
+- Prendre une position interprétative (signal faible), PAS une paraphrase
+- Interdiction : lister, décrire, résumer, reformuler
+
+2️⃣ Déduction personnalisée
+- EXACTEMENT 1 phrase unique
+- Maximum 25 mots
+- Lecture en creux OBLIGATOIRE : "ce n'est probablement pas X, mais plutôt Y"
+- Doit exprimer une tension, un moteur, un besoin implicite
+- Interdiction : neutralité descriptive, diagnostic, psychologie, conclusion
+
+3️⃣ Validation ouverte
+- Phrase EXACTE, inchangée :
+"Dis-moi si ça te parle, ou s'il y a une nuance importante que je n'ai pas vue."
+
+⚠️ INTERDICTIONS ABSOLUES
+- Plus de 2 phrases d'analyse au total (sections 1 + 2)
+- Narration continue
+- Synthèse / conclusion / cohérence globale
+- Projection vers métier/cadre/compatibilité
+
+⚠️ PORTÉE DU MIROIR
+- STRICTEMENT local et provisoire
+- Peut être contredit ensuite
+- SIGNAL FAIBLE (court, risqué, pas un "rapport IA")
+
+Tu produis UNIQUEMENT les 3 sections, dans cet ordre, sans texte supplémentaire.`
+              : `RÈGLE ABSOLUE AXIOM :
 Le moteur AXIOM n'interprète pas les prompts. Il les exécute STRICTEMENT.
 Tu es en état ${currentState} (BLOC ${blocNumber}).
 Tu exécutes STRICTEMENT le protocole AXIOM pour ce bloc.
@@ -1612,7 +1676,21 @@ Toute sortie hors règles = invalide.`,
             { role: 'system', content: FULL_AXIOM_PROMPT },
             {
               role: 'system',
-              content: `RÈGLE ABSOLUE AXIOM :
+              content: blocNumber >= 3 && blocNumber <= 9
+                ? `RÈGLE ABSOLUE AXIOM — RETRY MIROIR BLOC ${blocNumber} (FORMAT STRICT OBLIGATOIRE)
+
+⚠️ ERREURS DÉTECTÉES : Miroir non conforme
+
+Tu es en fin de BLOC ${blocNumber}.
+Réécris en conformité stricte REVELIOM :
+- Section 1️⃣ : EXACTEMENT 20 mots maximum, 1 phrase unique
+- Section 2️⃣ : EXACTEMENT 25 mots maximum, 1 phrase unique
+- Lecture en creux obligatoire : "ce n'est probablement pas X, mais plutôt Y"
+- Aucune synthèse, conclusion, cohérence globale, projection métier
+- Pas de texte additionnel
+
+Format strict : 3 sections séparées, pas de narration continue.`
+                : `RÈGLE ABSOLUE AXIOM :
 Le moteur AXIOM n'interprète pas les prompts. Il les exécute STRICTEMENT.
 Tu es en état ${currentState} (BLOC ${blocNumber}).
 Tu exécutes STRICTEMENT le protocole AXIOM pour ce bloc.
@@ -1652,7 +1730,69 @@ Toute sortie hors règles = invalide.`,
       };
     }
 
-    const expectsAnswer = aiText.trim().endsWith('?');
+    // Validation REVELIOM pour miroirs (blocs 3-9 uniquement)
+    let expectsAnswer = aiText ? aiText.trim().endsWith('?') : false;
+    
+    if (aiText && blocNumber >= 3 && blocNumber <= 9 && !expectsAnswer) {
+      // C'est un miroir → valider et retry si nécessaire
+      let mirror = aiText;
+      let retries = 0;
+      const maxRetries = 1;
+
+      while (retries <= maxRetries) {
+        const validation = validateMirrorREVELIOM(mirror);
+        
+        if (validation.valid) {
+          aiText = mirror;
+          break;
+        }
+
+        if (retries < maxRetries) {
+          console.warn(`[AXIOM_EXECUTOR] Miroir BLOC ${blocNumber} non conforme, retry ${retries + 1}/${maxRetries}`, validation.errors);
+          
+          // Retry avec prompt renforcé
+          try {
+            const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
+            const retryCompletion = await callOpenAI({
+              messages: [
+                { role: 'system', content: FULL_AXIOM_PROMPT },
+                {
+                  role: 'system',
+                  content: `RÈGLE ABSOLUE AXIOM — RETRY MIROIR BLOC ${blocNumber} (FORMAT STRICT OBLIGATOIRE)
+
+⚠️ ERREURS DÉTECTÉES : ${validation.errors.join(', ')}
+
+Tu es en fin de BLOC ${blocNumber}.
+Réécris en conformité stricte REVELIOM :
+- Section 1️⃣ : EXACTEMENT 20 mots maximum, 1 phrase unique
+- Section 2️⃣ : EXACTEMENT 25 mots maximum, 1 phrase unique
+- Lecture en creux obligatoire : "ce n'est probablement pas X, mais plutôt Y"
+- Aucune synthèse, conclusion, cohérence globale, projection métier
+- Pas de texte additionnel
+
+Format strict : 3 sections séparées, pas de narration continue.`,
+                },
+                ...messages,
+              });
+              
+            mirror = retryCompletion.trim();
+            retries++;
+          } catch (e) {
+            console.error(`[AXIOM_EXECUTOR] Erreur retry miroir BLOC ${blocNumber}`, e);
+            break;
+          }
+        } else {
+          console.error(`[AXIOM_EXECUTOR] Miroir BLOC ${blocNumber} non conforme après ${maxRetries} retries`, validation.errors);
+          // Fail-soft : servir quand même le miroir retry avec log d'erreur
+          aiText = mirror;
+          break;
+        }
+      }
+      
+      // Recalculer expectsAnswer après validation/retry
+      expectsAnswer = aiText ? aiText.trim().endsWith('?') : false;
+    }
+    
     let lastQuestion: string | null = null;
     if (expectsAnswer) {
       lastQuestion = aiText;
@@ -1726,12 +1866,26 @@ Toute sortie hors règles = invalide.`,
       };
     }
 
+    // Parser le miroir en sections pour affichage progressif (si c'est un miroir REVELIOM, blocs 3-9)
+    let progressiveDisplay = false;
+    let mirrorSections: string[] | undefined = undefined;
+    
+    if (aiText && !expectsAnswer && blocNumber >= 3 && blocNumber <= 9) {
+      const sections = parseMirrorSections(aiText);
+      if (sections.length > 0) {
+        progressiveDisplay = true;
+        mirrorSections = sections;
+      }
+    }
+    
     return {
       response: aiText || '',
       step: nextState,
       lastQuestion,
       expectsAnswer,
       autoContinue: false,
+      progressiveDisplay,
+      mirrorSections,
     };
   }
 
