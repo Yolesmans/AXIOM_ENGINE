@@ -1709,9 +1709,11 @@ Toute sortie hors règles = invalide.`,
 
     // Validation REVELIOM pour miroirs (blocs 3-9 uniquement)
     let expectsAnswer = aiText ? aiText.trim().endsWith('?') : false;
+    let isMirror = false;
     
     if (aiText && blocNumber >= 3 && blocNumber <= 9 && !expectsAnswer) {
       // C'est un miroir → valider et retry si nécessaire
+      isMirror = true;
       let mirror = aiText;
       let retries = 0;
       const maxRetries = 1;
@@ -1764,8 +1766,8 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
         }
       }
       
-      // Recalculer expectsAnswer après validation/retry
-      expectsAnswer = aiText ? aiText.trim().endsWith('?') : false;
+      // Forcer expectsAnswer: true pour les miroirs (C3)
+      expectsAnswer = true;
     }
     
     let lastQuestion: string | null = null;
@@ -1775,31 +1777,56 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
 
     // Stocker la réponse utilisateur
     if (userMessage) {
-      const answerRecord: AnswerRecord = {
-        block: blocNumber,
-        message: userMessage,
-        createdAt: new Date().toISOString(),
-      };
-      candidateStore.addAnswer(candidate.candidateId, answerRecord);
+      // Vérifier si c'est une validation miroir (bloc 3-9, step = bloc courant, expectsAnswer était true)
+      const isMirrorValidation = 
+        blocNumber >= 3 && blocNumber <= 9 && 
+        currentState.startsWith('BLOC_') &&
+        candidate.session.ui?.step === currentState;
       
-      // AUSSI stocker dans conversationHistory
-      candidateStore.appendUserMessage(candidate.candidateId, userMessage, {
-        block: blocNumber,
-        step: currentState,
-        kind: 'other',
-      });
+      if (isMirrorValidation) {
+        // Validation miroir → Stocker avec kind: 'mirror_validation'
+        console.log(`[AXIOM_EXECUTOR] Validation miroir BLOC ${blocNumber} reçue`);
+        candidateStore.appendMirrorValidation(candidate.candidateId, blocNumber, userMessage);
+      } else {
+        // Réponse normale à une question
+        const answerRecord: AnswerRecord = {
+          block: blocNumber,
+          message: userMessage,
+          createdAt: new Date().toISOString(),
+        };
+        candidateStore.addAnswer(candidate.candidateId, answerRecord);
+        
+        // AUSSI stocker dans conversationHistory
+        candidateStore.appendUserMessage(candidate.candidateId, userMessage, {
+          block: blocNumber,
+          step: currentState,
+          kind: 'other',
+        });
+      }
     }
 
     // Déterminer l'état suivant
     let nextState = currentState;
-    if (!expectsAnswer && blocNumber < 10) {
-      // Fin du bloc → passer au suivant
+    
+    // Si c'est une validation miroir, passer au bloc suivant
+    if (userMessage && blocNumber >= 3 && blocNumber <= 9 && 
+        currentState.startsWith('BLOC_') &&
+        candidate.session.ui?.step === currentState) {
+      // Validation miroir reçue → passer au bloc suivant
+      if (blocNumber < 10) {
+        nextState = blocStates[blocNumber] as any;
+      }
+    } else if (!expectsAnswer && blocNumber < 10 && !isMirror) {
+      // Fin du bloc (pas un miroir) → passer au suivant
       nextState = blocStates[blocNumber] as any;
     } else if (!expectsAnswer && blocNumber === 10) {
       // Fin du bloc 10 → générer synthèse et passer à match_ready
       // TODO: Générer synthèse finale
       nextState = STEP_99_MATCH_READY;
       candidateStore.setFinalProfileText(candidate.candidateId, aiText);
+    } else if (isMirror && expectsAnswer) {
+      // Miroir affiché → rester sur le bloc courant jusqu'à validation (C3)
+      nextState = currentState;
     }
 
     candidateStore.updateUIState(candidate.candidateId, {

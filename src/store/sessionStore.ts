@@ -422,6 +422,39 @@ class CandidateStore {
     return this.appendConversationMessage(candidateId, message);
   }
 
+  appendMirrorValidation(
+    candidateId: string,
+    mirrorBlock: number,
+    validationText: string
+  ): AxiomCandidate | undefined {
+    const candidate = this.candidates.get(candidateId);
+    if (!candidate) {
+      throw new Error(`Candidate ${candidateId} not found`);
+    }
+
+    const message: ConversationMessage = {
+      role: 'user',
+      content: validationText,
+      createdAt: new Date().toISOString(),
+      block: mirrorBlock,
+      step: `BLOC_${String(mirrorBlock).padStart(2, '0')}`,
+      kind: 'mirror_validation',
+    };
+
+    const updated: AxiomCandidate = {
+      ...candidate,
+      conversationHistory: [...(candidate.conversationHistory || []), message],
+      session: {
+        ...candidate.session,
+        lastActivityAt: new Date(),
+      },
+    };
+
+    this.candidates.set(candidateId, updated);
+    this.persistCandidate(candidateId);
+    return updated;
+  }
+
   initQuestionQueue(candidateId: string, blockNumber: number): QuestionQueue {
     const candidate = this.candidates.get(candidateId);
     if (!candidate) {

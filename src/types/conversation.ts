@@ -1,6 +1,6 @@
 export type ConversationRole = "system" | "user" | "assistant";
 
-export type ConversationMessageKind = "tone" | "preambule" | "question" | "mirror" | "matching" | "other";
+export type ConversationMessageKind = "tone" | "preambule" | "question" | "mirror" | "mirror_validation" | "matching" | "other";
 
 export interface ConversationMessage {
   role: "user" | "assistant";

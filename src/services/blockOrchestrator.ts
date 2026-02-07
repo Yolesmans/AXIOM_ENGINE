@@ -208,7 +208,57 @@ export class BlockOrchestrator {
 
       // Vérifier si toutes les questions ont été répondues
       if (finalQueue.cursorIndex >= finalQueue.questions.length) {
-        // Toutes les questions répondues → Générer miroir
+        // Vérifier si c'est une validation miroir (toutes questions répondues + step = BLOC_01)
+        const currentStep = currentCandidate.session.ui?.step;
+        if (currentStep === BLOC_01 && userMessage) {
+          // Validation miroir BLOC 1 → Stocker validation et générer question BLOC 2A
+          console.log('[ORCHESTRATOR] Validation miroir BLOC 1 reçue');
+          candidateStore.appendMirrorValidation(currentCandidate.candidateId, blockNumber, userMessage);
+          
+          // Passer au BLOC 2A
+          candidateStore.updateSession(currentCandidate.candidateId, {
+            state: "collecting",
+            currentBlock: 2,
+          });
+          candidateStore.updateUIState(currentCandidate.candidateId, {
+            step: BLOC_02,
+            lastQuestion: null,
+            identityDone: true,
+          });
+          
+          // Recharger le candidate pour avoir l'état à jour
+          const updatedCandidate = candidateStore.get(currentCandidate.candidateId);
+          if (!updatedCandidate) {
+            throw new Error(`Candidate ${currentCandidate.candidateId} not found after validation`);
+          }
+          
+          // Générer la première question BLOC 2A
+          console.log('[ORCHESTRATOR] generate question 2A.1 after BLOC 1 mirror validation');
+          const firstQuestion2A = await this.generateQuestion2A1(updatedCandidate, 0);
+          
+          // Enregistrer la question dans conversationHistory
+          candidateStore.appendAssistantMessage(updatedCandidate.candidateId, firstQuestion2A, {
+            block: 2,
+            step: BLOC_02,
+            kind: 'question',
+          });
+          
+          // Mettre à jour UI state avec la question
+          candidateStore.updateUIState(updatedCandidate.candidateId, {
+            step: BLOC_02,
+            lastQuestion: firstQuestion2A,
+            identityDone: true,
+          });
+          
+          return {
+            response: firstQuestion2A,
+            step: BLOC_02,
+            expectsAnswer: true,
+            autoContinue: false,
+          };
+        }
+        
+        // Toutes les questions répondues → Générer miroir (sans question 2A)
         console.log('[ORCHESTRATOR] generate mirror bloc 1 (API)');
         candidateStore.markBlockComplete(currentCandidate.candidateId, blockNumber);
         const mirror = await this.generateMirrorForBlock1(currentCandidate);
@@ -216,52 +266,25 @@ export class BlockOrchestrator {
         // Enregistrer le miroir dans conversationHistory
         candidateStore.appendAssistantMessage(currentCandidate.candidateId, mirror, {
           block: blockNumber,
-          step: BLOC_02, // Transition vers BLOC 2
+          step: BLOC_01, // Rester sur BLOC_01 jusqu'à validation
           kind: 'mirror',
         });
 
-        // Mettre à jour session (currentBlock) ET UI state
-        candidateStore.updateSession(currentCandidate.candidateId, {
-          state: "collecting",
-          currentBlock: 2,
-        });
+        // Mettre à jour UI state (currentBlock reste 1 jusqu'à validation)
         candidateStore.updateUIState(currentCandidate.candidateId, {
-          step: BLOC_02,
+          step: BLOC_01, // Rester sur BLOC_01
           lastQuestion: null,
-          identityDone: true,
-        });
-
-        // Recharger le candidate pour avoir l'état à jour
-        const updatedCandidate = candidateStore.get(currentCandidate.candidateId);
-        if (!updatedCandidate) {
-          throw new Error(`Candidate ${currentCandidate.candidateId} not found after mirror`);
-        }
-
-        // Générer immédiatement la première question BLOC 2A
-        console.log('[ORCHESTRATOR] generate question 2A.1 immediately after BLOC 1 mirror');
-        const firstQuestion2A = await this.generateQuestion2A1(updatedCandidate, 0);
-        
-        // Enregistrer la question dans conversationHistory
-        candidateStore.appendAssistantMessage(updatedCandidate.candidateId, firstQuestion2A, {
-          block: 2,
-          step: BLOC_02,
-          kind: 'question',
-        });
-
-        // Mettre à jour UI state avec la question
-        candidateStore.updateUIState(updatedCandidate.candidateId, {
-          step: BLOC_02,
-          lastQuestion: firstQuestion2A,
           identityDone: true,
         });
 
         // Parser le miroir en sections pour affichage progressif
         const mirrorSections = parseMirrorSections(mirror);
         
+        // Retourner UNIQUEMENT le miroir avec expectsAnswer: true
         return {
-          response: mirror + '\n\n' + firstQuestion2A,
-          step: BLOC_02,
-          expectsAnswer: true,
+          response: mirror,
+          step: BLOC_01, // Rester sur BLOC_01 jusqu'à validation
+          expectsAnswer: true, // Forcer true pour validation
           autoContinue: false,
           progressiveDisplay: mirrorSections.length === 3,
           mirrorSections: mirrorSections.length === 3 ? mirrorSections : undefined,
@@ -904,7 +927,50 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
 
       // Vérifier si toutes les questions ont été répondues
       if (finalQueue.cursorIndex >= finalQueue.questions.length) {
-        // Toutes les questions répondues → Générer miroir final
+        // Vérifier si c'est une validation miroir (toutes questions répondues + step = BLOC_02)
+        const currentStep = currentCandidate.session.ui?.step;
+        if (currentStep === BLOC_02 && userMessage) {
+          // Validation miroir BLOC 2B → Stocker validation et générer question BLOC 3
+          console.log('[ORCHESTRATOR] Validation miroir BLOC 2B reçue');
+          candidateStore.appendMirrorValidation(candidateId, blockNumber, userMessage);
+          
+          // Passer au BLOC 3
+          candidateStore.updateSession(candidateId, {
+            state: "collecting",
+            currentBlock: 3,
+          });
+          candidateStore.updateUIState(candidateId, {
+            step: BLOC_03,
+            lastQuestion: null,
+            identityDone: true,
+          });
+          
+          // Recharger le candidate pour avoir l'état à jour
+          let updatedCandidate = candidateStore.get(candidateId);
+          if (!updatedCandidate) {
+            updatedCandidate = await candidateStore.getAsync(candidateId);
+          }
+          if (!updatedCandidate) {
+            throw new Error(`Candidate ${candidateId} not found after validation`);
+          }
+          
+          // Appeler executeAxiom() pour générer la première question BLOC 3
+          console.log('[ORCHESTRATOR] generate first question BLOC 3 after BLOC 2B mirror validation');
+          const nextResult = await executeAxiom({
+            candidate: updatedCandidate,
+            userMessage: null,
+            event: undefined,
+          });
+          
+          return {
+            response: nextResult.response,
+            step: nextResult.step,
+            expectsAnswer: nextResult.expectsAnswer,
+            autoContinue: false,
+          };
+        }
+        
+        // Toutes les questions répondues → Générer miroir (sans question 3)
         console.log('[ORCHESTRATOR] Generating BLOC 2B final mirror (API)');
         candidateStore.markBlockComplete(candidateId, blockNumber);
         
@@ -913,45 +979,25 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
         // Enregistrer le miroir dans conversationHistory
         candidateStore.appendAssistantMessage(candidateId, mirror, {
           block: blockNumber,
-          step: BLOC_03,
+          step: BLOC_02, // Rester sur BLOC_02 jusqu'à validation
           kind: 'mirror',
         });
 
-        // Mettre à jour session (currentBlock) ET UI state
-        candidateStore.updateSession(candidateId, {
-          state: "collecting",
-          currentBlock: 3,
-        });
+        // Mettre à jour UI state (currentBlock reste 2 jusqu'à validation)
         candidateStore.updateUIState(candidateId, {
-          step: BLOC_03,
+          step: BLOC_02, // Rester sur BLOC_02
           lastQuestion: null,
           identityDone: true,
-        });
-
-        // Recharger le candidate pour avoir l'état à jour
-        let updatedCandidate = candidateStore.get(candidateId);
-        if (!updatedCandidate) {
-          updatedCandidate = await candidateStore.getAsync(candidateId);
-        }
-        if (!updatedCandidate) {
-          throw new Error(`Candidate ${candidateId} not found after mirror`);
-        }
-
-        // Appeler executeAxiom() pour générer la première question BLOC 3
-        console.log('[ORCHESTRATOR] generate first question BLOC 3 immediately after BLOC 2B mirror');
-        const nextResult = await executeAxiom({
-          candidate: updatedCandidate,
-          userMessage: null,
-          event: undefined,
         });
 
         // Parser le miroir en sections pour affichage progressif (si format REVELIOM)
         const mirrorSections = parseMirrorSections(mirror);
         
+        // Retourner UNIQUEMENT le miroir avec expectsAnswer: true
         return {
-          response: mirror + '\n\n' + nextResult.response,
-          step: nextResult.step,
-          expectsAnswer: nextResult.expectsAnswer,
+          response: mirror,
+          step: BLOC_02, // Rester sur BLOC_02 jusqu'à validation
+          expectsAnswer: true, // Forcer true pour validation
           autoContinue: false,
           progressiveDisplay: mirrorSections.length === 3,
           mirrorSections: mirrorSections.length === 3 ? mirrorSections : undefined,
