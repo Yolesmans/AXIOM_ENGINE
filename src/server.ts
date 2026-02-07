@@ -707,8 +707,10 @@ app.post("/axiom", async (req: Request, res: Response) => {
       });
     }
     
-    // PHASE 2 : Déléguer BLOC 1 à l'orchestrateur
-    if (candidate.session.ui?.step === BLOC_01 || candidate.session.currentBlock === 1) {
+    // PHASE 2 : Déléguer BLOC 1 à l'orchestrateur (LOT 1 : uniquement si BLOC 1 déjà démarré)
+    // IMPORTANT : Ne pas déléguer si step === STEP_03_BLOC1 (attente bouton START_BLOC_1)
+    if (candidate.session.ui?.step === BLOC_01 && candidate.session.currentBlock === 1) {
+      // BLOC 1 déjà démarré → déléguer à l'orchestrateur
       // Enregistrer le message utilisateur dans conversationHistory AVANT d'appeler l'orchestrateur
       if (userMessageText) {
         const candidateIdForUserMessage = candidate.candidateId;
@@ -731,6 +733,7 @@ app.post("/axiom", async (req: Request, res: Response) => {
       }
       
       const orchestrator = new BlockOrchestrator();
+      // LOT 1 : Ne pas passer d'event (null) car le BLOC 1 est déjà démarré
       const result = await orchestrator.handleMessage(candidate, userMessageText, null);
       
       // Recharger le candidate AVANT le mapping pour avoir l'état à jour

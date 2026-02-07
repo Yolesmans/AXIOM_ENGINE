@@ -162,14 +162,27 @@ export class BlockOrchestrator {
 
     const queue = currentCandidate.blockQueues?.[blockNumber];
 
-    // Cas 1 : Event START_BLOC_1 ou début de bloc (pas de queue)
-    if (event === 'START_BLOC_1' || !queue || queue.questions.length === 0) {
+    // Cas 1 : Event START_BLOC_1 UNIQUEMENT (LOT 1 : démarrage volontaire obligatoire)
+    if (event === 'START_BLOC_1') {
+      // Vérifier si les questions ont déjà été générées (anti-double)
+      if (queue && queue.questions.length > 0) {
+        // Questions déjà générées → servir la première question
+        console.log('[ORCHESTRATOR] BLOC 1 déjà démarré, servir question depuis queue');
+        return this.serveNextQuestion(currentCandidate.candidateId, blockNumber);
+      }
+      
+      // Générer toutes les questions BLOC 1 (génération interne, pas affichage)
       console.log('[ORCHESTRATOR] generate questions bloc 1 (API)');
       const questions = await this.generateQuestionsForBlock1(currentCandidate);
       candidateStore.setQuestionsForBlock(currentCandidate.candidateId, blockNumber, questions);
       
-      // Servir la première question
+      // Servir UNIQUEMENT la première question (LOT 1 : séquentiel strict)
       return this.serveNextQuestion(currentCandidate.candidateId, blockNumber);
+    }
+    
+    // Si pas d'event START_BLOC_1 et queue vide → erreur (BLOC 1 ne doit pas démarrer automatiquement)
+    if (!queue || queue.questions.length === 0) {
+      throw new Error('BLOC 1 cannot start without START_BLOC_1 event. Queue is empty.');
     }
 
     // Cas 2 : Réponse utilisateur reçue
