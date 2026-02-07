@@ -933,9 +933,13 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
 
       // Vérifier si toutes les questions ont été répondues
       if (finalQueue.cursorIndex >= finalQueue.questions.length) {
-        // Vérifier si c'est une validation miroir (toutes questions répondues + step = BLOC_02)
-        const currentStep = currentCandidate.session.ui?.step;
-        if (currentStep === BLOC_02 && userMessage) {
+        // Vérifier si le miroir a déjà été généré (dernier message assistant est un miroir de BLOC 2B)
+        const conversationHistory = currentCandidate.conversationHistory || [];
+        const lastAssistantMessage = [...conversationHistory]
+          .reverse()
+          .find(m => m.role === 'assistant' && m.kind === 'mirror' && m.block === blockNumber);
+        
+        if (lastAssistantMessage && userMessage) {
           // Validation miroir BLOC 2B → Stocker validation et générer question BLOC 3
           console.log('[ORCHESTRATOR] Validation miroir BLOC 2B reçue');
           candidateStore.appendMirrorValidation(candidateId, blockNumber, userMessage);

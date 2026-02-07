@@ -1777,11 +1777,16 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
 
     // Stocker la réponse utilisateur
     if (userMessage) {
-      // Vérifier si c'est une validation miroir (bloc 3-9, step = bloc courant, expectsAnswer était true)
+      // Vérifier si c'est une validation miroir (dernier message assistant est un miroir de ce bloc)
+      const conversationHistory = candidate.conversationHistory || [];
+      const lastAssistantMessage = [...conversationHistory]
+        .reverse()
+        .find(m => m.role === 'assistant' && m.kind === 'mirror' && m.block === blocNumber);
+      
       const isMirrorValidation = 
         blocNumber >= 3 && blocNumber <= 9 && 
         currentState.startsWith('BLOC_') &&
-        candidate.session.ui?.step === currentState;
+        lastAssistantMessage !== undefined;
       
       if (isMirrorValidation) {
         // Validation miroir → Stocker avec kind: 'mirror_validation'
@@ -1809,24 +1814,43 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
     let nextState = currentState;
     
     // Si c'est une validation miroir, passer au bloc suivant
-    if (userMessage && blocNumber >= 3 && blocNumber <= 9 && 
-        currentState.startsWith('BLOC_') &&
-        candidate.session.ui?.step === currentState) {
-      // Validation miroir reçue → passer au bloc suivant
-      if (blocNumber < 10) {
+    if (userMessage) {
+      const conversationHistory = candidate.conversationHistory || [];
+      const lastAssistantMessage = [...conversationHistory]
+        .reverse()
+        .find(m => m.role === 'assistant' && m.kind === 'mirror' && m.block === blocNumber);
+      
+      if (lastAssistantMessage && blocNumber >= 3 && blocNumber <= 9 && currentState.startsWith('BLOC_')) {
+        // Validation miroir reçue → passer au bloc suivant
+        if (blocNumber < 10) {
+          nextState = blocStates[blocNumber] as any;
+        }
+      } else if (!expectsAnswer && blocNumber < 10 && !isMirror) {
+        // Fin du bloc (pas un miroir) → passer au suivant
         nextState = blocStates[blocNumber] as any;
+      } else if (!expectsAnswer && blocNumber === 10) {
+        // Fin du bloc 10 → générer synthèse et passer à match_ready
+        // TODO: Générer synthèse finale
+        nextState = STEP_99_MATCH_READY;
+        candidateStore.setFinalProfileText(candidate.candidateId, aiText);
+      } else if (isMirror && expectsAnswer) {
+        // Miroir affiché → rester sur le bloc courant jusqu'à validation (LOT 1)
+        nextState = currentState;
       }
-    } else if (!expectsAnswer && blocNumber < 10 && !isMirror) {
-      // Fin du bloc (pas un miroir) → passer au suivant
-      nextState = blocStates[blocNumber] as any;
-    } else if (!expectsAnswer && blocNumber === 10) {
-      // Fin du bloc 10 → générer synthèse et passer à match_ready
-      // TODO: Générer synthèse finale
-      nextState = STEP_99_MATCH_READY;
-      candidateStore.setFinalProfileText(candidate.candidateId, aiText);
-    } else if (isMirror && expectsAnswer) {
-      // Miroir affiché → rester sur le bloc courant jusqu'à validation (C3)
-      nextState = currentState;
+    } else {
+      // Pas de userMessage → logique normale (génération miroir ou question)
+      if (!expectsAnswer && blocNumber < 10 && !isMirror) {
+        // Fin du bloc (pas un miroir) → passer au suivant
+        nextState = blocStates[blocNumber] as any;
+      } else if (!expectsAnswer && blocNumber === 10) {
+        // Fin du bloc 10 → générer synthèse et passer à match_ready
+        // TODO: Générer synthèse finale
+        nextState = STEP_99_MATCH_READY;
+        candidateStore.setFinalProfileText(candidate.candidateId, aiText);
+      } else if (isMirror && expectsAnswer) {
+        // Miroir affiché → rester sur le bloc courant jusqu'à validation (LOT 1)
+        nextState = currentState;
+      }
     }
 
     candidateStore.updateUIState(candidate.candidateId, {

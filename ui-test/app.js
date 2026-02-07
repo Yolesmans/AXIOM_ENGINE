@@ -104,10 +104,7 @@ async function callAxiom(message, event = null) {
     if (data.response) {
       // Affichage progressif des miroirs REVELIOM
       if (data.progressiveDisplay === true && Array.isArray(data.mirrorSections) && data.mirrorSections.length === 3) {
-        // Reconstruire le miroir complet pour extraire la question suivante
-        const fullMirror = data.mirrorSections.join('\n\n');
-        const questionAfterMirror = data.response.replace(fullMirror, '').replace(/^\n\n+/, '').trim();
-        
+        // LOT 1 : Miroir seul, aucune question suivante dans le même message
         // Afficher section 1️⃣
         addMessage('assistant', data.mirrorSections[0]);
         
@@ -118,17 +115,12 @@ async function callAxiom(message, event = null) {
           // Attendre 900ms puis afficher section 3️⃣
           setTimeout(() => {
             addMessage('assistant', data.mirrorSections[2]);
-            
-            // Afficher la question suivante APRÈS la section 3️⃣ (si elle existe)
-            if (questionAfterMirror) {
-              setTimeout(() => {
-                addMessage('assistant', questionAfterMirror);
-              }, 100);
-            }
+            // LOT 1 : Pas de question suivante affichée ici - le backend retourne uniquement le miroir
           }, 900);
         }, 900);
       } else {
         // Affichage normal (pas de découpage progressif)
+        // LOT 1 : data.response contient uniquement le miroir ou uniquement la question, jamais les deux
         addMessage('assistant', data.response);
       }
     }
