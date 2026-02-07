@@ -634,6 +634,13 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
         };
       }
 
+      // ÉTAPE 1 — Transition automatique BLOC 2A → BLOC 2B (après 3 réponses)
+      if (updatedAnsweredCount === 3) {
+        console.log('[ORCHESTRATOR] BLOC 2A terminé → transition automatique vers BLOC 2B');
+        // Transition automatique vers BLOC 2B (comme BLOC 1 → BLOC 2A après validation miroir)
+        return this.handleBlock2B(currentCandidate, null, null);
+      }
+
     }
 
     // Cas 3 : Pas de message utilisateur → Retourner la dernière question si disponible

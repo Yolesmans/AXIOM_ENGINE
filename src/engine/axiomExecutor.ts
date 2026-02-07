@@ -1556,6 +1556,25 @@ Toute sortie hors règles = invalide.`,
   }
 
   // ============================================
+  // HELPER — Noms des blocs pour annonce de transition
+  // ============================================
+  function getBlockName(blockNumber: number): string {
+    const blockNames: Record<number, string> = {
+      1: 'Énergie & moteurs internes',
+      2: 'Projections narratives',
+      3: 'Valeurs profondes & fonctionnement cognitif',
+      4: 'Compétences réelles & illusions',
+      5: 'Ambition & trajectoire future',
+      6: 'Contraintes & réalités (mobilité, salaire, rythme)',
+      7: 'Identité professionnelle (métier naturel, métier rêvé, métier apprenable)',
+      8: 'Relation au management',
+      9: 'Style social & dynamique interpersonnelle',
+      10: 'Synthèse finale (lecture globale unifiée)',
+    };
+    return blockNames[blockNumber] || `BLOC ${blockNumber}`;
+  }
+
+  // ============================================
   // BLOCS 1 à 10
   // ============================================
   const blocStates = [BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10];
@@ -1622,7 +1641,15 @@ Le profil est INCOMPLET tant que le BLOC 9 n'est pas terminé.
 - Il ne clôt RIEN
 
 Ce miroir est un SIGNAL FAIBLE.
-Il marque une direction, pas une conclusion.`
+Il marque une direction, pas une conclusion.
+
+⚠️ ANNONCE DE TRANSITION (OBLIGATOIRE — APRÈS LE MIROIR)
+Après avoir produit le miroir (3 sections strictes), tu DOIS annoncer explicitement :
+"Fin du BLOC ${blocNumber}. On passe au BLOC ${blocNumber + 1} — ${getBlockName(blocNumber + 1)}."
+
+Cette annonce doit être SÉPARÉE du miroir par un saut de ligne.
+Le miroir reste STRICTEMENT dans son format (20/25 mots, 3 sections).
+L'annonce est un texte additionnel, clair et explicite.`
               : `RÈGLE ABSOLUE AXIOM :
 Le moteur AXIOM n'interprète pas les prompts. Il les exécute STRICTEMENT.
 Tu es en état ${currentState} (BLOC ${blocNumber}).
