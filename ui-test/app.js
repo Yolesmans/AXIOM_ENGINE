@@ -15,21 +15,31 @@ function getStorageKey() {
 }
 
 // Fonction pour ajouter un message
+// LOT 1 : Protection anti-doublon pour garantir séquentialité stricte
 function addMessage(role, text) {
   const messagesContainer = document.getElementById('messages');
   if (!messagesContainer) return;
 
-  // Anti-spam UI : ne pas empiler des cartes tone identiques
+  // LOT 1 : Protection anti-doublon - ne pas afficher le même message deux fois
   if (role === 'assistant') {
     const lastMessage = messagesContainer.lastElementChild;
     if (lastMessage && lastMessage.classList.contains('message-reveliom')) {
       const lastText = lastMessage.querySelector('p')?.textContent || '';
+      const textTrimmed = (text || '').trim();
+      
+      // Vérifier si le dernier message assistant est identique au nouveau
+      if (lastText === textTrimmed) {
+        console.warn('[FRONTEND] [LOT1] Duplicate message detected, skipping');
+        return; // Skip duplicate
+      }
+      
+      // Anti-spam UI : ne pas empiler des cartes tone identiques
       const toneQuestion = 'Bienvenue dans AXIOM.\n' +
         'On va découvrir qui tu es vraiment — pas ce qu\'il y a sur ton CV.\n' +
         'Promis : je ne te juge pas. Je veux juste comprendre comment tu fonctionnes.\n\n' +
         'On commence tranquille.\n' +
         'Dis-moi : tu préfères qu\'on se tutoie ou qu\'on se vouvoie pour cette discussion ?';
-      if (lastText === toneQuestion && text === toneQuestion) {
+      if (lastText === toneQuestion && textTrimmed === toneQuestion) {
         return; // Skip duplicate
       }
     }
@@ -101,6 +111,7 @@ async function callAxiom(message, event = null) {
     }
 
     // Afficher la réponse (toujours présente)
+    // LOT 1 : Afficher UNIQUEMENT la question/miroir courant, jamais plusieurs questions
     if (data.response) {
       // Affichage progressif des miroirs REVELIOM
       if (data.progressiveDisplay === true && Array.isArray(data.mirrorSections) && data.mirrorSections.length === 3) {
@@ -120,8 +131,21 @@ async function callAxiom(message, event = null) {
         }, 900);
       } else {
         // Affichage normal (pas de découpage progressif)
-        // LOT 1 : data.response contient uniquement le miroir ou uniquement la question, jamais les deux
-        addMessage('assistant', data.response);
+        // LOT 1 : data.response doit contenir UNIQUEMENT une question ou UNIQUEMENT un miroir
+        const responseText = data.response.trim();
+        
+        // Protection LOT 1 : Détecter et isoler une seule question/miroir
+        // Si plusieurs questions sont présentes (séparateur ---QUESTION_SEPARATOR---), n'afficher que la première
+        if (responseText.includes('---QUESTION_SEPARATOR---')) {
+          // Plusieurs questions détectées → n'afficher que la première (LOT 1 : séquentiel strict)
+          const firstQuestion = responseText.split('---QUESTION_SEPARATOR---')[0].trim();
+          console.warn('[FRONTEND] [LOT1] Multiple questions detected in response, displaying only first question');
+          addMessage('assistant', firstQuestion);
+        } else {
+          // Une seule question/miroir → afficher normalement
+          // LOT 1 : Garantir qu'on n'affiche qu'un seul message assistant à la fois
+          addMessage('assistant', responseText);
+        }
       }
     }
 
