@@ -112,6 +112,27 @@ Chaque question doit être spécifique à ces œuvres.`
   return messages;
 }
 
+/**
+ * SAFEGUARD — Normalise la réponse pour garantir le contrat backend→frontend
+ * 1 requête API = 1 message affichable maximum côté UI
+ * 
+ * Si plusieurs questions sont concaténées (séparées par ---QUESTION_SEPARATOR---),
+ * ne retourne que la première pour respecter l'affichage séquentiel strict.
+ */
+function normalizeSingleResponse(response?: string): string {
+  if (!response) return '';
+
+  // SAFEGUARD — ne jamais exposer plus d'un message affichable
+  if (response.includes('---QUESTION_SEPARATOR---')) {
+    console.warn(
+      '[AXIOM][SAFEGUARD] Multiple questions detected in response — truncating to first'
+    );
+    return response.split('---QUESTION_SEPARATOR---')[0].trim();
+  }
+
+  return response.trim();
+}
+
 export interface OrchestratorResult {
   response: string;
   step: string;
@@ -240,7 +261,7 @@ export class BlockOrchestrator {
         });
         
         return {
-          response: firstQuestion2A,
+          response: normalizeSingleResponse(firstQuestion2A),
           step: BLOC_02,
           expectsAnswer: true,
           autoContinue: false,
@@ -301,7 +322,7 @@ export class BlockOrchestrator {
         
         // Retourner UNIQUEMENT le miroir avec expectsAnswer: true
         return {
-          response: mirror,
+          response: normalizeSingleResponse(mirror),
           step: BLOC_01, // Rester sur BLOC_01 jusqu'à validation
           expectsAnswer: true, // Forcer true pour validation
           autoContinue: false,
@@ -396,7 +417,7 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
     candidateStore.advanceQuestionCursor(candidateId, blockNumber);
 
     return {
-      response: question,
+      response: normalizeSingleResponse(question),
       step: BLOC_01,
       expectsAnswer: true,
       autoContinue: false,
@@ -557,7 +578,7 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
       });
 
       return {
-        response: question,
+        response: normalizeSingleResponse(question),
         step: BLOC_02,
         expectsAnswer: true,
         autoContinue: false,
@@ -602,7 +623,7 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
         });
 
         return {
-          response: question,
+          response: normalizeSingleResponse(question),
           step: BLOC_02,
           expectsAnswer: true,
           autoContinue: false,
@@ -627,7 +648,7 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
         });
 
         return {
-          response: question,
+          response: normalizeSingleResponse(question),
           step: BLOC_02,
           expectsAnswer: true,
           autoContinue: false,
@@ -647,7 +668,7 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
     const lastQuestion = currentCandidate.session.ui?.lastQuestion;
     if (lastQuestion) {
       return {
-        response: lastQuestion,
+        response: normalizeSingleResponse(lastQuestion),
         step: BLOC_02,
         expectsAnswer: true,
         autoContinue: false,
@@ -993,7 +1014,7 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
           });
           
           return {
-            response: nextResult.response,
+            response: normalizeSingleResponse(nextResult.response),
             step: nextResult.step,
             expectsAnswer: nextResult.expectsAnswer,
             autoContinue: false,
@@ -1025,7 +1046,7 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
         
         // Retourner UNIQUEMENT le miroir avec expectsAnswer: true
         return {
-          response: mirror,
+          response: normalizeSingleResponse(mirror),
           step: BLOC_02, // Rester sur BLOC_02 jusqu'à validation
           expectsAnswer: true, // Forcer true pour validation
           autoContinue: false,
@@ -1638,7 +1659,7 @@ Format de sortie OBLIGATOIRE :
     candidateStore.advanceQuestionCursor(candidateId, blockNumber);
 
     return {
-      response: question,
+      response: normalizeSingleResponse(question),
       step: BLOC_02,
       expectsAnswer: true,
       autoContinue: false,
@@ -1703,9 +1724,21 @@ ${answersContext}
 5. Elle DOIT citer explicitement les œuvres ET les personnages.
 6. Elle DOIT être exploitable pour la suite du profil (management, ambition, environnements).
 
-Format : Synthèse continue, dense, incarnée, structurante.
+⚠️ PROFONDEUR INTERPRÉTATIVE OBLIGATOIRE :
+La synthèse DOIT être PROJECTIVE, pas descriptive :
+- Lecture en creux : "ce n'est probablement pas X, mais plutôt Y"
+- Position interprétative claire : prendre un angle, pas rester neutre
+- Tension ou moteur implicite : expliciter ce qui n'est pas dit mais révélé
+- Ton mentor lucide : non flatteur, non générique, non descriptif
+
+INTERDICTIONS ABSOLUES :
+- Synthèse descriptive (liste de traits, paraphrase des réponses)
+- Ton analytique neutre (sans position interprétative)
+- Formulations génériques réutilisables
+
+Format : Synthèse continue, dense, incarnée, structurante, PROJECTIVE.
 PAS de liste à puces. PAS de formatage excessif.
-Une lecture projective, pas descriptive.`
+Une lecture projective qui révèle, pas une description qui résume.`
         },
         ...messages,
       ],
