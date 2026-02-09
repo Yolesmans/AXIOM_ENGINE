@@ -90,7 +90,7 @@ export function validateMentorStyle(content: string): MentorStyleValidationResul
     let sectionHasDeclarative = false;
     let sectionHasExperiential = false;
 
-    sentences.forEach((sentence, sentenceIndex) {
+    sentences.forEach((sentence, sentenceIndex) => {
       // Vérifier présence patterns déclaratifs interdits
       const hasDeclarativePattern = declarativePatterns.some(pattern => pattern.test(sentence));
       if (hasDeclarativePattern) {
