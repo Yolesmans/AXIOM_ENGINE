@@ -7,6 +7,7 @@ import { validateTraitsSpecificity, validateMotifsSpecificity, validateSynthesis
 import { validateMirrorREVELIOM } from './validateMirrorReveliom.js';
 import { parseMirrorSections } from './parseMirrorSections.js';
 import { generateInterpretiveStructure } from './interpretiveStructureGenerator.js';
+import { selectMentorAngle } from './mentorAngleSelector.js';
 import { renderMentorStyle } from './mentorStyleRenderer.js';
 function getFullAxiomPrompt() {
     return `${PROMPT_AXIOM_ENGINE}\n\n${PROMPT_AXIOM_PROFIL}`;
@@ -391,7 +392,7 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
                 .sort(([a], [b]) => parseInt(a) - parseInt(b));
             userAnswers = sortedEntries.map(([, answer]) => answer);
         }
-        console.log('[BLOC1][NEW_ARCHITECTURE] Génération miroir en 2 étapes (interprétation + rendu)');
+        console.log('[BLOC1][NEW_ARCHITECTURE] Génération miroir en 3 étapes (interprétation + angle + rendu)');
         console.log('[BLOC1] Réponses utilisateur:', userAnswers.length);
         try {
             // ============================================
@@ -404,11 +405,17 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
                 mecanisme: structure.mecanisme.substring(0, 50) + '...',
             });
             // ============================================
-            // ÉTAPE 2 — RENDU MENTOR INCARNÉ
+            // ÉTAPE 2 — DÉCISION D'ANGLE (OBLIGATOIRE)
             // ============================================
-            console.log('[BLOC1][ETAPE2] Rendu mentor incarné...');
-            const mentorText = await renderMentorStyle(structure, 'block1');
-            console.log('[BLOC1][ETAPE2] Texte mentor généré');
+            console.log('[BLOC1][ETAPE2] Sélection angle mentor...');
+            const mentorAngle = await selectMentorAngle(structure);
+            console.log('[BLOC1][ETAPE2] Angle mentor sélectionné:', mentorAngle.substring(0, 80) + '...');
+            // ============================================
+            // ÉTAPE 3 — RENDU MENTOR INCARNÉ
+            // ============================================
+            console.log('[BLOC1][ETAPE3] Rendu mentor incarné...');
+            const mentorText = await renderMentorStyle(mentorAngle, 'block1');
+            console.log('[BLOC1][ETAPE3] Texte mentor généré');
             // ============================================
             // VALIDATION FINALE (FORMAT REVELIOM)
             // ============================================
@@ -1457,7 +1464,7 @@ Format de sortie OBLIGATOIRE :
                 .sort(([a], [b]) => parseInt(a) - parseInt(b));
             block2BAnswers.push(...sortedEntries.slice(3).map(([, answer]) => answer).filter(a => a && a.trim().length > 0));
         }
-        console.log('[BLOC2B][NEW_ARCHITECTURE] Génération miroir en 2 étapes (interprétation + rendu)');
+        console.log('[BLOC2B][NEW_ARCHITECTURE] Génération miroir en 3 étapes (interprétation + angle + rendu)');
         console.log('[BLOC2B] Réponses utilisateur:', block2BAnswers.length);
         try {
             // ÉTAPE 1 — INTERPRÉTATION (FROIDE, LOGIQUE)
@@ -1472,10 +1479,14 @@ Format de sortie OBLIGATOIRE :
                 hypothese_centrale: structure.hypothese_centrale.substring(0, 50) + '...',
                 mecanisme: structure.mecanisme.substring(0, 50) + '...',
             });
-            // ÉTAPE 2 — RENDU MENTOR INCARNÉ
-            console.log('[BLOC2B][ETAPE2] Rendu mentor incarné...');
-            const mentorText = await renderMentorStyle(structure, 'block2b');
-            console.log('[BLOC2B][ETAPE2] Texte mentor généré');
+            // ÉTAPE 2 — DÉCISION D'ANGLE (OBLIGATOIRE)
+            console.log('[BLOC2B][ETAPE2] Sélection angle mentor...');
+            const mentorAngle = await selectMentorAngle(structure);
+            console.log('[BLOC2B][ETAPE2] Angle mentor sélectionné:', mentorAngle.substring(0, 80) + '...');
+            // ÉTAPE 3 — RENDU MENTOR INCARNÉ
+            console.log('[BLOC2B][ETAPE3] Rendu mentor incarné...');
+            const mentorText = await renderMentorStyle(mentorAngle, 'block2b');
+            console.log('[BLOC2B][ETAPE3] Texte mentor généré');
             // VALIDATION FINALE (FORMAT SYNTHÈSE 2B)
             const validation = validateSynthesis2B(mentorText);
             if (validation.valid) {

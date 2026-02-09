@@ -7,22 +7,22 @@ const client = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
 });
 /**
- * Rend une structure interprétative en texte mentor incarné pour TOUS les blocs
+ * Rend un angle mentor en texte mentor incarné pour TOUS les blocs
  *
- * ÉTAPE 2 — RENDU MENTOR INCARNÉ
+ * ÉTAPE 3 — RENDU MENTOR INCARNÉ
  * - Modèle : gpt-4o (qualité narrative)
  * - Temperature : 0.8 (créativité)
- * - Input : UNIQUEMENT la structure JSON (pas les réponses utilisateur)
+ * - Input : UNIQUEMENT l'angle mentor (pas l'analyse complète, pas les réponses utilisateur)
  * - Output : Texte mentor (format adapté selon blockType)
  *
  * ⚠️ RÈGLE ABSOLUE : Le renderer ne voit JAMAIS les réponses utilisateur.
- * Il ne fait AUCUNE analyse. Il traduit uniquement la structure en langage mentor incarné.
+ * Il ne fait AUCUNE analyse. Il incarne uniquement l'angle mentor en langage vécu.
  *
- * @param structure Structure interprétative générée par l'étape 1
+ * @param mentorAngle Angle mentor unique sélectionné par l'étape 2
  * @param blockType Type de bloc (détermine le format de sortie)
  * @returns Texte mentor incarné (format adapté)
  */
-export async function renderMentorStyle(structure, blockType) {
+export async function renderMentorStyle(mentorAngle, blockType) {
     // Adapter le format selon le type de bloc
     const formatInstructions = getFormatInstructions(blockType);
     let retries = 0;
@@ -47,9 +47,15 @@ Tu prends un risque interprétatif — c'est ta responsabilité.
 Si tu te trompes, le candidat te corrigera, et c'est précieux.
 
 ⚠️ RÈGLE ABSOLUE : Tu ne dois RIEN inventer.
-Tu traduis UNIQUEMENT l'hypothèse centrale en langage mentor incarné.
+Tu incarnes UNIQUEMENT l'angle mentor en langage vécu et expérientiel.
 Tu ne vois JAMAIS les réponses utilisateur. Tu ne fais AUCUNE analyse.
-Tu traduis uniquement la structure JSON.
+Tu reçois UNIQUEMENT l'angle mentor (pas l'analyse complète, pas les autres champs).
+
+⚠️ MISSION : INCARNER L'ANGLE, PAS LE JUSTIFIER
+- Tu n'as PAS à expliquer pourquoi cet angle
+- Tu n'as PAS à être exhaustif
+- Tu n'as PAS à équilibrer
+- Tu dois ASSUMER l'angle et l'incarner
 
 ${formatInstructions}
 
@@ -85,13 +91,16 @@ ${formatInstructions}
    - Donner l'impression que "quelqu'un a vraiment compris"
 
 ⚠️ CONTRAINTES ABSOLUES :
-- Conserver EXACTEMENT le sens de la structure (aucune information ajoutée, supprimée ou modifiée)
-- Ne pas ajouter de synthèse ou cohérence globale
+- Tu reçois UNIQUEMENT l'angle mentor (pas l'analyse complète)
+- Tu n'as PAS à justifier l'angle
+- Tu n'as PAS à être exhaustif
+- Tu n'as PAS à équilibrer
+- Tu dois ASSUMER l'angle et l'incarner en langage vécu
 
-Structure interprétative à reformuler :
-${JSON.stringify(structure, null, 2)}
+Angle mentor à incarner :
+${mentorAngle}
 
-Reformule cette structure en style mentor incarné, en respectant strictement toutes les contraintes.`
+Incarnes cet angle en style mentor incarné. Tu n'as pas à expliquer, tu dois incarner.`
                     }
                 ],
                 temperature: 0.8,
@@ -142,13 +151,13 @@ Reformule cette structure en style mentor incarné, en respectant strictement to
     throw new Error('Failed to render mentor style after retries');
 }
 /**
- * Rend une structure interprétative en texte mentor incarné pour le BLOC 1
+ * Rend un angle mentor en texte mentor incarné pour le BLOC 1
  * (Fonction de compatibilité pour migration progressive)
  *
  * @deprecated Utiliser renderMentorStyle() avec blockType='block1'
  */
-export async function renderMentorStyleBlock1(structure) {
-    return renderMentorStyle(structure, 'block1');
+export async function renderMentorStyleBlock1(mentorAngle) {
+    return renderMentorStyle(mentorAngle, 'block1');
 }
 /**
  * Retourne les instructions de format selon le type de bloc
@@ -169,18 +178,20 @@ function getFormatInstructions(blockType) {
 1️⃣ Lecture implicite
 - UNE SEULE phrase
 - MAXIMUM 20 mots EXACTEMENT
-- Basée sur : hypothese_centrale + comment_elle_se_met_en_mouvement
-- Traduis l'hypothèse centrale en langage vécu et expérientiel
+- Basée UNIQUEMENT sur : l'angle mentor
+- Incarnes l'angle en langage vécu et expérientiel
 - Position interprétative claire
 - Lecture en creux obligatoire (montrer le mécanisme, pas les traits)
+- Tu n'as PAS à justifier l'angle, tu dois l'incarner
 
 2️⃣ Déduction personnalisée
 - UNE SEULE phrase
 - MAXIMUM 25 mots EXACTEMENT
-- Basée sur : ce_qui_eteint_son_moteur + mecanisme
-- Traduis le mécanisme d'extinction et le fonctionnement concret
+- Basée UNIQUEMENT sur : l'angle mentor (même angle ou angle complémentaire)
+- Incarnes l'angle (ou un angle complémentaire) en langage vécu et expérientiel
 - Explicite les conditions concrètes d'engagement et de désengagement
 - Lecture en creux obligatoire
+- Tu n'as PAS à justifier, tu dois incarner
 
 3️⃣ Validation ouverte
 - Phrase EXACTE et INCHANGÉE :
@@ -195,7 +206,9 @@ function getFormatInstructions(blockType) {
 
 - 4 à 6 lignes maximum
 - Synthèse continue, dense, incarnée, structurante
-- Basée sur : hypothese_centrale + comment_elle_se_met_en_mouvement + ce_qui_eteint_son_moteur + mecanisme
+- Basée UNIQUEMENT sur : l'angle mentor
+- Incarnes l'angle en langage vécu et expérientiel
+- Tu n'as PAS à justifier l'angle, tu dois l'incarner
 - DOIT croiser motifs + personnages + traits (si disponibles dans le contexte)
 - DOIT faire ressortir : rapport au pouvoir, rapport à la pression, rapport aux relations, posture face à la responsabilité
 - DOIT inclure 1 point de vigilance réaliste, formulé sans jugement
@@ -206,7 +219,9 @@ function getFormatInstructions(blockType) {
             return `⚠️ FORMAT STRICT OBLIGATOIRE — SYNTHÈSE FINALE
 
 - Synthèse continue, dense, incarnée, structurante
-- Basée sur : hypothese_centrale + comment_elle_se_met_en_mouvement + ce_qui_eteint_son_moteur + mecanisme
+- Basée UNIQUEMENT sur : l'angle mentor
+- Incarnes l'angle en langage vécu et expérientiel
+- Tu n'as PAS à justifier l'angle, tu dois l'incarner
 - Structure libre mais DOIT couvrir :
   * Ce qui met vraiment en mouvement
   * Comment tu tiens dans le temps
@@ -229,7 +244,9 @@ function getFormatInstructions(blockType) {
 
 • 1 phrase de verdict clair
 • 1 paragraphe explicatif maximum
-• Basé sur : hypothese_centrale + comment_elle_se_met_en_mouvement + ce_qui_eteint_son_moteur + mecanisme
+• Basé UNIQUEMENT sur : l'angle mentor
+• Incarnes l'angle en langage vécu et expérientiel
+• Tu n'as PAS à justifier l'angle, tu dois l'incarner
 • Ton mentor, posé, honnête
 • Aucun discours commercial
 • Aucune reformulation de la synthèse AXIOM

@@ -4,6 +4,7 @@ import { validateMirrorREVELIOM } from '../services/validateMirrorReveliom.js';
 import { parseMirrorSections } from '../services/parseMirrorSections.js';
 import { getFullAxiomPrompt } from './prompts.js';
 import { generateInterpretiveStructure } from '../services/interpretiveStructureGenerator.js';
+import { selectMentorAngle } from '../services/mentorAngleSelector.js';
 import { renderMentorStyle } from '../services/mentorStyleRenderer.js';
 function extractPreambuleFromPrompt(prompt) {
     const match = prompt.match(/PRÉAMBULE MÉTIER[^]*?(?=🔒|🟢|$)/i);
@@ -15,17 +16,18 @@ function extractPreambuleFromPrompt(prompt) {
     return '';
 }
 /**
- * Génère un miroir avec la nouvelle architecture séparée (analyse/rendu)
+ * Génère un miroir avec la nouvelle architecture séparée (analyse/angle/rendu)
  *
- * ⚠️ ARCHITECTURE NOUVELLE — SÉPARATION ANALYSE/RENDU
+ * ⚠️ ARCHITECTURE NOUVELLE — SÉPARATION ANALYSE/ANGLE/RENDU
  * 1. INTERPRÉTATION : Structure JSON froide et logique (gpt-4o-mini, temp 0.3)
- * 2. RENDU MENTOR : Texte incarné et vécu (gpt-4o, temp 0.8)
+ * 2. DÉCISION D'ANGLE : Sélection d'UN angle mentor unique (gpt-4o-mini, temp 0.5)
+ * 3. RENDU MENTOR : Texte incarné et vécu (gpt-4o, temp 0.8)
  *
  * - Suppression validations heuristiques complexes
  * - Validation simple : structure JSON + format REVELIOM
  */
 async function generateMirrorWithNewArchitecture(userAnswers, blockType, additionalContext) {
-    console.log(`[AXIOM_EXECUTOR][NEW_ARCHITECTURE] Génération miroir en 2 étapes (interprétation + rendu) pour ${blockType}`);
+    console.log(`[AXIOM_EXECUTOR][NEW_ARCHITECTURE] Génération miroir en 3 étapes (interprétation + angle + rendu) pour ${blockType}`);
     console.log(`[AXIOM_EXECUTOR] Réponses utilisateur:`, userAnswers.length);
     try {
         // ÉTAPE 1 — INTERPRÉTATION (FROIDE, LOGIQUE)
@@ -35,10 +37,14 @@ async function generateMirrorWithNewArchitecture(userAnswers, blockType, additio
             hypothese_centrale: structure.hypothese_centrale.substring(0, 50) + '...',
             mecanisme: structure.mecanisme.substring(0, 50) + '...',
         });
-        // ÉTAPE 2 — RENDU MENTOR INCARNÉ
-        console.log(`[AXIOM_EXECUTOR][ETAPE2] Rendu mentor incarné pour ${blockType}...`);
-        const mentorText = await renderMentorStyle(structure, blockType);
-        console.log(`[AXIOM_EXECUTOR][ETAPE2] Texte mentor généré pour ${blockType}`);
+        // ÉTAPE 2 — DÉCISION D'ANGLE (OBLIGATOIRE)
+        console.log(`[AXIOM_EXECUTOR][ETAPE2] Sélection angle mentor pour ${blockType}...`);
+        const mentorAngle = await selectMentorAngle(structure);
+        console.log(`[AXIOM_EXECUTOR][ETAPE2] Angle mentor sélectionné pour ${blockType}:`, mentorAngle.substring(0, 80) + '...');
+        // ÉTAPE 3 — RENDU MENTOR INCARNÉ
+        console.log(`[AXIOM_EXECUTOR][ETAPE3] Rendu mentor incarné pour ${blockType}...`);
+        const mentorText = await renderMentorStyle(mentorAngle, blockType);
+        console.log(`[AXIOM_EXECUTOR][ETAPE3] Texte mentor généré pour ${blockType}`);
         return mentorText;
     }
     catch (error) {

@@ -15,6 +15,7 @@ import {
 import { validateMirrorREVELIOM, type MirrorValidationResult } from './validateMirrorReveliom.js';
 import { parseMirrorSections } from './parseMirrorSections.js';
 import { generateInterpretiveStructure, type BlockType } from './interpretiveStructureGenerator.js';
+import { selectMentorAngle } from './mentorAngleSelector.js';
 import { renderMentorStyle } from './mentorStyleRenderer.js';
 
 function getFullAxiomPrompt(): string {
@@ -481,7 +482,7 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
       userAnswers = sortedEntries.map(([, answer]) => answer as string);
     }
     
-    console.log('[BLOC1][NEW_ARCHITECTURE] Génération miroir en 2 étapes (interprétation + rendu)');
+    console.log('[BLOC1][NEW_ARCHITECTURE] Génération miroir en 3 étapes (interprétation + angle + rendu)');
     console.log('[BLOC1] Réponses utilisateur:', userAnswers.length);
 
     try {
@@ -498,13 +499,22 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
       });
 
       // ============================================
-      // ÉTAPE 2 — RENDU MENTOR INCARNÉ
+      // ÉTAPE 2 — DÉCISION D'ANGLE (OBLIGATOIRE)
       // ============================================
-      console.log('[BLOC1][ETAPE2] Rendu mentor incarné...');
+      console.log('[BLOC1][ETAPE2] Sélection angle mentor...');
       
-          const mentorText = await renderMentorStyle(structure, 'block1');
+        const mentorAngle = await selectMentorAngle(structure);
       
-      console.log('[BLOC1][ETAPE2] Texte mentor généré');
+      console.log('[BLOC1][ETAPE2] Angle mentor sélectionné:', mentorAngle.substring(0, 80) + '...');
+
+      // ============================================
+      // ÉTAPE 3 — RENDU MENTOR INCARNÉ
+      // ============================================
+      console.log('[BLOC1][ETAPE3] Rendu mentor incarné...');
+      
+          const mentorText = await renderMentorStyle(mentorAngle, 'block1');
+      
+      console.log('[BLOC1][ETAPE3] Texte mentor généré');
 
       // ============================================
       // VALIDATION FINALE (FORMAT REVELIOM)
@@ -1716,7 +1726,7 @@ Format de sortie OBLIGATOIRE :
       block2BAnswers.push(...sortedEntries.slice(3).map(([, answer]) => answer as string).filter(a => a && a.trim().length > 0));
     }
     
-    console.log('[BLOC2B][NEW_ARCHITECTURE] Génération miroir en 2 étapes (interprétation + rendu)');
+    console.log('[BLOC2B][NEW_ARCHITECTURE] Génération miroir en 3 étapes (interprétation + angle + rendu)');
     console.log('[BLOC2B] Réponses utilisateur:', block2BAnswers.length);
 
     try {
@@ -1736,12 +1746,19 @@ Format de sortie OBLIGATOIRE :
         mecanisme: structure.mecanisme.substring(0, 50) + '...',
       });
 
-      // ÉTAPE 2 — RENDU MENTOR INCARNÉ
-      console.log('[BLOC2B][ETAPE2] Rendu mentor incarné...');
+      // ÉTAPE 2 — DÉCISION D'ANGLE (OBLIGATOIRE)
+      console.log('[BLOC2B][ETAPE2] Sélection angle mentor...');
 
-      const mentorText = await renderMentorStyle(structure, 'block2b');
+      const mentorAngle = await selectMentorAngle(structure);
 
-      console.log('[BLOC2B][ETAPE2] Texte mentor généré');
+      console.log('[BLOC2B][ETAPE2] Angle mentor sélectionné:', mentorAngle.substring(0, 80) + '...');
+
+      // ÉTAPE 3 — RENDU MENTOR INCARNÉ
+      console.log('[BLOC2B][ETAPE3] Rendu mentor incarné...');
+
+      const mentorText = await renderMentorStyle(mentorAngle, 'block2b');
+
+      console.log('[BLOC2B][ETAPE3] Texte mentor généré');
 
       // VALIDATION FINALE (FORMAT SYNTHÈSE 2B)
       const validation = validateSynthesis2B(mentorText);
