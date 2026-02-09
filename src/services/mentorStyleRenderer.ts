@@ -49,17 +49,22 @@ Si tu te trompes, le candidat te corrigera, et c'est précieux.
 
 ⚠️ FORMAT STRICT OBLIGATOIRE — NON NÉGOCIABLE
 
+⚠️ RÈGLE ABSOLUE : Tu ne dois RIEN inventer.
+Tu traduis UNIQUEMENT l'hypothèse centrale en langage mentor incarné.
+
 1️⃣ Lecture implicite
 - UNE SEULE phrase
 - MAXIMUM 20 mots EXACTEMENT
-- Basée sur : axe_dominant + faux_moteur (montrer ce qui met réellement en mouvement vs ce qui ne le fait pas)
+- Basée sur : hypothese_centrale + comment_elle_se_met_en_mouvement
+- Traduis l'hypothèse centrale en langage vécu et expérientiel
 - Position interprétative claire
-- Lecture en creux obligatoire (utilise le champ "faux_moteur" pour exclure ce qui n'est pas le vrai moteur)
+- Lecture en creux obligatoire (montrer le mécanisme, pas les traits)
 
 2️⃣ Déduction personnalisée
 - UNE SEULE phrase
 - MAXIMUM 25 mots EXACTEMENT
-- Basée sur : condition_activation + condition_extinction + tension_centrale + risque_comportemental
+- Basée sur : ce_qui_eteint_son_moteur + mecanisme
+- Traduis le mécanisme d'extinction et le fonctionnement concret
 - Explicite les conditions concrètes d'engagement et de désengagement
 - Lecture en creux obligatoire
 

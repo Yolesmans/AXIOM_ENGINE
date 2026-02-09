@@ -12,18 +12,17 @@ const client = new OpenAI({
  * Structure interprétative (froide, logique, non stylisée)
  * Générée par l'étape 1 d'analyse
  * 
- * ⚠️ ANALYSE GLOBALE OBLIGATOIRE
- * Cette structure doit être une hypothèse centrale de fonctionnement,
- * PAS une moyenne ni une liste de traits.
+ * ⚠️ HYPOTHÈSE CENTRALE OBLIGATOIRE
+ * Cette structure doit contenir UNE hypothèse centrale formulable oralement
+ * qui répond à : "Comment cette personne se met en mouvement, et qu'est-ce qui éteint son moteur ?"
+ * 
+ * La structure JSON est la décomposition logique de cette hypothèse centrale.
  */
 export type InterpretiveStructure = {
-  axe_dominant: string; // Ce qui met réellement la personne en mouvement
-  moteur_principal: string; // Ce qui déclenche son engagement
-  faux_moteur: string; // Ce qui pourrait sembler moteur mais ne l'est pas
-  condition_activation: string; // Dans quelles conditions elle s'engage fortement
-  condition_extinction: string; // Dans quelles conditions son moteur s'éteint
-  tension_centrale: string; // La dynamique clé qui traverse ses réponses
-  risque_comportemental: string; // Ce qui se passe quand le moteur s'éteint
+  hypothese_centrale: string; // Phrase unique : "Cette personne fonctionne comme ça : ..." (formulable oralement)
+  comment_elle_se_met_en_mouvement: string; // Élément clé : comment elle se met en mouvement
+  ce_qui_eteint_son_moteur: string; // Élément clé : ce qui éteint son moteur
+  mecanisme: string; // Comment ça fonctionne concrètement (le mécanisme de fonctionnement)
 };
 
 /**
@@ -60,13 +59,18 @@ export async function generateInterpretiveStructureBlock1(
             role: 'system',
             content: `Tu es un analyste qui produit une structure interprétative froide et logique.
 
-⚠️ MISSION CRITIQUE : ANALYSE GLOBALE DU FONCTIONNEMENT
+⚠️ MISSION CRITIQUE : HYPOTHÈSE CENTRALE DE FONCTIONNEMENT
 
-Tu dois produire UNE hypothèse centrale de fonctionnement, PAS une moyenne ni une liste de traits.
+À partir de TOUTES les réponses du bloc, tu dois produire UNE hypothèse centrale (dans ta tête, pas dans le output)
+qui répond à cette question :
+
+"Comment cette personne se met en mouvement, et qu'est-ce qui éteint son moteur ?"
 
 RÈGLE ABSOLUE :
+- Cette hypothèse centrale DOIT être formulable ainsi : "Cette personne fonctionne comme ça : ..."
+- Si l'hypothèse ne peut pas être reformulée ainsi → structure INVALIDE → retry
+- On ne veut PAS des traits, on veut un MÉCANISME de fonctionnement
 - Prendre en compte L'ENSEMBLE des réponses du bloc
-- Formuler une hypothèse cohérente sur COMMENT la personne fonctionne réellement
 - Ne PAS faire une moyenne des réponses
 - Ne PAS lister des traits séparés
 - Ne PAS paraphraser ce qui a été dit
@@ -76,43 +80,45 @@ RÈGLES STRICTES :
 - Aucun style
 - Aucune phrase mentor
 - Pas de reformulation des réponses
-- Uniquement de l'inférence logique globale
+- Uniquement de l'inférence logique sur le mécanisme de fonctionnement
 - Output : JSON UNIQUEMENT
 
-STRUCTURE JSON OBLIGATOIRE (TOUS LES CHAMPS REQUIS) :
+STRUCTURE JSON OBLIGATOIRE (DÉCOMPOSITION LOGIQUE DE L'HYPOTHÈSE CENTRALE) :
 {
-  "axe_dominant": "ce qui met réellement la personne en mouvement (hypothèse centrale, 1 phrase précise)",
-  "moteur_principal": "ce qui déclenche son engagement profond (1 phrase précise)",
-  "faux_moteur": "ce qui pourrait sembler moteur mais ne l'est pas réellement (1 phrase précise)",
-  "condition_activation": "dans quelles conditions concrètes elle s'engage fortement (1 phrase précise)",
-  "condition_extinction": "dans quelles conditions concrètes son moteur s'éteint (1 phrase précise)",
-  "tension_centrale": "la dynamique clé qui traverse l'ensemble de ses réponses (1 phrase précise)",
-  "risque_comportemental": "ce qui se passe concrètement quand le moteur s'éteint (1 phrase précise)"
+  "hypothese_centrale": "phrase unique formulable oralement : 'Cette personne fonctionne comme ça : [mécanisme de fonctionnement]' (1 phrase complète, formulable à l'oral)",
+  "comment_elle_se_met_en_mouvement": "élément clé : comment concrètement elle se met en mouvement (1 phrase précise)",
+  "ce_qui_eteint_son_moteur": "élément clé : ce qui concrètement éteint son moteur (1 phrase précise)",
+  "mecanisme": "comment ça fonctionne concrètement (le mécanisme de fonctionnement, 1 phrase précise)"
 }
 
-⚠️ EXIGENCES DE QUALITÉ (VALIDATION STRICTE) :
+⚠️ VALIDATION CRITIQUE :
+- L'hypothèse centrale DOIT commencer par "Cette personne fonctionne comme ça :" ou être reformulable ainsi
+- Si l'hypothèse centrale ne décrit pas un MÉCANISME mais des TRAITS → structure INVALIDE
+- Si l'hypothèse centrale est vague ou générique → structure INVALIDE
 - Chaque champ doit être PRÉCIS et SPÉCIFIQUE (pas vague, pas générique)
-- Chaque champ doit être une HYPOTHÈSE, pas une description
-- La structure doit former un TOUT COHÉRENT (pas des éléments isolés)
-- Si un champ est vide, vague ou générique → structure INVALIDE → retry
+- La structure doit former un TOUT COHÉRENT (décomposition logique de l'hypothèse centrale)
 
 INTERDICTIONS ABSOLUES :
 - Reformuler les réponses
 - Paraphraser ce qui a été dit
 - Faire une moyenne des réponses
 - Lister des traits séparés
+- Décrire des traits au lieu d'un mécanisme
 - Utiliser un langage stylisé
 - Produire du texte final (seulement JSON)
-- Champs vagues ou génériques
+- Hypothèse centrale non formulable comme "Cette personne fonctionne comme ça : ..."
 
 Réponses du candidat BLOC 1 (ENSEMBLE À ANALYSER) :
 ${answersContext}
+
+ÉTAPE 1 : Formule dans ta tête l'hypothèse centrale : "Cette personne fonctionne comme ça : ..."
+ÉTAPE 2 : Décompose cette hypothèse en structure JSON (4 champs)
 
 Produis UNIQUEMENT un JSON valide avec TOUS les champs remplis de manière PRÉCISE et SPÉCIFIQUE, sans texte additionnel.`
           }
         ],
         temperature: 0.3,
-        max_tokens: 400, // Augmenté pour 7 champs au lieu de 5
+        max_tokens: 300, // 4 champs au lieu de 7
         response_format: { type: 'json_object' },
       });
 
@@ -163,33 +169,22 @@ Produis UNIQUEMENT un JSON valide avec TOUS les champs remplis de manière PRÉC
 
 /**
  * Valide qu'une structure interprétative contient tous les champs obligatoires
- * et qu'ils sont précis et spécifiques (pas vagues ni génériques)
+ * et que l'hypothèse centrale est formulable oralement comme "Cette personne fonctionne comme ça : ..."
  */
 function validateStructure(structure: any): { valid: boolean; errors: string[] } {
   const errors: string[] = [];
 
   const requiredFields: (keyof InterpretiveStructure)[] = [
-    'axe_dominant',
-    'moteur_principal',
-    'faux_moteur',
-    'condition_activation',
-    'condition_extinction',
-    'tension_centrale',
-    'risque_comportemental',
+    'hypothese_centrale',
+    'comment_elle_se_met_en_mouvement',
+    'ce_qui_eteint_son_moteur',
+    'mecanisme',
   ];
 
-  // Mots vagues/génériques à détecter (signe de structure insuffisamment précise)
-  const vaguePatterns = [
-    /^(c'est|ce sont|il y a|on peut|on pourrait|peut-être|probablement|souvent|parfois|généralement|souvent|toujours|jamais)$/i,
-    /^(quelque chose|certaines choses|des choses|différentes choses)$/i,
-    /^(important|essentiel|nécessaire|utile|bien|mieux|meilleur)$/i,
-    /^(besoin|envie|désir|souhait|préférence)$/i, // Trop générique sans précision
-  ];
-
+  // Vérifier tous les champs présents et non vides
   for (const field of requiredFields) {
     const value = structure[field];
     
-    // Vérifier présence et non-vide
     if (!value || typeof value !== 'string' || value.trim().length === 0) {
       errors.push(`Champ manquant ou vide: ${field}`);
       continue;
@@ -200,24 +195,47 @@ function validateStructure(structure: any): { valid: boolean; errors: string[] }
     // Vérifier longueur minimale (doit être une phrase, pas un mot)
     if (trimmedValue.length < 20) {
       errors.push(`Champ trop court (vague): ${field} (${trimmedValue.length} caractères)`);
-      continue;
+    }
+  }
+
+  // VALIDATION CRITIQUE : L'hypothèse centrale doit être formulable comme "Cette personne fonctionne comme ça : ..."
+  const hypotheseCentrale = structure.hypothese_centrale?.trim() || '';
+  
+  if (hypotheseCentrale.length > 0) {
+    // Vérifier que l'hypothèse décrit un MÉCANISME, pas des traits
+    const traitPatterns = [
+      /^(elle|il|la personne|le candidat|la candidate) (est|a|possède|a besoin|cherche|veut|souhaite|préfère)/i,
+      /^(elle|il|la personne|le candidat|la candidate) (a tendance|a l'habitude|fait souvent|fait toujours)/i,
+    ];
+    
+    const isTraitDescription = traitPatterns.some(pattern => pattern.test(hypotheseCentrale));
+    
+    if (isTraitDescription) {
+      errors.push(`Hypothèse centrale décrit des TRAITS au lieu d'un MÉCANISME: "${hypotheseCentrale.substring(0, 100)}..."`);
     }
 
-    // Vérifier qu'il n'y a pas que des mots vagues
-    const words = trimmedValue.toLowerCase().split(/\s+/);
-    const vagueWordCount = words.filter(word => 
-      vaguePatterns.some(pattern => pattern.test(word))
+    // Vérifier que l'hypothèse est formulable comme "Cette personne fonctionne comme ça : ..."
+    // (doit contenir des mots liés au fonctionnement, au mécanisme, à la dynamique)
+    const mecanismePatterns = [
+      /(fonctionne|se met en mouvement|s'engage|s'active|s'éteint|déclenche|provoque|crée|génère)/i,
+      /(quand|dès que|si|tant que|à condition que|dans le cas où)/i,
+      /(mécanisme|dynamique|processus|fonctionnement|moteur|levier)/i,
+    ];
+    
+    const hasMecanisme = mecanismePatterns.some(pattern => pattern.test(hypotheseCentrale));
+    
+    if (!hasMecanisme && hypotheseCentrale.length > 30) {
+      errors.push(`Hypothèse centrale ne décrit pas un MÉCANISME de fonctionnement: "${hypotheseCentrale.substring(0, 100)}..."`);
+    }
+
+    // Vérifier que l'hypothèse n'est pas trop vague
+    const vagueWords = ['important', 'essentiel', 'nécessaire', 'utile', 'bien', 'mieux', 'souvent', 'parfois', 'généralement'];
+    const vagueCount = vagueWords.filter(word => 
+      hypotheseCentrale.toLowerCase().includes(word)
     ).length;
     
-    if (vagueWordCount > words.length * 0.3) {
-      errors.push(`Champ trop vague (trop de mots génériques): ${field}`);
-      continue;
-    }
-
-    // Vérifier qu'il y a au moins un mot spécifique (longueur > 5 caractères)
-    const specificWords = words.filter(word => word.length > 5);
-    if (specificWords.length < 2) {
-      errors.push(`Champ insuffisamment spécifique: ${field}`);
+    if (vagueCount > 2) {
+      errors.push(`Hypothèse centrale trop vague (trop de mots génériques)`);
     }
   }
 
