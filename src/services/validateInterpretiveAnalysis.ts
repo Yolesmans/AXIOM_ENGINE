@@ -5,6 +5,8 @@
  * - Ne reformule PAS les réponses
  * - Contient une lecture en creux (exclusion)
  * - Apporte un décalage interprétatif (tension, contradiction, logique sous-jacente)
+ * 
+ * MODE OBSERVATION : Logs détaillés de tous les échecs pour analyse produit
  */
 
 export type InterpretiveAnalysisValidationResult = {
@@ -13,6 +15,9 @@ export type InterpretiveAnalysisValidationResult = {
   hasReformulation: boolean;
   hasExclusion: boolean;
   hasInterpretiveShift: boolean;
+  rejectedText?: string; // Texte rejeté pour logs
+  blockType?: 'mirror' | 'synthesis' | 'matching'; // Type de bloc pour logs
+  blockNumber?: number; // Numéro de bloc pour logs
 };
 
 /**
@@ -20,11 +25,15 @@ export type InterpretiveAnalysisValidationResult = {
  * 
  * @param content Texte à valider
  * @param userAnswers Réponses utilisateur (optionnel, pour détecter reformulation)
+ * @param blockType Type de bloc (pour logs observation)
+ * @param blockNumber Numéro de bloc (pour logs observation)
  * @returns Résultat de validation
  */
 export function validateInterpretiveAnalysis(
   content: string,
-  userAnswers?: string[]
+  userAnswers?: string[],
+  blockType?: 'mirror' | 'synthesis' | 'matching',
+  blockNumber?: number
 ): InterpretiveAnalysisValidationResult {
   const errors: string[] = [];
   let hasReformulation = false;
@@ -158,11 +167,30 @@ export function validateInterpretiveAnalysis(
   // Validation globale
   const valid = errors.length === 0 && !hasReformulation && hasExclusion && hasInterpretiveShift;
 
-  return {
+  const result: InterpretiveAnalysisValidationResult = {
     valid,
     errors,
     hasReformulation,
     hasExclusion,
     hasInterpretiveShift,
+    rejectedText: valid ? undefined : content, // Texte rejeté pour logs
+    blockType,
+    blockNumber,
   };
+
+  // MODE OBSERVATION : Logger 100% des échecs avec détails complets
+  if (!valid) {
+    console.warn(`[REVELIOM][OBSERVATION][ANALYSE_INTERPRÉTATIVE] Validation échouée`, {
+      blockType: blockType || 'unknown',
+      blockNumber: blockNumber || 'unknown',
+      hasReformulation,
+      hasExclusion,
+      hasInterpretiveShift,
+      errors: errors,
+      rejectedText: content.substring(0, 500), // Premiers 500 caractères pour logs
+      userAnswersCount: userAnswers?.length || 0,
+    });
+  }
+
+  return result;
 }

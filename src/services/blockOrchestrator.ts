@@ -581,7 +581,7 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
         }
         
         // VALIDATION ANALYSE INTERPRÉTATIVE : Vérifier que le miroir est vraiment interprétatif (pas descriptif/récapitulatif)
-        const analysisValidation = validateInterpretiveAnalysis(mirror, block1UserMessages);
+        const analysisValidation = validateInterpretiveAnalysis(mirror, block1UserMessages, 'mirror', 1);
         
         if (!analysisValidation.valid) {
           // Miroir trop descriptif/récapitulatif → retry avec prompt renforcé
@@ -591,8 +591,14 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
             retries++;
             continue; // Re-générer avec prompt renforcé
           } else {
-            // Fail-soft : servir quand même le miroir avec log d'erreur
-            console.warn(`[REVELIOM][BLOC1] Miroir pas assez interprétatif après retry :`, analysisValidation.errors);
+            // Fail-soft : servir quand même le miroir avec log d'erreur (MODE OBSERVATION)
+            console.warn(`[REVELIOM][BLOC1][FAIL_SOFT] Miroir pas assez interprétatif après retry (fail-soft activé) :`, {
+              errors: analysisValidation.errors,
+              hasReformulation: analysisValidation.hasReformulation,
+              hasExclusion: analysisValidation.hasExclusion,
+              hasInterpretiveShift: analysisValidation.hasInterpretiveShift,
+              rejectedTextPreview: mirror.substring(0, 300),
+            });
           }
         }
         
@@ -1950,7 +1956,7 @@ Format : 4-6 lignes. Synthèse projective, pas descriptive.`,
       }
       
       // VALIDATION ANALYSE INTERPRÉTATIVE : Vérifier que le miroir est vraiment interprétatif (pas descriptif/récapitulatif)
-      const analysisValidation = validateInterpretiveAnalysis(mirror, block2BAnswers);
+      const analysisValidation = validateInterpretiveAnalysis(mirror, block2BAnswers, 'mirror', 2);
       
       if (!analysisValidation.valid) {
         // Miroir trop descriptif/récapitulatif → retry avec prompt renforcé

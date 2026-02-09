@@ -1891,7 +1891,7 @@ Format strict : 3 sections. 20/25 mots. Lecture en creux. Inférence obligatoire
           }
           
           // VALIDATION ANALYSE INTERPRÉTATIVE : Vérifier que le miroir est vraiment interprétatif (pas descriptif/récapitulatif)
-          const analysisValidation = validateInterpretiveAnalysis(mirror, userAnswersInBlock);
+          const analysisValidation = validateInterpretiveAnalysis(mirror, userAnswersInBlock, 'mirror', blocNumber);
           
           if (!analysisValidation.valid) {
             // Miroir trop descriptif/récapitulatif → retry avec prompt renforcé
@@ -1944,8 +1944,14 @@ Format strict : 3 sections. 20/25 mots. Lecture en creux. Inférence obligatoire
                 break;
               }
             } else {
-              // Fail-soft : servir quand même le miroir avec log d'erreur
-              console.warn(`[REVELIOM][BLOC${blocNumber}] Miroir pas assez interprétatif après retry :`, analysisValidation.errors);
+              // Fail-soft : servir quand même le miroir avec log d'erreur (MODE OBSERVATION)
+              console.warn(`[REVELIOM][BLOC${blocNumber}][FAIL_SOFT] Miroir pas assez interprétatif après retry (fail-soft activé) :`, {
+                errors: analysisValidation.errors,
+                hasReformulation: analysisValidation.hasReformulation,
+                hasExclusion: analysisValidation.hasExclusion,
+                hasInterpretiveShift: analysisValidation.hasInterpretiveShift,
+                rejectedTextPreview: mirror.substring(0, 300),
+              });
             }
           }
           
@@ -2100,11 +2106,18 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
           }
           
           // VALIDATION ANALYSE INTERPRÉTATIVE : Vérifier que la synthèse est vraiment interprétative
-          const analysisValidation = validateInterpretiveAnalysis(aiText, allUserAnswers);
+          const analysisValidation = validateInterpretiveAnalysis(aiText, allUserAnswers, 'synthesis', 10);
           
           if (!analysisValidation.valid) {
-            console.warn(`[REVELIOM][BLOC10] Synthèse finale pas assez interprétative :`, analysisValidation.errors);
-            // Note : Pas de retry pour synthèse finale (trop coûteux), mais log d'erreur
+            // ZONE CRITIQUE : Synthèse finale → LOG WARN OBLIGATOIRE (valeur maximale produit)
+            console.warn(`[REVELIOM][BLOC10][CRITIQUE] Synthèse finale pas assez interprétative :`, {
+              errors: analysisValidation.errors,
+              hasReformulation: analysisValidation.hasReformulation,
+              hasExclusion: analysisValidation.hasExclusion,
+              hasInterpretiveShift: analysisValidation.hasInterpretiveShift,
+              rejectedTextPreview: aiText.substring(0, 300),
+            });
+            // Note : Pas de retry pour synthèse finale (trop coûteux), mais log d'erreur obligatoire
           }
           
           // REFORMULATION STYLISTIQUE : Adapter la synthèse finale au style mentor incarné
@@ -2148,11 +2161,18 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
           }
           
           // VALIDATION ANALYSE INTERPRÉTATIVE : Vérifier que la synthèse est vraiment interprétative
-          const analysisValidation = validateInterpretiveAnalysis(aiText, allUserAnswers);
+          const analysisValidation = validateInterpretiveAnalysis(aiText, allUserAnswers, 'synthesis', 10);
           
           if (!analysisValidation.valid) {
-            console.warn(`[REVELIOM][BLOC10] Synthèse finale pas assez interprétative :`, analysisValidation.errors);
-            // Note : Pas de retry pour synthèse finale (trop coûteux), mais log d'erreur
+            // ZONE CRITIQUE : Synthèse finale → LOG WARN OBLIGATOIRE (valeur maximale produit)
+            console.warn(`[REVELIOM][BLOC10][CRITIQUE] Synthèse finale pas assez interprétative :`, {
+              errors: analysisValidation.errors,
+              hasReformulation: analysisValidation.hasReformulation,
+              hasExclusion: analysisValidation.hasExclusion,
+              hasInterpretiveShift: analysisValidation.hasInterpretiveShift,
+              rejectedTextPreview: aiText.substring(0, 300),
+            });
+            // Note : Pas de retry pour synthèse finale (trop coûteux), mais log d'erreur obligatoire
           }
           
           // REFORMULATION STYLISTIQUE : Adapter la synthèse finale au style mentor incarné
@@ -2349,11 +2369,18 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
         }
         
         // VALIDATION ANALYSE INTERPRÉTATIVE : Vérifier que le matching est vraiment interprétatif
-        const analysisValidation = validateInterpretiveAnalysis(aiText, allUserAnswers);
+        const analysisValidation = validateInterpretiveAnalysis(aiText, allUserAnswers, 'matching');
         
         if (!analysisValidation.valid) {
-          console.warn(`[REVELIOM][MATCHING] Matching pas assez interprétatif :`, analysisValidation.errors);
-          // Note : Pas de retry pour matching (trop coûteux), mais log d'erreur
+          // ZONE CRITIQUE : Matching final → LOG WARN OBLIGATOIRE (valeur maximale produit)
+          console.warn(`[REVELIOM][MATCHING][CRITIQUE] Matching pas assez interprétatif :`, {
+            errors: analysisValidation.errors,
+            hasReformulation: analysisValidation.hasReformulation,
+            hasExclusion: analysisValidation.hasExclusion,
+            hasInterpretiveShift: analysisValidation.hasInterpretiveShift,
+            rejectedTextPreview: aiText.substring(0, 300),
+          });
+          // Note : Pas de retry pour matching (trop coûteux), mais log d'erreur obligatoire
         }
       }
     } catch (e) {
@@ -2393,10 +2420,17 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
           }
           
           // VALIDATION ANALYSE INTERPRÉTATIVE : Vérifier que le matching est vraiment interprétatif (retry)
-          const analysisValidation = validateInterpretiveAnalysis(aiText, allUserAnswers);
+          const analysisValidation = validateInterpretiveAnalysis(aiText, allUserAnswers, 'matching');
           
           if (!analysisValidation.valid) {
-            console.warn(`[REVELIOM][MATCHING] Matching pas assez interprétatif (retry) :`, analysisValidation.errors);
+            // ZONE CRITIQUE : Matching final (retry) → LOG WARN OBLIGATOIRE
+            console.warn(`[REVELIOM][MATCHING][CRITIQUE] Matching pas assez interprétatif (retry) :`, {
+              errors: analysisValidation.errors,
+              hasReformulation: analysisValidation.hasReformulation,
+              hasExclusion: analysisValidation.hasExclusion,
+              hasInterpretiveShift: analysisValidation.hasInterpretiveShift,
+              rejectedTextPreview: aiText.substring(0, 300),
+            });
           }
         }
       } catch (e) {
