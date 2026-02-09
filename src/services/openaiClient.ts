@@ -8,9 +8,14 @@ const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
+// Modèle par défaut : gpt-4o (plus puissant que gpt-4o-mini pour qualité narrative)
+// TODO: Remplacer par 'gpt-5.2' quand disponible
+const DEFAULT_MODEL = 'gpt-4o';
+const DEFAULT_TEMPERATURE = 0.8;
+
 export async function testOpenAI(): Promise<string> {
   const response = await client.chat.completions.create({
-    model: 'gpt-4o-mini',
+    model: DEFAULT_MODEL,
     messages: [
       {
         role: 'user',
@@ -31,44 +36,95 @@ export async function testOpenAI(): Promise<string> {
 export async function callOpenAI(params: {
   messages: Array<{ role: string; content: string }>;
 }): Promise<string> {
-  const response = await client.chat.completions.create({
-    model: 'gpt-4o-mini',
-    messages: params.messages.map((msg) => ({
-      role: msg.role as 'system' | 'user' | 'assistant',
-      content: msg.content,
-    })),
-    temperature: 0.7,
-  });
+  try {
+    const response = await client.chat.completions.create({
+      model: DEFAULT_MODEL,
+      messages: params.messages.map((msg) => ({
+        role: msg.role as 'system' | 'user' | 'assistant',
+        content: msg.content,
+      })),
+      temperature: DEFAULT_TEMPERATURE,
+    });
 
-  const content = response.choices[0]?.message?.content;
-  if (!content) {
-    throw new Error('No response content from OpenAI');
+    const content = response.choices[0]?.message?.content;
+    if (!content) {
+      throw new Error('No response content from OpenAI');
+    }
+
+    return content.trim();
+  } catch (error: any) {
+    // Fallback si modèle non disponible
+    if (error?.code === 'model_not_found' || error?.message?.includes('model')) {
+      console.warn(`[OPENAI] Modèle ${DEFAULT_MODEL} non disponible, fallback gpt-4o-mini`);
+      const response = await client.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: params.messages.map((msg) => ({
+          role: msg.role as 'system' | 'user' | 'assistant',
+          content: msg.content,
+        })),
+        temperature: DEFAULT_TEMPERATURE,
+      });
+
+      const content = response.choices[0]?.message?.content;
+      if (!content) {
+        throw new Error('No response content from OpenAI');
+      }
+
+      return content.trim();
+    }
+    throw error;
   }
-
-  return content.trim();
 }
 
 export async function* callOpenAIStream(params: {
   messages: Array<{ role: string; content: string }>;
 }): AsyncGenerator<string, string, unknown> {
-  const stream = await client.chat.completions.create({
-    model: 'gpt-4o-mini',
-    messages: params.messages.map((msg) => ({
-      role: msg.role as 'system' | 'user' | 'assistant',
-      content: msg.content,
-    })),
-    temperature: 0.7,
-    stream: true,
-  });
+  try {
+    const stream = await client.chat.completions.create({
+      model: DEFAULT_MODEL,
+      messages: params.messages.map((msg) => ({
+        role: msg.role as 'system' | 'user' | 'assistant',
+        content: msg.content,
+      })),
+      temperature: DEFAULT_TEMPERATURE,
+      stream: true,
+    });
 
-  let fullContent = '';
-  for await (const chunk of stream) {
-    const content = chunk.choices[0]?.delta?.content;
-    if (content) {
-      fullContent += content;
-      yield content;
+    let fullContent = '';
+    for await (const chunk of stream) {
+      const content = chunk.choices[0]?.delta?.content;
+      if (content) {
+        fullContent += content;
+        yield content;
+      }
     }
-  }
 
-  return fullContent.trim();
+    return fullContent.trim();
+  } catch (error: any) {
+    // Fallback si modèle non disponible
+    if (error?.code === 'model_not_found' || error?.message?.includes('model')) {
+      console.warn(`[OPENAI] Modèle ${DEFAULT_MODEL} non disponible, fallback gpt-4o-mini`);
+      const stream = await client.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: params.messages.map((msg) => ({
+          role: msg.role as 'system' | 'user' | 'assistant',
+          content: msg.content,
+        })),
+        temperature: DEFAULT_TEMPERATURE,
+        stream: true,
+      });
+
+      let fullContent = '';
+      for await (const chunk of stream) {
+        const content = chunk.choices[0]?.delta?.content;
+        if (content) {
+          fullContent += content;
+          yield content;
+        }
+      }
+
+      return fullContent.trim();
+    }
+    throw error;
+  }
 }

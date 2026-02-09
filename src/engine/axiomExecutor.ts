@@ -1575,6 +1575,57 @@ Toute sortie hors règles = invalide.`,
   }
 
   // ============================================
+  // HELPER — Séparer annonce de transition du miroir
+  // ============================================
+  function separateTransitionAnnouncement(text: string, blocNumber: number): { mirror: string; announcement: string | null } {
+    if (!text) {
+      return { mirror: text, announcement: null };
+    }
+
+    // Pattern pour détecter l'annonce de transition
+    // Format attendu : "Fin du BLOC X. On passe au BLOC Y — [nom bloc]."
+    const transitionPattern = /Fin du BLOC \d+\.\s*On passe au BLOC \d+[^]*?$/m;
+    const match = text.match(transitionPattern);
+
+    if (match) {
+      // Extraire l'annonce
+      const announcement = match[0].trim();
+      // Extraire le miroir (tout sauf l'annonce)
+      const mirror = text.replace(transitionPattern, '').trim();
+      return { mirror, announcement };
+    }
+
+    // Aucune annonce détectée
+    return { mirror: text, announcement: null };
+  }
+
+  // ============================================
+  // HELPER — Vérifier si toutes les questions sont répondues
+  // ============================================
+  function areAllQuestionsAnswered(candidate: AxiomCandidate, blocNumber: number): boolean {
+    const conversationHistory = candidate.conversationHistory || [];
+    
+    // Compter les questions posées (assistant avec kind: 'question' dans ce bloc)
+    const questionsInBlock = conversationHistory.filter(
+      m => m.role === 'assistant' && m.block === blocNumber && m.kind === 'question'
+    );
+    
+    // Compter les réponses utilisateur (user dans ce bloc, exclure mirror_validation)
+    const answersInBlock = conversationHistory.filter(
+      m => m.role === 'user' && m.block === blocNumber && m.kind !== 'mirror_validation'
+    );
+    
+    // Si au moins une question posée et nombre de réponses >= nombre de questions
+    // (on accepte >= car l'utilisateur peut avoir répondu plusieurs fois)
+    if (questionsInBlock.length > 0) {
+      return answersInBlock.length >= questionsInBlock.length;
+    }
+    
+    // Si aucune question posée, on ne peut pas être en fin de bloc
+    return false;
+  }
+
+  // ============================================
   // BLOCS 1 à 10
   // ============================================
   const blocStates = [BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10];
@@ -1589,16 +1640,25 @@ Toute sortie hors règles = invalide.`,
       messages.push({ role: 'user', content: userMessage });
     }
 
+    // VÉRIFICATION SYSTÈME : Toutes les questions sont-elles répondues ? (BLOCS 3-10)
+    const allQuestionsAnswered = blocNumber >= 3 && blocNumber <= 10 
+      ? areAllQuestionsAnswered(candidate, blocNumber)
+      : false;
+
     let aiText: string | null = null;
 
     try {
       const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
+      
+      // DÉCISION : Forcer prompt miroir si toutes questions répondues (BLOCS 3-9)
+      const shouldForceMirror = blocNumber >= 3 && blocNumber <= 9 && allQuestionsAnswered;
+      
       const completion = await callOpenAI({
         messages: [
           { role: 'system', content: FULL_AXIOM_PROMPT },
           {
             role: 'system',
-            content: blocNumber >= 3 && blocNumber <= 9
+            content: shouldForceMirror
               ? `RÈGLE ABSOLUE AXIOM — MIROIR INTERPRÉTATIF ACTIF (REVELIOM)
 
 Tu es en FIN DE BLOC ${blocNumber}.
@@ -1734,14 +1794,28 @@ Toute sortie hors règles = invalide.`,
       };
     }
 
-    // Validation REVELIOM pour miroirs (blocs 3-9 uniquement)
-    let expectsAnswer = aiText ? aiText.trim().endsWith('?') : false;
+    // SÉPARATION ANNONCE DE TRANSITION AVANT VALIDATION/PARSING (BLOCS 3-9)
+    let transitionAnnouncement: string | null = null;
+    let cleanMirrorText = aiText || '';
+    
+    if (aiText && blocNumber >= 3 && blocNumber <= 9) {
+      const separated = separateTransitionAnnouncement(aiText, blocNumber);
+      cleanMirrorText = separated.mirror;
+      transitionAnnouncement = separated.announcement;
+      
+      if (transitionAnnouncement) {
+        console.log(`[AXIOM_EXECUTOR] Annonce de transition détectée et séparée pour BLOC ${blocNumber}`);
+      }
+    }
+
+    // Validation REVELIOM pour miroirs (blocs 3-9 uniquement) — sur texte nettoyé
+    let expectsAnswer = cleanMirrorText ? cleanMirrorText.trim().endsWith('?') : false;
     let isMirror = false;
     
-    if (aiText && blocNumber >= 3 && blocNumber <= 9 && !expectsAnswer) {
-      // C'est un miroir → valider et retry si nécessaire
+    if (cleanMirrorText && blocNumber >= 3 && blocNumber <= 9 && !expectsAnswer) {
+      // C'est un miroir → valider et retry si nécessaire (sur texte nettoyé)
       isMirror = true;
-      let mirror = aiText;
+      let mirror = cleanMirrorText;
       let retries = 0;
       const maxRetries = 1;
 
@@ -1749,7 +1823,8 @@ Toute sortie hors règles = invalide.`,
         const validation = validateMirrorREVELIOM(mirror);
         
         if (validation.valid) {
-          aiText = mirror;
+          cleanMirrorText = mirror;
+          aiText = mirror; // Utiliser le miroir nettoyé (sans annonce)
           break;
         }
 
@@ -1779,7 +1854,9 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
               ]
             });
               
-            mirror = retryCompletion.trim();
+            // Séparer l'annonce du retry aussi
+            const retrySeparated = separateTransitionAnnouncement(retryCompletion.trim(), blocNumber);
+            mirror = retrySeparated.mirror;
             retries++;
           } catch (e) {
             console.error(`[AXIOM_EXECUTOR] Erreur retry miroir BLOC ${blocNumber}`, e);
@@ -1788,13 +1865,17 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
         } else {
           // Fail-soft : servir quand même le miroir retry avec log d'erreur
           console.warn(`[REVELIOM][BLOC${blocNumber}] Miroir invalide après retry :`, validation.errors);
-          aiText = mirror;
+          cleanMirrorText = mirror;
+          aiText = mirror; // Utiliser le miroir nettoyé (sans annonce)
           break;
         }
       }
       
       // Forcer expectsAnswer: true pour les miroirs (C3)
       expectsAnswer = true;
+    } else if (aiText && !cleanMirrorText) {
+      // Si ce n'est pas un miroir, utiliser le texte original
+      aiText = aiText;
     }
     
     let lastQuestion: string | null = null;
@@ -1954,14 +2035,18 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
     }
 
     // Parser le miroir en sections pour affichage progressif (si c'est un miroir REVELIOM, blocs 3-9)
+    // IMPORTANT : Parser uniquement le miroir nettoyé (sans annonce)
     let progressiveDisplay = false;
     let mirrorSections: string[] | undefined = undefined;
     
-    if (aiText && !expectsAnswer && blocNumber >= 3 && blocNumber <= 9) {
-      const sections = parseMirrorSections(aiText);
+    if (cleanMirrorText && !expectsAnswer && blocNumber >= 3 && blocNumber <= 9 && isMirror) {
+      const sections = parseMirrorSections(cleanMirrorText);
       if (sections.length === 3) {
         progressiveDisplay = true;
         mirrorSections = sections;
+        console.log(`[AXIOM_EXECUTOR] Miroir BLOC ${blocNumber} parsé avec succès (3 sections)`);
+      } else {
+        console.warn(`[AXIOM_EXECUTOR] Miroir BLOC ${blocNumber} parsing échoué : ${sections.length} sections trouvées (attendu: 3)`);
       }
     }
     
