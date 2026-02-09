@@ -166,6 +166,23 @@ async function callAxiom(message, event = null) {
     } else if (data.step === 'STEP_99_MATCH_READY' && data.expectsAnswer === false) {
       showStartButton = true;
       displayMatchingButton();
+    } else if (data.step === 'DONE_MATCHING') {
+      // État terminal : masquer tout sauf le bouton FIN
+      const chatForm = document.getElementById('chat-form');
+      if (chatForm) {
+        chatForm.style.display = 'none';
+      }
+      // Masquer les autres boutons (matching, start)
+      const matchingButtonContainer = document.getElementById('mvp-matching-button-container');
+      if (matchingButtonContainer) {
+        matchingButtonContainer.classList.add('hidden');
+      }
+      const startButtonContainer = document.getElementById('mvp-start-button-container');
+      if (startButtonContainer) {
+        startButtonContainer.classList.add('hidden');
+      }
+      // Afficher uniquement le bouton FIN
+      displayFinishButton();
     } else if (data.expectsAnswer === true) {
       // Activer le verrou UI séquentiel : une question est maintenant active
       hasActiveQuestion = true;
@@ -260,6 +277,40 @@ function displayMatchingButton() {
     matchingButton.addEventListener('click', async () => {
       matchingButton.disabled = true;
       await callAxiom(null, 'START_MATCHING');
+    });
+  }
+
+  messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
+
+// Fonction pour afficher le bouton FIN
+function displayFinishButton() {
+  const messagesContainer = document.getElementById('messages');
+  if (!messagesContainer) return;
+
+  // Vérifier si le bouton existe déjà (éviter les doublons)
+  let buttonContainer = document.getElementById('mvp-finish-button-container');
+  if (!buttonContainer) {
+    buttonContainer = document.createElement('div');
+    buttonContainer.id = 'mvp-finish-button-container';
+    buttonContainer.className = 'mvp-start-button';
+    messagesContainer.appendChild(buttonContainer);
+  }
+
+  buttonContainer.innerHTML = `
+    <button id="mvp-finish-button" type="button">
+      FIN
+    </button>
+  `;
+
+  buttonContainer.classList.remove('hidden');
+
+  // Gestionnaire de clic : redirection vers Tally
+  const finishButton = document.getElementById('mvp-finish-button');
+  if (finishButton) {
+    finishButton.addEventListener('click', () => {
+      finishButton.disabled = true;
+      window.location.href = 'https://tally.so/r/44JLbB';
     });
   }
 
@@ -367,6 +418,22 @@ window.addEventListener('DOMContentLoaded', async () => {
         if (chatForm) {
           chatForm.style.display = 'none';
         }
+      } else if (data.step === 'DONE_MATCHING') {
+        // État terminal : masquer tout sauf le bouton FIN
+        if (chatForm) {
+          chatForm.style.display = 'none';
+        }
+        // Masquer les autres boutons (matching, start)
+        const matchingButtonContainer = document.getElementById('mvp-matching-button-container');
+        if (matchingButtonContainer) {
+          matchingButtonContainer.classList.add('hidden');
+        }
+        const startButtonContainer = document.getElementById('mvp-start-button-container');
+        if (startButtonContainer) {
+          startButtonContainer.classList.add('hidden');
+        }
+        // Afficher uniquement le bouton FIN
+        displayFinishButton();
       }
 
       // ENSUITE SEULEMENT, gérer le state
