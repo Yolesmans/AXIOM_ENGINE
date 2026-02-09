@@ -13,6 +13,7 @@ import {
   type ValidationResult
 } from './validators.js';
 import { validateMirrorREVELIOM, type MirrorValidationResult } from './validateMirrorReveliom.js';
+import { validateInterpretiveDepth } from './validateInterpretiveDepth.js';
 import { parseMirrorSections } from './parseMirrorSections.js';
 import { adaptToMentorStyle } from './mirrorNarrativeAdapter.js';
 
@@ -562,6 +563,22 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
       const validation = validateMirrorREVELIOM(mirror);
 
       if (validation.valid) {
+        // VALIDATION PROFONDEUR INTERPRÉTATIVE : Vérifier que le miroir infère, ne reformule pas
+        const depthValidation = validateInterpretiveDepth(mirror, block1UserMessages);
+        
+        if (!depthValidation.valid || depthValidation.isDescriptive) {
+          // Miroir trop descriptif → retry avec prompt renforcé
+          if (retries < maxRetries) {
+            console.warn(`[ORCHESTRATOR] Miroir BLOC 1 trop descriptif, retry ${retries + 1}/${maxRetries}`, depthValidation.errors);
+            lastValidationErrors = depthValidation.errors;
+            retries++;
+            continue; // Re-générer avec prompt renforcé
+          } else {
+            // Fail-soft : servir quand même le miroir avec log d'erreur
+            console.warn(`[REVELIOM][BLOC1] Miroir descriptif après retry :`, depthValidation.errors);
+          }
+        }
+        
         // REFORMULATION STYLISTIQUE : Adapter au style mentor incarné
         try {
           const adaptedMirror = await adaptToMentorStyle(mirror, 'mirror');
@@ -1860,6 +1877,61 @@ Une lecture projective qui révèle, pas une description qui résume.`
     // Validation synthèse avec retry
     const validation = validateSynthesis2B(mirror);
     if (validation.valid) {
+      // VALIDATION PROFONDEUR INTERPRÉTATIVE : Vérifier que le miroir infère, ne reformule pas
+      const block2BAnswers = block2UserMessages.length >= 3 ? block2UserMessages.slice(3) : [];
+      const depthValidation = validateInterpretiveDepth(mirror, block2BAnswers);
+      
+      if (!depthValidation.valid || depthValidation.isDescriptive) {
+        // Miroir trop descriptif → retry avec prompt renforcé
+        console.warn(`[ORCHESTRATOR] Miroir BLOC 2B trop descriptif, retry avec profondeur interprétative`, depthValidation.errors);
+        
+        try {
+          const retryCompletion = await callOpenAI({
+            messages: [
+              { role: 'system', content: FULL_AXIOM_PROMPT },
+              {
+                role: 'system',
+                content: `RÈGLE ABSOLUE AXIOM — RETRY SYNTHÈSE BLOC 2B (PROFONDEUR INTERPRÉTATIVE OBLIGATOIRE)
+
+⚠️ ERREURS DÉTECTÉES DANS LA SYNTHÈSE PRÉCÉDENTE :
+${depthValidation.errors.map(e => `- ${e}`).join('\n')}
+
+Synthèse invalide précédente (TROP DESCRIPTIVE) :
+${mirror}
+
+Tu es en fin de BLOC 2B.
+RÉÉCRIS EN CONFORMITÉ STRICTE REVELIOM :
+
+⚠️ INTERDICTIONS ABSOLUES :
+- Reformuler les réponses du candidat
+- Paraphraser ce qu'il a dit
+- Décrire ce qu'il a mentionné
+- Lister des faits
+
+⚠️ OBLIGATIONS STRICTES :
+- INFÉRER ce que les réponses RÉVÈLENT du fonctionnement réel
+- Prendre une position interprétative claire
+- Formuler une lecture en creux : "ce n'est probablement pas X, mais plutôt Y"
+- Exclure au moins une autre lecture possible
+- Parler de ce que ça DIT de la personne, pas de ce qu'elle a dit
+
+Format : 4-6 lignes. Synthèse projective, pas descriptive.`,
+              },
+              ...messages,
+            ],
+          });
+          
+          mirror = retryCompletion.trim();
+          // Re-valider le format après retry
+          const retryFormatValidation = validateSynthesis2B(mirror);
+          if (!retryFormatValidation.valid) {
+            console.warn(`[ORCHESTRATOR] Miroir BLOC 2B (retry profondeur) format invalide, utilisation original`, retryFormatValidation.error);
+          }
+        } catch (e) {
+          console.error(`[ORCHESTRATOR] Erreur retry profondeur miroir BLOC 2B`, e);
+        }
+      }
+      
       // REFORMULATION STYLISTIQUE : Adapter au style mentor incarné
       try {
         const adaptedMirror = await adaptToMentorStyle(mirror, 'mirror');

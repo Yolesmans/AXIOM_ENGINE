@@ -8,6 +8,7 @@ import { validateMirrorREVELIOM, type MirrorValidationResult } from '../services
 import { parseMirrorSections } from '../services/parseMirrorSections.js';
 import { getFullAxiomPrompt, getMatchingPrompt } from './prompts.js';
 import { adaptToMentorStyle } from '../services/mirrorNarrativeAdapter.js';
+import { validateInterpretiveDepth } from '../services/validateInterpretiveDepth.js';
 
 
 function extractPreambuleFromPrompt(prompt: string): string {
@@ -1824,6 +1825,70 @@ Toute sortie hors règles = invalide.`,
         const validation = validateMirrorREVELIOM(mirror);
         
         if (validation.valid) {
+          // VALIDATION PROFONDEUR INTERPRÉTATIVE : Vérifier que le miroir infère, ne reformule pas
+          const conversationHistory = candidate.conversationHistory || [];
+          const userAnswersInBlock = conversationHistory
+            .filter(m => m.role === 'user' && m.block === blocNumber && m.kind !== 'mirror_validation')
+            .map(m => m.content);
+          
+          const depthValidation = validateInterpretiveDepth(mirror, userAnswersInBlock);
+          
+          if (!depthValidation.valid || depthValidation.isDescriptive) {
+            // Miroir trop descriptif → retry avec prompt renforcé
+            if (retries < maxRetries) {
+              console.warn(`[AXIOM_EXECUTOR] Miroir BLOC ${blocNumber} trop descriptif, retry ${retries + 1}/${maxRetries}`, depthValidation.errors);
+              
+              try {
+                const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
+                const retryCompletion = await callOpenAI({
+                  messages: [
+                    { role: 'system', content: FULL_AXIOM_PROMPT },
+                    {
+                      role: 'system',
+                      content: `RÈGLE ABSOLUE AXIOM — RETRY MIROIR BLOC ${blocNumber} (PROFONDEUR INTERPRÉTATIVE OBLIGATOIRE)
+
+⚠️ ERREURS DÉTECTÉES DANS LE MIROIR PRÉCÉDENT :
+${depthValidation.errors.map(e => `- ${e}`).join('\n')}
+
+Miroir invalide précédent (TROP DESCRIPTIF) :
+${mirror}
+
+Tu es en fin de BLOC ${blocNumber}.
+RÉÉCRIS EN CONFORMITÉ STRICTE REVELIOM :
+
+⚠️ INTERDICTIONS ABSOLUES :
+- Reformuler les réponses du candidat
+- Paraphraser ce qu'il a dit
+- Décrire ce qu'il a mentionné
+- Lister des faits
+
+⚠️ OBLIGATIONS STRICTES :
+- INFÉRER ce que les réponses RÉVÈLENT du fonctionnement réel
+- Prendre une position interprétative claire
+- Formuler une lecture en creux : "ce n'est probablement pas X, mais plutôt Y"
+- Exclure au moins une autre lecture possible
+- Parler de ce que ça DIT de la personne, pas de ce qu'elle a dit
+
+Format strict : 3 sections. 20/25 mots. Lecture en creux. Inférence obligatoire.`,
+                    },
+                    ...messages,
+                  ]
+                });
+                
+                const retrySeparated = separateTransitionAnnouncement(retryCompletion.trim(), blocNumber);
+                mirror = retrySeparated.mirror;
+                retries++;
+                continue; // Re-valider le retry
+              } catch (e) {
+                console.error(`[AXIOM_EXECUTOR] Erreur retry profondeur miroir BLOC ${blocNumber}`, e);
+                break;
+              }
+            } else {
+              // Fail-soft : servir quand même le miroir avec log d'erreur
+              console.warn(`[REVELIOM][BLOC${blocNumber}] Miroir descriptif après retry :`, depthValidation.errors);
+            }
+          }
+          
           // REFORMULATION STYLISTIQUE : Adapter au style mentor incarné
           try {
             const adaptedMirror = await adaptToMentorStyle(mirror, 'mirror');
@@ -1960,8 +2025,21 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
         nextState = blocStates[blocNumber] as any;
       } else if (!expectsAnswer && blocNumber === 10) {
         // Fin du bloc 10 → générer synthèse et passer à match_ready
-        // REFORMULATION STYLISTIQUE : Adapter la synthèse finale au style mentor incarné
+        // VALIDATION PROFONDEUR INTERPRÉTATIVE : Vérifier que la synthèse infère, ne reformule pas
         if (aiText) {
+          const conversationHistory = candidate.conversationHistory || [];
+          const allUserAnswers = conversationHistory
+            .filter(m => m.role === 'user' && m.kind !== 'mirror_validation')
+            .map(m => m.content);
+          
+          const depthValidation = validateInterpretiveDepth(aiText, allUserAnswers);
+          
+          if (!depthValidation.valid || depthValidation.isDescriptive) {
+            console.warn(`[REVELIOM][BLOC10] Synthèse finale trop descriptive :`, depthValidation.errors);
+            // Note : Pas de retry pour synthèse finale (trop coûteux), mais log d'erreur
+          }
+          
+          // REFORMULATION STYLISTIQUE : Adapter la synthèse finale au style mentor incarné
           try {
             const adaptedSynthesis = await adaptToMentorStyle(aiText, 'synthesis');
             candidateStore.setFinalProfileText(candidate.candidateId, adaptedSynthesis);
@@ -1987,8 +2065,21 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
         nextState = blocStates[blocNumber] as any;
       } else if (!expectsAnswer && blocNumber === 10) {
         // Fin du bloc 10 → générer synthèse et passer à match_ready
-        // REFORMULATION STYLISTIQUE : Adapter la synthèse finale au style mentor incarné
+        // VALIDATION PROFONDEUR INTERPRÉTATIVE : Vérifier que la synthèse infère, ne reformule pas
         if (aiText) {
+          const conversationHistory = candidate.conversationHistory || [];
+          const allUserAnswers = conversationHistory
+            .filter(m => m.role === 'user' && m.kind !== 'mirror_validation')
+            .map(m => m.content);
+          
+          const depthValidation = validateInterpretiveDepth(aiText, allUserAnswers);
+          
+          if (!depthValidation.valid || depthValidation.isDescriptive) {
+            console.warn(`[REVELIOM][BLOC10] Synthèse finale trop descriptive :`, depthValidation.errors);
+            // Note : Pas de retry pour synthèse finale (trop coûteux), mais log d'erreur
+          }
+          
+          // REFORMULATION STYLISTIQUE : Adapter la synthèse finale au style mentor incarné
           try {
             const adaptedSynthesis = await adaptToMentorStyle(aiText, 'synthesis');
             candidateStore.setFinalProfileText(candidate.candidateId, adaptedSynthesis);
@@ -2167,6 +2258,19 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
 
       if (typeof completion === 'string' && completion.trim()) {
         aiText = completion.trim();
+        
+        // VALIDATION PROFONDEUR INTERPRÉTATIVE : Vérifier que le matching infère, ne reformule pas
+        const conversationHistory = candidate.conversationHistory || [];
+        const allUserAnswers = conversationHistory
+          .filter(m => m.role === 'user' && m.kind !== 'mirror_validation')
+          .map(m => m.content);
+        
+        const depthValidation = validateInterpretiveDepth(aiText, allUserAnswers);
+        
+        if (!depthValidation.valid || depthValidation.isDescriptive) {
+          console.warn(`[REVELIOM][MATCHING] Matching trop descriptif :`, depthValidation.errors);
+          // Note : Pas de retry pour matching (trop coûteux), mais log d'erreur
+        }
       }
     } catch (e) {
       console.error('[AXIOM_EXECUTION_ERROR]', e);
@@ -2191,6 +2295,18 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
 
         if (typeof completion === 'string' && completion.trim()) {
           aiText = completion.trim();
+          
+          // VALIDATION PROFONDEUR INTERPRÉTATIVE : Vérifier que le matching infère, ne reformule pas (retry)
+          const conversationHistory = candidate.conversationHistory || [];
+          const allUserAnswers = conversationHistory
+            .filter(m => m.role === 'user' && m.kind !== 'mirror_validation')
+            .map(m => m.content);
+          
+          const depthValidation = validateInterpretiveDepth(aiText, allUserAnswers);
+          
+          if (!depthValidation.valid || depthValidation.isDescriptive) {
+            console.warn(`[REVELIOM][MATCHING] Matching trop descriptif (retry) :`, depthValidation.errors);
+          }
         }
       } catch (e) {
         console.error('[AXIOM_EXECUTION_ERROR_RETRY]', e);
