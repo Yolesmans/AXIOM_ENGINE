@@ -134,12 +134,12 @@ function normalizeSingleResponse(response?: string): string {
 }
 
 /**
- * LOT1 — Vérifie si un message utilisateur est une validation explicite de miroir
- * Condition UNIQUE : message === "GO" (trim + uppercase)
+ * LOT1 — Vérifie si un message utilisateur est une validation de miroir
+ * Validation miroir = toute réponse non vide (validation "humaine")
  */
 function isMirrorValidation(input: string | null): boolean {
   if (!input) return false;
-  return input.trim().toUpperCase() === 'GO';
+  return input.trim().length > 0;
 }
 
 export interface OrchestratorResult {
@@ -157,55 +157,6 @@ export class BlockOrchestrator {
     userMessage: string | null,
     event: string | null,
   ): Promise<OrchestratorResult> {
-    // LOT1 — VÉRIFICATION VERROU VALIDATION MIROIR (avant tout traitement)
-    const mirrorValidated = candidate.session.ui?.mirrorValidated;
-    if (mirrorValidated === false && userMessage) {
-      // Verrou actif — vérifier si validation explicite
-      if (isMirrorValidation(userMessage)) {
-        // Validation reçue → lever le verrou
-        console.log('[LOT1] Mirror validation received — unlocking');
-        candidateStore.updateUIState(candidate.candidateId, {
-          mirrorValidated: true,
-        });
-        // Recharger candidate après mise à jour
-        let updatedCandidate = candidateStore.get(candidate.candidateId);
-        if (!updatedCandidate) {
-          updatedCandidate = await candidateStore.getAsync(candidate.candidateId);
-        }
-        if (!updatedCandidate) {
-          throw new Error(`Candidate ${candidate.candidateId} not found after unlocking mirror`);
-        }
-        // Continuer avec le traitement normal (le verrou est levé)
-        candidate = updatedCandidate;
-      } else {
-        // Message ≠ "GO" → bloquer et renvoyer le même miroir
-        console.log('[LOT1] Mirror not validated — blocking progression');
-        const conversationHistory = candidate.conversationHistory || [];
-        const lastMirror = [...conversationHistory]
-          .reverse()
-          .find(m => m.role === 'assistant' && m.kind === 'mirror');
-        
-        if (lastMirror) {
-          const mirrorSections = parseMirrorSections(lastMirror.content);
-          return {
-            response: normalizeSingleResponse(lastMirror.content),
-            step: candidate.session.ui?.step || '',
-            expectsAnswer: true,
-            autoContinue: false,
-            progressiveDisplay: mirrorSections.length === 3,
-            mirrorSections: mirrorSections.length === 3 ? mirrorSections : undefined,
-          };
-        }
-        // Fallback si miroir non trouvé (ne devrait pas arriver)
-        return {
-          response: 'Veuillez valider le miroir en tapant "GO" pour continuer.',
-          step: candidate.session.ui?.step || '',
-          expectsAnswer: true,
-          autoContinue: false,
-        };
-      }
-    }
-
     // Déterminer le bloc en cours
     const currentBlock = candidate.session.currentBlock || 1;
     const currentStep = candidate.session.ui?.step || '';
@@ -271,9 +222,7 @@ export class BlockOrchestrator {
         throw new Error(`Queue for block ${blockNumber} not found`);
       }
 
-      // LOT1 — La validation miroir est déjà gérée par le verrou au début de handleMessage
-      // Si on arrive ici, c'est que le verrou a été levé (message === "GO")
-      // Vérifier si on est en attente de validation miroir (toutes questions répondues + miroir déjà généré)
+      // LOT1 — Vérifier si on est en attente de validation miroir (toutes questions répondues + miroir déjà généré)
       const allQuestionsAnswered = currentQueue.cursorIndex >= currentQueue.questions.length;
       const conversationHistory = currentCandidate.conversationHistory || [];
       const lastAssistantMessage = [...conversationHistory]
@@ -281,7 +230,21 @@ export class BlockOrchestrator {
         .find(m => m.role === 'assistant' && m.kind === 'mirror' && m.block === blockNumber);
       
       if (allQuestionsAnswered && lastAssistantMessage) {
-        // Validation miroir BLOC 1 → Stocker validation et générer question BLOC 2A
+        // Miroir présent → vérifier si c'est une validation ou juste l'affichage
+        if (!userMessage || userMessage.trim().length === 0) {
+          // Pas de message utilisateur → renvoyer le miroir et attendre validation
+          const mirrorSections = parseMirrorSections(lastAssistantMessage.content);
+          return {
+            response: normalizeSingleResponse(lastAssistantMessage.content),
+            step: BLOC_01,
+            expectsAnswer: true,
+            autoContinue: false,
+            progressiveDisplay: mirrorSections.length === 3,
+            mirrorSections: mirrorSections.length === 3 ? mirrorSections : undefined,
+          };
+        }
+        
+        // Message utilisateur présent → validation miroir BLOC 1
         console.log('[ORCHESTRATOR] Validation miroir BLOC 1 reçue');
         candidateStore.appendMirrorValidation(currentCandidate.candidateId, blockNumber, userMessage);
         
@@ -294,7 +257,7 @@ export class BlockOrchestrator {
           step: BLOC_02,
           lastQuestion: null,
           identityDone: true,
-          mirrorValidated: true, // Verrou levé
+          mirrorValidated: true,
         });
         
         // Recharger le candidate pour avoir l'état à jour
@@ -493,14 +456,33 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
     const messages = buildConversationHistory(candidate);
     const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
 
-    // Récupérer toutes les réponses du BLOC 1 depuis AnswerMap
-    const answerMap = candidate.answerMaps?.[1];
-    const answers = answerMap?.answers || {};
-
-    // Construire le contexte des réponses
-    const answersContext = Object.entries(answers)
-      .map(([index, answer]) => `Question ${index}: ${answer}`)
-      .join('\n');
+    // LOT1 — Construire le contexte des réponses depuis conversationHistory (source robuste)
+    const conversationHistory = candidate.conversationHistory || [];
+    const block1UserMessages = conversationHistory
+      .filter(m => m.role === 'user' && m.block === 1 && m.kind !== 'mirror_validation')
+      .map(m => m.content);
+    
+    let answersContext = '';
+    let source = 'history';
+    
+    if (block1UserMessages.length > 0) {
+      // Source principale : conversationHistory
+      answersContext = block1UserMessages
+        .map((answer, index) => `Q${index + 1}: ${answer}`)
+        .join('\n');
+    } else {
+      // Fallback : answerMaps
+      const answerMap = candidate.answerMaps?.[1];
+      const answers = answerMap?.answers || {};
+      const sortedEntries = Object.entries(answers)
+        .sort(([a], [b]) => parseInt(a) - parseInt(b));
+      answersContext = sortedEntries
+        .map(([index, answer]) => `Q${parseInt(index) + 1}: ${answer}`)
+        .join('\n');
+      source = 'answerMaps';
+    }
+    
+    console.log('[BLOC1] answersContext.count=', block1UserMessages.length || Object.keys(candidate.answerMaps?.[1]?.answers || {}).length, 'source=', source);
 
     let mirror = '';
     let retries = 0;
@@ -1044,10 +1026,22 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
           .reverse()
           .find(m => m.role === 'assistant' && m.kind === 'mirror' && m.block === blockNumber);
         
-        if (lastAssistantMessage && userMessage) {
-          // LOT1 — La validation miroir est déjà gérée par le verrou au début de handleMessage
-          // Si on arrive ici, c'est que le verrou a été levé (message === "GO")
-          // Validation miroir BLOC 2B → Stocker validation et générer question BLOC 3
+        if (lastAssistantMessage) {
+          // Miroir présent → vérifier si c'est une validation ou juste l'affichage
+          if (!userMessage || userMessage.trim().length === 0) {
+            // Pas de message utilisateur → renvoyer le miroir et attendre validation
+            const mirrorSections = parseMirrorSections(lastAssistantMessage.content);
+            return {
+              response: normalizeSingleResponse(lastAssistantMessage.content),
+              step: BLOC_02,
+              expectsAnswer: true,
+              autoContinue: false,
+              progressiveDisplay: mirrorSections.length === 3,
+              mirrorSections: mirrorSections.length === 3 ? mirrorSections : undefined,
+            };
+          }
+          
+          // Message utilisateur présent → validation miroir BLOC 2B
           console.log('[ORCHESTRATOR] Validation miroir BLOC 2B reçue');
           candidateStore.appendMirrorValidation(candidateId, blockNumber, userMessage);
           
@@ -1060,7 +1054,7 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
             step: BLOC_03,
             lastQuestion: null,
             identityDone: true,
-            mirrorValidated: true, // Verrou levé
+            mirrorValidated: true,
           });
           
           // Recharger le candidate pour avoir l'état à jour
@@ -1747,19 +1741,46 @@ Format de sortie OBLIGATOIRE :
     const messages = buildConversationHistoryForBlock2B(candidate);
     const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
 
-    // Récupérer toutes les réponses BLOC 2B depuis AnswerMap
-    const answerMap = candidate.answerMaps?.[2];
-    const answers = answerMap?.answers || {};
-
-    // Construire le contexte des réponses (motifs + personnages + traits)
-    const answersContext = Object.entries(answers)
-      .map(([index, answer]) => {
-        const questionIndex = parseInt(index, 10);
-        const queue = candidate.blockQueues?.[2];
-        const question = queue?.questions[questionIndex] || '';
-        return `Question ${questionIndex} (${question.substring(0, 50)}...): ${answer}`;
-      })
-      .join('\n');
+    // LOT1 — Construire le contexte des réponses depuis conversationHistory (source robuste)
+    const conversationHistory = candidate.conversationHistory || [];
+    const block2UserMessages = conversationHistory
+      .filter(m => m.role === 'user' && m.block === 2 && m.kind !== 'mirror_validation')
+      .map(m => m.content);
+    
+    let answersContext = '';
+    let source = 'history';
+    
+    if (block2UserMessages.length > 0) {
+      // Source principale : conversationHistory
+      // Filtrer pour ne garder que les réponses BLOC 2B (après les 3 réponses BLOC 2A)
+      // Les 3 premières sont BLOC 2A, les suivantes sont BLOC 2B
+      const block2BAnswers = block2UserMessages.slice(3);
+      const queue = candidate.blockQueues?.[2];
+      answersContext = block2BAnswers
+        .map((answer, index) => {
+          const questionIndex = index + 3; // BLOC 2B commence après les 3 réponses 2A
+          const question = queue?.questions[questionIndex] || '';
+          return `Question ${questionIndex} (${question.substring(0, 50)}...): ${answer}`;
+        })
+        .join('\n');
+    } else {
+      // Fallback : answerMaps
+      const answerMap = candidate.answerMaps?.[2];
+      const answers = answerMap?.answers || {};
+      const sortedEntries = Object.entries(answers)
+        .sort(([a], [b]) => parseInt(a) - parseInt(b));
+      const queue = candidate.blockQueues?.[2];
+      answersContext = sortedEntries
+        .map(([index, answer]) => {
+          const questionIndex = parseInt(index, 10);
+          const question = queue?.questions[questionIndex] || '';
+          return `Question ${questionIndex} (${question.substring(0, 50)}...): ${answer}`;
+        })
+        .join('\n');
+      source = 'answerMaps';
+    }
+    
+    console.log('[BLOC2B] answersContext.count=', block2UserMessages.length >= 3 ? block2UserMessages.length - 3 : Object.keys(candidate.answerMaps?.[2]?.answers || {}).length, 'source=', source);
 
     const completion = await callOpenAI({
       messages: [
