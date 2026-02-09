@@ -7,9 +7,8 @@ import { candidateToSession, updateCandidateFromSession } from '../utils/candida
 import { validateMirrorREVELIOM, type MirrorValidationResult } from '../services/validateMirrorReveliom.js';
 import { parseMirrorSections } from '../services/parseMirrorSections.js';
 import { getFullAxiomPrompt, getMatchingPrompt } from './prompts.js';
-import { adaptToMentorStyle } from '../services/mirrorNarrativeAdapter.js';
-import { validateInterpretiveDepth } from '../services/validateInterpretiveDepth.js';
-import { validateInterpretiveAnalysis } from '../services/validateInterpretiveAnalysis.js';
+import { generateInterpretiveStructure, type BlockType } from '../services/interpretiveStructureGenerator.js';
+import { renderMentorStyle } from '../services/mentorStyleRenderer.js';
 
 
 function extractPreambuleFromPrompt(prompt: string): string {
@@ -25,6 +24,50 @@ function extractPreambuleFromPrompt(prompt: string): string {
   }
 
   return '';
+}
+
+/**
+ * Génère un miroir avec la nouvelle architecture séparée (analyse/rendu)
+ * 
+ * ⚠️ ARCHITECTURE NOUVELLE — SÉPARATION ANALYSE/RENDU
+ * 1. INTERPRÉTATION : Structure JSON froide et logique (gpt-4o-mini, temp 0.3)
+ * 2. RENDU MENTOR : Texte incarné et vécu (gpt-4o, temp 0.8)
+ * 
+ * - Suppression validations heuristiques complexes
+ * - Validation simple : structure JSON + format REVELIOM
+ */
+async function generateMirrorWithNewArchitecture(
+  userAnswers: string[],
+  blockType: BlockType,
+  additionalContext?: string
+): Promise<string> {
+  console.log(`[AXIOM_EXECUTOR][NEW_ARCHITECTURE] Génération miroir en 2 étapes (interprétation + rendu) pour ${blockType}`);
+  console.log(`[AXIOM_EXECUTOR] Réponses utilisateur:`, userAnswers.length);
+
+  try {
+    // ÉTAPE 1 — INTERPRÉTATION (FROIDE, LOGIQUE)
+    console.log(`[AXIOM_EXECUTOR][ETAPE1] Génération structure interprétative pour ${blockType}...`);
+
+    const structure = await generateInterpretiveStructure(userAnswers, blockType, additionalContext);
+
+    console.log(`[AXIOM_EXECUTOR][ETAPE1] Structure générée pour ${blockType}:`, {
+      hypothese_centrale: structure.hypothese_centrale.substring(0, 50) + '...',
+      mecanisme: structure.mecanisme.substring(0, 50) + '...',
+    });
+
+    // ÉTAPE 2 — RENDU MENTOR INCARNÉ
+    console.log(`[AXIOM_EXECUTOR][ETAPE2] Rendu mentor incarné pour ${blockType}...`);
+
+    const mentorText = await renderMentorStyle(structure, blockType);
+
+    console.log(`[AXIOM_EXECUTOR][ETAPE2] Texte mentor généré pour ${blockType}`);
+
+    return mentorText;
+
+  } catch (error) {
+    console.error(`[AXIOM_EXECUTOR][ERROR] Erreur nouvelle architecture pour ${blockType}:`, error);
+    throw new Error(`Failed to generate mirror with new architecture: ${error}`);
+  }
 }
 
 // ============================================
@@ -1151,6 +1194,12 @@ export async function executeAxiom(
   }
 
   // UTILISER L'ÉTAT DÉRIVÉ (pas ui.step directement comme garde bloquante)
+  // Assertion TypeScript : ui ne peut pas être undefined après l'initialisation ci-dessus
+  if (!ui) {
+    throw new Error('UI state should be initialized at this point');
+  }
+  // TypeScript assertion : ui est maintenant non-null
+  const uiNonNull = ui;
   let currentState = derivedState;
   const stateIn = currentState;
 
@@ -1434,7 +1483,7 @@ AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
       candidateStore.updateUIState(candidate.candidateId, {
         step: BLOC_01,
         lastQuestion: null,
-        tutoiement: ui.tutoiement || undefined,
+        tutoiement: uiNonNull.tutoiement || undefined,
         identityDone: true,
       });
 
@@ -1530,7 +1579,7 @@ Toute sortie hors règles = invalide.`,
       candidateStore.updateUIState(updatedCandidate.candidateId, {
         step: BLOC_01,
         lastQuestion,
-        tutoiement: ui.tutoiement || undefined,
+        tutoiement: uiNonNull.tutoiement || undefined,
         identityDone: true,
       });
 
@@ -1650,69 +1699,42 @@ Toute sortie hors règles = invalide.`,
 
     let aiText: string | null = null;
 
-    try {
-      const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
-      
-      // DÉCISION : Forcer prompt miroir si toutes questions répondues (BLOCS 3-9)
-      const shouldForceMirror = blocNumber >= 3 && blocNumber <= 9 && allQuestionsAnswered;
-      // DÉCISION : Forcer prompt synthèse finale si BLOC 10 et toutes questions répondues
-      const shouldForceSynthesis = blocNumber === 10 && allQuestionsAnswered;
-      
-      const completion = await callOpenAI({
-        messages: [
-          { role: 'system', content: FULL_AXIOM_PROMPT },
-          {
-            role: 'system',
-            content: shouldForceSynthesis
-              ? `🎯 POSTURE MENTALE
-
-Tu es un mentor qui observe ce qui n'est pas dit.
-Tu ne répètes pas ce qu'on te dit, tu révèles ce qui se cache derrière.
-Tu ne décris pas, tu infères.
-Tu prends un risque interprétatif — c'est ta responsabilité.
-Si tu te trompes, le candidat te corrigera, et c'est précieux.
-
-📖 EXEMPLES DE RENDU ATTENDU
-
-❌ "Ton profil montre une préférence pour l'autonomie et la progression."
-✅ "Ce qui te met vraiment en mouvement, c'est probablement moins l'indépendance totale que la liberté de décider comment tu avances — dès que tu sens que tu contrôles ton rythme, tu peux vraiment te lancer."
-
-❌ "Tes valeurs sont l'impact et la responsabilité."
-✅ "Quand il faut agir, ce qui guide tes décisions, ce n'est pas tant le résultat visible que le sentiment que ce que tu fais change quelque chose de concret — sinon, tu perds l'envie."
-
-❌ "Tu recherches des environnements structurés et des équipes collaboratives."
-✅ "Il y a des moments où tu as besoin de sentir que les règles sont claires et que tu sais où tu vas — pas pour te rassurer, mais pour pouvoir vraiment te lancer sans hésiter."
-
-La différence : le premier liste, le second révèle une logique sous-jacente et une dynamique vécue.
-
-⸻
-
-RÈGLE ABSOLUE AXIOM — SYNTHÈSE FINALE BLOC 10
-
-Tu es en FIN DE BLOC 10.
-Toutes les questions ont été répondues.
-Tu dois maintenant produire la SYNTHÈSE FINALE, lecture globale unifiée du profil.
-
-⚠️ RÈGLES ABSOLUES POUR LA SYNTHÈSE FINALE :
-- Relire l'intégralité des réponses du candidat (blocs 1 à 9) dans leur globalité
-- Fonder la synthèse EXCLUSIVEMENT sur ce qui a été réellement exprimé
-- Aucune inférence non justifiée, aucun embellissement, aucun texte générique
-- Ton mentor / confident, jamais institutionnel
-- Langage simple, émotionnel, vivant
-- Structure obligatoire : 🔥 Ce qui te met vraiment en mouvement / 🧱 Comment tu tiens dans le temps / ⚖️ Tes valeurs quand il faut agir / 🧩 Ce que révèlent tes projections / 🛠️ Tes vraies forces… et tes vraies limites
-
-⚠️ PROFONDEUR INTERPRÉTATIVE OBLIGATOIRE :
-- Lecture en creux : "ce n'est probablement pas X, mais plutôt Y"
-- Position interprétative claire : prendre un angle, pas rester neutre
-- Tension ou moteur implicite : expliciter ce qui n'est pas dit mais révélé
-- Ton mentor lucide : non flatteur, non générique, non descriptif
-
-INTERDICTIONS ABSOLUES :
-- Synthèse descriptive (liste de traits, paraphrase des réponses)
-- Ton analytique neutre (sans position interprétative)
-- Formulations génériques réutilisables
-- Reformulation des réponses du candidat`
-              : shouldForceMirror
+    // DÉCISION : Forcer prompt miroir si toutes questions répondues (BLOCS 3-9)
+    const shouldForceMirror = blocNumber >= 3 && blocNumber <= 9 && allQuestionsAnswered;
+    // DÉCISION : Synthèse finale BLOC 10 → utiliser nouvelle architecture directement
+    const shouldForceSynthesis = blocNumber === 10 && allQuestionsAnswered;
+    
+    // Si synthèse finale → utiliser nouvelle architecture directement
+    if (shouldForceSynthesis) {
+      try {
+        const conversationHistory = candidate.conversationHistory || [];
+        const allUserAnswers = conversationHistory
+          .filter(m => m.role === 'user' && m.kind !== 'mirror_validation')
+          .map(m => m.content.trim())
+          .filter(a => a.length > 0);
+        
+        // Générer synthèse avec nouvelle architecture
+        const generatedSynthesis = await generateMirrorWithNewArchitecture(allUserAnswers, 'synthesis');
+        
+        candidateStore.setFinalProfileText(candidate.candidateId, generatedSynthesis);
+        aiText = generatedSynthesis;
+        console.log(`[AXIOM_EXECUTOR] Synthèse finale BLOC 10 générée avec nouvelle architecture (direct)`);
+      } catch (error) {
+        console.error(`[AXIOM_EXECUTOR] Erreur génération synthèse finale avec nouvelle architecture:`, error);
+        // Fallback : continuer avec logique normale (ne pas générer via OpenAI)
+      }
+    }
+    
+    // Si pas de synthèse générée → génération normale (questions ou miroirs BLOCS 3-9)
+    if (!aiText) {
+      try {
+        const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
+        const completion = await callOpenAI({
+          messages: [
+            { role: 'system', content: FULL_AXIOM_PROMPT },
+            {
+              role: 'system',
+              content: shouldForceMirror
               ? `🎯 POSTURE MENTALE
 
 Tu es un mentor qui observe ce qui n'est pas dit.
@@ -1807,9 +1829,10 @@ Toute sortie hors règles = invalide.`,
     } catch (e) {
       console.error('[AXIOM_EXECUTION_ERROR]', e);
     }
+    }
 
-    // Si échec → réessayer une fois
-    if (!aiText) {
+    // Si échec → réessayer une fois (sauf si synthèse finale déjà générée)
+    if (!aiText && !shouldForceSynthesis) {
       try {
         const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
         const completion = await callOpenAI({
@@ -1855,7 +1878,7 @@ Toute sortie hors règles = invalide.`,
 
     // Si toujours vide → utiliser lastQuestion
     if (!aiText) {
-      aiText = ui.lastQuestion || '';
+      aiText = uiNonNull.lastQuestion || '';
     }
 
     // Si toujours vide → erreur critique
@@ -1890,212 +1913,53 @@ Toute sortie hors règles = invalide.`,
     let isMirror = false;
     
     if (cleanMirrorText && blocNumber >= 3 && blocNumber <= 9 && !expectsAnswer) {
-      // C'est un miroir → valider et retry si nécessaire (sur texte nettoyé)
+      // C'est un miroir → utiliser nouvelle architecture séparée
       isMirror = true;
-      let mirror = cleanMirrorText;
-      let retries = 0;
-      const maxRetries = 1;
-
-      while (retries <= maxRetries) {
-        const validation = validateMirrorREVELIOM(mirror);
+      
+      try {
+        // Construire le contexte des réponses depuis conversationHistory
+        const conversationHistory = candidate.conversationHistory || [];
+        const userAnswersInBlock = conversationHistory
+          .filter(m => m.role === 'user' && m.block === blocNumber && m.kind !== 'mirror_validation')
+          .map(m => m.content.trim())
+          .filter(a => a.length > 0);
         
-        if (validation.valid) {
-          // VALIDATION PROFONDEUR INTERPRÉTATIVE : Vérifier que le miroir infère, ne reformule pas
-          const conversationHistory = candidate.conversationHistory || [];
-          const userAnswersInBlock = conversationHistory
-            .filter(m => m.role === 'user' && m.block === blocNumber && m.kind !== 'mirror_validation')
-            .map(m => m.content);
-          
-          const depthValidation = validateInterpretiveDepth(mirror, userAnswersInBlock);
-          
-          if (!depthValidation.valid || depthValidation.isDescriptive) {
-            // Miroir trop descriptif → retry avec prompt renforcé
-            if (retries < maxRetries) {
-              console.warn(`[AXIOM_EXECUTOR] Miroir BLOC ${blocNumber} trop descriptif, retry ${retries + 1}/${maxRetries}`, depthValidation.errors);
-              
-              try {
-                const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
-                const retryCompletion = await callOpenAI({
-                  messages: [
-                    { role: 'system', content: FULL_AXIOM_PROMPT },
-                    {
-                      role: 'system',
-                      content: `RÈGLE ABSOLUE AXIOM — RETRY MIROIR BLOC ${blocNumber} (PROFONDEUR INTERPRÉTATIVE OBLIGATOIRE)
-
-⚠️ ERREURS DÉTECTÉES DANS LE MIROIR PRÉCÉDENT :
-${depthValidation.errors.map(e => `- ${e}`).join('\n')}
-
-Miroir invalide précédent (TROP DESCRIPTIF) :
-${mirror}
-
-Tu es en fin de BLOC ${blocNumber}.
-RÉÉCRIS EN CONFORMITÉ STRICTE REVELIOM :
-
-⚠️ INTERDICTIONS ABSOLUES :
-- Reformuler les réponses du candidat
-- Paraphraser ce qu'il a dit
-- Décrire ce qu'il a mentionné
-- Lister des faits
-
-⚠️ OBLIGATIONS STRICTES :
-- INFÉRER ce que les réponses RÉVÈLENT du fonctionnement réel
-- Prendre une position interprétative claire
-- Formuler une lecture en creux : "ce n'est probablement pas X, mais plutôt Y"
-- Exclure au moins une autre lecture possible
-- Parler de ce que ça DIT de la personne, pas de ce qu'elle a dit
-
-Format strict : 3 sections. 20/25 mots. Lecture en creux. Inférence obligatoire.`,
-                    },
-                    ...messages,
-                  ]
-                });
-                
-                const retrySeparated = separateTransitionAnnouncement(retryCompletion.trim(), blocNumber);
-                mirror = retrySeparated.mirror;
-                retries++;
-                continue; // Re-valider le retry
-              } catch (e) {
-                console.error(`[AXIOM_EXECUTOR] Erreur retry profondeur miroir BLOC ${blocNumber}`, e);
-                break;
-              }
-            } else {
-              // Fail-soft : servir quand même le miroir avec log d'erreur
-              console.warn(`[REVELIOM][BLOC${blocNumber}] Miroir descriptif après retry :`, depthValidation.errors);
-            }
-          }
-          
-          // VALIDATION ANALYSE INTERPRÉTATIVE : Vérifier que le miroir est vraiment interprétatif (pas descriptif/récapitulatif)
-          const analysisValidation = validateInterpretiveAnalysis(mirror, userAnswersInBlock, 'mirror', blocNumber);
-          
-          if (!analysisValidation.valid) {
-            // Miroir trop descriptif/récapitulatif → retry avec prompt renforcé
-            if (retries < maxRetries) {
-              console.warn(`[AXIOM_EXECUTOR] Miroir BLOC ${blocNumber} pas assez interprétatif, retry ${retries + 1}/${maxRetries}`, analysisValidation.errors);
-              
-              try {
-                const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
-                const retryCompletion = await callOpenAI({
-                  messages: [
-                    { role: 'system', content: FULL_AXIOM_PROMPT },
-                    {
-                      role: 'system',
-                      content: `RÈGLE ABSOLUE AXIOM — RETRY MIROIR BLOC ${blocNumber} (ANALYSE INTERPRÉTATIVE OBLIGATOIRE)
-
-⚠️ ERREURS DÉTECTÉES DANS LE MIROIR PRÉCÉDENT :
-${analysisValidation.errors.map(e => `- ${e}`).join('\n')}
-
-Miroir invalide précédent (TROP DESCRIPTIF/RÉCAPITULATIF) :
-${mirror}
-
-Tu es en fin de BLOC ${blocNumber}.
-RÉÉCRIS EN CONFORMITÉ STRICTE REVELIOM :
-
-⚠️ INTERDICTIONS ABSOLUES :
-- Reformuler les réponses du candidat
-- Paraphraser ce qu'il a dit
-- Répéter ce qu'il a exprimé
-- Lister des faits
-- Si le candidat peut dire "oui, c'est exactement ce que j'ai dit" → INVALIDE
-
-⚠️ OBLIGATIONS STRICTES :
-- INFÉRER ce que les réponses RÉVÈLENT du fonctionnement réel
-- Contenir une lecture en creux OBLIGATOIRE : "ce n'est probablement pas X, mais plutôt Y"
-- Apporter un décalage interprétatif : tension, contradiction, logique sous-jacente, moteur implicite
-- Le texte doit provoquer "oui... ok, vu comme ça" et non "oui, c'est exactement ce que j'ai dit"
-
-Format strict : 3 sections. 20/25 mots. Lecture en creux. Inférence obligatoire.`,
-                    },
-                    ...messages,
-                  ],
-                });
-                
-                const retrySeparated = separateTransitionAnnouncement(retryCompletion.trim(), blocNumber);
-                mirror = retrySeparated.mirror;
-                retries++;
-                continue; // Re-valider le retry
-              } catch (e) {
-                console.error(`[AXIOM_EXECUTOR] Erreur retry analyse miroir BLOC ${blocNumber}`, e);
-                break;
-              }
-            } else {
-              // Fail-soft : servir quand même le miroir avec log d'erreur (MODE OBSERVATION)
-              console.warn(`[REVELIOM][BLOC${blocNumber}][FAIL_SOFT] Miroir pas assez interprétatif après retry (fail-soft activé) :`, {
-                errors: analysisValidation.errors,
-                hasReformulation: analysisValidation.hasReformulation,
-                hasExclusion: analysisValidation.hasExclusion,
-                hasInterpretiveShift: analysisValidation.hasInterpretiveShift,
-                rejectedTextPreview: mirror.substring(0, 300),
-              });
-            }
-          }
-          
-          // REFORMULATION STYLISTIQUE : Adapter au style mentor incarné
-          try {
-            const adaptedMirror = await adaptToMentorStyle(mirror, 'mirror');
-            
-            // Re-valider le miroir adapté (format doit rester conforme)
-            const adaptedValidation = validateMirrorREVELIOM(adaptedMirror);
-            
-            if (adaptedValidation.valid) {
-              cleanMirrorText = adaptedMirror;
-              aiText = adaptedMirror;
-              console.log(`[AXIOM_EXECUTOR] Miroir BLOC ${blocNumber} adapté au style mentor`);
-            } else {
-              // Si adaptation invalide, utiliser miroir original
-              console.warn(`[AXIOM_EXECUTOR] Adaptation miroir BLOC ${blocNumber} invalide, utilisation original`, adaptedValidation.errors);
-              cleanMirrorText = mirror;
-              aiText = mirror;
-            }
-          } catch (e) {
-            // Si erreur adaptation, utiliser miroir original
-            console.error(`[AXIOM_EXECUTOR] Erreur adaptation miroir BLOC ${blocNumber}`, e);
-            cleanMirrorText = mirror;
-            aiText = mirror;
-          }
-          break;
-        }
-
-        if (retries < maxRetries) {
-          console.warn(`[AXIOM_EXECUTOR] Miroir BLOC ${blocNumber} non conforme, retry ${retries + 1}/${maxRetries}`, validation.errors);
-          
-          // Retry avec prompt renforcé incluant les erreurs et le miroir invalide
-          try {
-            const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
-            const retryCompletion = await callOpenAI({
-              messages: [
-                { role: 'system', content: FULL_AXIOM_PROMPT },
-                {
-                  role: 'system',
-                  content: `RÈGLE ABSOLUE AXIOM — RETRY MIROIR BLOC ${blocNumber} (FORMAT STRICT OBLIGATOIRE)
-
-⚠️ ERREURS DÉTECTÉES DANS LE MIROIR PRÉCÉDENT :
-${validation.errors.map(e => `- ${e}`).join('\n')}
-
-Miroir invalide précédent :
-${mirror}
-
-Tu es en fin de BLOC ${blocNumber}.
-Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en creux. Aucun mot interdit. Aucun texte additionnel.`,
-                },
-                ...messages,
-              ]
-            });
-              
-            // Séparer l'annonce du retry aussi
-            const retrySeparated = separateTransitionAnnouncement(retryCompletion.trim(), blocNumber);
-            mirror = retrySeparated.mirror;
-            retries++;
-          } catch (e) {
-            console.error(`[AXIOM_EXECUTOR] Erreur retry miroir BLOC ${blocNumber}`, e);
-            break;
-          }
+        // Mapper le numéro de bloc au type BlockType
+        const blockTypeMap: Record<number, BlockType> = {
+          3: 'block3',
+          4: 'block4',
+          5: 'block5',
+          6: 'block6',
+          7: 'block7',
+          8: 'block8',
+          9: 'block9',
+        };
+        
+        const blockType = blockTypeMap[blocNumber];
+        
+        if (!blockType) {
+          console.error(`[AXIOM_EXECUTOR] Type de bloc inconnu: ${blocNumber}`);
+          // Fallback : utiliser texte original
         } else {
-          // Fail-soft : servir quand même le miroir retry avec log d'erreur
-          console.warn(`[REVELIOM][BLOC${blocNumber}] Miroir invalide après retry :`, validation.errors);
-          cleanMirrorText = mirror;
-          aiText = mirror; // Utiliser le miroir nettoyé (sans annonce)
-          break;
+          // Générer miroir avec nouvelle architecture
+          const generatedMirror = await generateMirrorWithNewArchitecture(userAnswersInBlock, blockType);
+          
+          // Valider format REVELIOM
+          const validation = validateMirrorREVELIOM(generatedMirror);
+          
+          if (validation.valid) {
+            cleanMirrorText = generatedMirror;
+            aiText = generatedMirror;
+            console.log(`[AXIOM_EXECUTOR] Miroir BLOC ${blocNumber} généré avec succès (nouvelle architecture)`);
+          } else {
+            console.warn(`[AXIOM_EXECUTOR] Format REVELIOM invalide pour BLOC ${blocNumber}, mais texte servi (fail-soft):`, validation.errors);
+            cleanMirrorText = generatedMirror;
+            aiText = generatedMirror;
+          }
         }
+      } catch (error) {
+        console.error(`[AXIOM_EXECUTOR] Erreur génération miroir BLOC ${blocNumber} avec nouvelle architecture:`, error);
+        // Fallback : utiliser texte original
       }
       
       // Forcer expectsAnswer: true pour les miroirs (C3)
@@ -2164,48 +2028,28 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
         // Fin du bloc (pas un miroir) → passer au suivant
         nextState = blocStates[blocNumber] as any;
       } else if (!expectsAnswer && blocNumber === 10) {
-        // Fin du bloc 10 → générer synthèse et passer à match_ready
-        // VALIDATION PROFONDEUR INTERPRÉTATIVE : Vérifier que la synthèse infère, ne reformule pas
-        if (aiText) {
-          const conversationHistory = candidate.conversationHistory || [];
-          const allUserAnswers = conversationHistory
-            .filter(m => m.role === 'user' && m.kind !== 'mirror_validation')
-            .map(m => m.content);
-          
-          const depthValidation = validateInterpretiveDepth(aiText, allUserAnswers);
-          
-          if (!depthValidation.valid || depthValidation.isDescriptive) {
-            console.warn(`[REVELIOM][BLOC10] Synthèse finale trop descriptive :`, depthValidation.errors);
-            // Note : Pas de retry pour synthèse finale (trop coûteux), mais log d'erreur
-          }
-          
-          // VALIDATION ANALYSE INTERPRÉTATIVE : Vérifier que la synthèse est vraiment interprétative
-          const analysisValidation = validateInterpretiveAnalysis(aiText, allUserAnswers, 'synthesis', 10);
-          
-          if (!analysisValidation.valid) {
-            // ZONE CRITIQUE : Synthèse finale → LOG WARN OBLIGATOIRE (valeur maximale produit)
-            console.warn(`[REVELIOM][BLOC10][CRITIQUE] Synthèse finale pas assez interprétative :`, {
-              errors: analysisValidation.errors,
-              hasReformulation: analysisValidation.hasReformulation,
-              hasExclusion: analysisValidation.hasExclusion,
-              hasInterpretiveShift: analysisValidation.hasInterpretiveShift,
-              rejectedTextPreview: aiText.substring(0, 300),
-            });
-            // Note : Pas de retry pour synthèse finale (trop coûteux), mais log d'erreur obligatoire
-          }
-          
-          // REFORMULATION STYLISTIQUE : Adapter la synthèse finale au style mentor incarné
+        // Fin du bloc 10 → synthèse déjà générée avec nouvelle architecture (si shouldForceSynthesis était vrai)
+        // Sinon, générer maintenant
+        if (!aiText) {
           try {
-            const adaptedSynthesis = await adaptToMentorStyle(aiText, 'synthesis');
-            candidateStore.setFinalProfileText(candidate.candidateId, adaptedSynthesis);
-            aiText = adaptedSynthesis; // Utiliser la synthèse adaptée
-            console.log(`[AXIOM_EXECUTOR] Synthèse finale BLOC 10 adaptée au style mentor`);
-          } catch (e) {
-            // Fail-soft : utiliser synthèse originale
-            console.error(`[AXIOM_EXECUTOR] Erreur adaptation synthèse finale`, e);
-            candidateStore.setFinalProfileText(candidate.candidateId, aiText);
+            const conversationHistory = candidate.conversationHistory || [];
+            const allUserAnswers = conversationHistory
+              .filter(m => m.role === 'user' && m.kind !== 'mirror_validation')
+              .map(m => m.content.trim())
+              .filter(a => a.length > 0);
+            
+            // Générer synthèse avec nouvelle architecture
+            const generatedSynthesis = await generateMirrorWithNewArchitecture(allUserAnswers, 'synthesis');
+            
+            candidateStore.setFinalProfileText(candidate.candidateId, generatedSynthesis);
+            aiText = generatedSynthesis;
+            console.log(`[AXIOM_EXECUTOR] Synthèse finale BLOC 10 générée avec succès (nouvelle architecture)`);
+          } catch (error) {
+            console.error(`[AXIOM_EXECUTOR] Erreur génération synthèse finale avec nouvelle architecture:`, error);
+            console.error('[AXIOM_EXECUTOR] Synthèse finale vide');
           }
         } else {
+          // Synthèse déjà générée → s'assurer qu'elle est stockée
           candidateStore.setFinalProfileText(candidate.candidateId, aiText);
         }
         nextState = STEP_99_MATCH_READY;
@@ -2219,48 +2063,28 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
         // Fin du bloc (pas un miroir) → passer au suivant
         nextState = blocStates[blocNumber] as any;
       } else if (!expectsAnswer && blocNumber === 10) {
-        // Fin du bloc 10 → générer synthèse et passer à match_ready
-        // VALIDATION PROFONDEUR INTERPRÉTATIVE : Vérifier que la synthèse infère, ne reformule pas
-        if (aiText) {
-          const conversationHistory = candidate.conversationHistory || [];
-          const allUserAnswers = conversationHistory
-            .filter(m => m.role === 'user' && m.kind !== 'mirror_validation')
-            .map(m => m.content);
-          
-          const depthValidation = validateInterpretiveDepth(aiText, allUserAnswers);
-          
-          if (!depthValidation.valid || depthValidation.isDescriptive) {
-            console.warn(`[REVELIOM][BLOC10] Synthèse finale trop descriptive :`, depthValidation.errors);
-            // Note : Pas de retry pour synthèse finale (trop coûteux), mais log d'erreur
-          }
-          
-          // VALIDATION ANALYSE INTERPRÉTATIVE : Vérifier que la synthèse est vraiment interprétative
-          const analysisValidation = validateInterpretiveAnalysis(aiText, allUserAnswers, 'synthesis', 10);
-          
-          if (!analysisValidation.valid) {
-            // ZONE CRITIQUE : Synthèse finale → LOG WARN OBLIGATOIRE (valeur maximale produit)
-            console.warn(`[REVELIOM][BLOC10][CRITIQUE] Synthèse finale pas assez interprétative :`, {
-              errors: analysisValidation.errors,
-              hasReformulation: analysisValidation.hasReformulation,
-              hasExclusion: analysisValidation.hasExclusion,
-              hasInterpretiveShift: analysisValidation.hasInterpretiveShift,
-              rejectedTextPreview: aiText.substring(0, 300),
-            });
-            // Note : Pas de retry pour synthèse finale (trop coûteux), mais log d'erreur obligatoire
-          }
-          
-          // REFORMULATION STYLISTIQUE : Adapter la synthèse finale au style mentor incarné
+        // Fin du bloc 10 → synthèse déjà générée avec nouvelle architecture (si shouldForceSynthesis était vrai)
+        // Sinon, générer maintenant
+        if (!aiText) {
           try {
-            const adaptedSynthesis = await adaptToMentorStyle(aiText, 'synthesis');
-            candidateStore.setFinalProfileText(candidate.candidateId, adaptedSynthesis);
-            aiText = adaptedSynthesis; // Utiliser la synthèse adaptée
-            console.log(`[AXIOM_EXECUTOR] Synthèse finale BLOC 10 adaptée au style mentor`);
-          } catch (e) {
-            // Fail-soft : utiliser synthèse originale
-            console.error(`[AXIOM_EXECUTOR] Erreur adaptation synthèse finale`, e);
-            candidateStore.setFinalProfileText(candidate.candidateId, aiText);
+            const conversationHistory = candidate.conversationHistory || [];
+            const allUserAnswers = conversationHistory
+              .filter(m => m.role === 'user' && m.kind !== 'mirror_validation')
+              .map(m => m.content.trim())
+              .filter(a => a.length > 0);
+            
+            // Générer synthèse avec nouvelle architecture
+            const generatedSynthesis = await generateMirrorWithNewArchitecture(allUserAnswers, 'synthesis');
+            
+            candidateStore.setFinalProfileText(candidate.candidateId, generatedSynthesis);
+            aiText = generatedSynthesis;
+            console.log(`[AXIOM_EXECUTOR] Synthèse finale BLOC 10 générée avec succès (nouvelle architecture)`);
+          } catch (error) {
+            console.error(`[AXIOM_EXECUTOR] Erreur génération synthèse finale avec nouvelle architecture:`, error);
+            console.error('[AXIOM_EXECUTOR] Synthèse finale vide');
           }
         } else {
+          // Synthèse déjà générée → s'assurer qu'elle est stockée
           candidateStore.setFinalProfileText(candidate.candidateId, aiText);
         }
         nextState = STEP_99_MATCH_READY;
@@ -2411,171 +2235,26 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
     let aiText: string | null = null;
 
     try {
-      const MATCHING_PROMPT = getMatchingPrompt();
-      const messages = buildConversationHistory(candidate);
-
-      // Ajouter la synthèse finale si disponible
-      if (candidate.finalProfileText) {
-        messages.push({ role: 'system', content: `SYNTHÈSE FINALE AXIOM:\n${candidate.finalProfileText}` });
-      }
-
-      const completion = await callOpenAI({
-        messages: [
-          { role: 'system', content: MATCHING_PROMPT },
-          {
-            role: 'system',
-            content: `🎯 POSTURE MENTALE
-
-Tu es un mentor qui observe ce qui n'est pas dit.
-Tu ne répètes pas ce qu'on te dit, tu révèles ce qui se cache derrière.
-Tu ne décris pas, tu infères.
-Tu prends un risque interprétatif — c'est ta responsabilité.
-Si tu te trompes, le candidat te corrigera, et c'est précieux.
-
-📖 EXEMPLES DE RENDU ATTENDU
-
-❌ "Ton profil montre une compatibilité avec des environnements structurés et collaboratifs."
-✅ "Ce qui te met vraiment en mouvement, c'est probablement moins l'environnement parfait que la capacité de décider comment tu avances — dès que tu sens que tu contrôles ton rythme dans un cadre qui te protège, tu peux vraiment te lancer."
-
-❌ "Tes valeurs sont l'impact et la responsabilité, ce qui correspond à notre culture."
-✅ "Quand il faut agir, ce qui guide tes décisions, ce n'est pas tant le résultat visible que le sentiment que ce que tu fais change quelque chose de concret — sinon, tu perds l'envie. C'est ça qui pourrait résonner ici, ou pas."
-
-❌ "Le matching est positif car tu recherches l'autonomie et nous l'offrons."
-✅ "Il y a des moments où tu as besoin de sentir que les règles sont claires et que tu sais où tu vas — pas pour te rassurer, mais pour pouvoir vraiment te lancer sans hésiter. Si c'est ce qu'on peut te donner ici, alors ça peut marcher. Sinon, tu risques de te sentir bridé."
-
-La différence : le premier liste des correspondances, le second révèle une logique sous-jacente et évalue la compatibilité réelle.
-
-⸻`,
-          },
-          ...messages,
-        ],
-      });
-
-      if (typeof completion === 'string' && completion.trim()) {
-        aiText = completion.trim();
-        
-        // VALIDATION PROFONDEUR INTERPRÉTATIVE : Vérifier que le matching infère, ne reformule pas
-        const conversationHistory = candidate.conversationHistory || [];
-        const allUserAnswers = conversationHistory
-          .filter(m => m.role === 'user' && m.kind !== 'mirror_validation')
-          .map(m => m.content);
-        
-        const depthValidation = validateInterpretiveDepth(aiText, allUserAnswers);
-        
-        if (!depthValidation.valid || depthValidation.isDescriptive) {
-          console.warn(`[REVELIOM][MATCHING] Matching trop descriptif :`, depthValidation.errors);
-          // Note : Pas de retry pour matching (trop coûteux), mais log d'erreur
-        }
-        
-        // VALIDATION ANALYSE INTERPRÉTATIVE : Vérifier que le matching est vraiment interprétatif
-        const analysisValidation = validateInterpretiveAnalysis(aiText, allUserAnswers, 'matching');
-        
-        if (!analysisValidation.valid) {
-          // ZONE CRITIQUE : Matching final → LOG WARN OBLIGATOIRE (valeur maximale produit)
-          console.warn(`[REVELIOM][MATCHING][CRITIQUE] Matching pas assez interprétatif :`, {
-            errors: analysisValidation.errors,
-            hasReformulation: analysisValidation.hasReformulation,
-            hasExclusion: analysisValidation.hasExclusion,
-            hasInterpretiveShift: analysisValidation.hasInterpretiveShift,
-            rejectedTextPreview: aiText.substring(0, 300),
-          });
-          // Note : Pas de retry pour matching (trop coûteux), mais log d'erreur obligatoire
-        }
-      }
-    } catch (e) {
-      console.error('[AXIOM_EXECUTION_ERROR]', e);
-    }
-
-    // Si échec → réessayer une fois
-    if (!aiText) {
-      try {
-        const MATCHING_PROMPT = getMatchingPrompt();
-        const messages = buildConversationHistory(candidate);
-
-        if (candidate.finalProfileText) {
-          messages.push({ role: 'system', content: `SYNTHÈSE FINALE AXIOM:\n${candidate.finalProfileText}` });
-        }
-
-        const completion = await callOpenAI({
-          messages: [
-            { role: 'system', content: MATCHING_PROMPT },
-            {
-              role: 'system',
-              content: `🎯 POSTURE MENTALE
-
-Tu es un mentor qui observe ce qui n'est pas dit.
-Tu ne répètes pas ce qu'on te dit, tu révèles ce qui se cache derrière.
-Tu ne décris pas, tu infères.
-Tu prends un risque interprétatif — c'est ta responsabilité.
-Si tu te trompes, le candidat te corrigera, et c'est précieux.
-
-📖 EXEMPLES DE RENDU ATTENDU
-
-❌ "Ton profil montre une compatibilité avec des environnements structurés et collaboratifs."
-✅ "Ce qui te met vraiment en mouvement, c'est probablement moins l'environnement parfait que la capacité de décider comment tu avances — dès que tu sens que tu contrôles ton rythme dans un cadre qui te protège, tu peux vraiment te lancer."
-
-❌ "Tes valeurs sont l'impact et la responsabilité, ce qui correspond à notre culture."
-✅ "Quand il faut agir, ce qui guide tes décisions, ce n'est pas tant le résultat visible que le sentiment que ce que tu fais change quelque chose de concret — sinon, tu perds l'envie. C'est ça qui pourrait résonner ici, ou pas."
-
-❌ "Le matching est positif car tu recherches l'autonomie et nous l'offrons."
-✅ "Il y a des moments où tu as besoin de sentir que les règles sont claires et que tu sais où tu vas — pas pour te rassurer, mais pour pouvoir vraiment te lancer sans hésiter. Si c'est ce qu'on peut te donner ici, alors ça peut marcher. Sinon, tu risques de te sentir bridé."
-
-La différence : le premier liste des correspondances, le second révèle une logique sous-jacente et évalue la compatibilité réelle.
-
-⸻`,
-            },
-            ...messages,
-          ],
-        });
-
-        if (typeof completion === 'string' && completion.trim()) {
-          aiText = completion.trim();
-          
-          // VALIDATION PROFONDEUR INTERPRÉTATIVE : Vérifier que le matching infère, ne reformule pas (retry)
-          const conversationHistory = candidate.conversationHistory || [];
-          const allUserAnswers = conversationHistory
-            .filter(m => m.role === 'user' && m.kind !== 'mirror_validation')
-            .map(m => m.content);
-          
-          const depthValidation = validateInterpretiveDepth(aiText, allUserAnswers);
-          
-          if (!depthValidation.valid || depthValidation.isDescriptive) {
-            console.warn(`[REVELIOM][MATCHING] Matching trop descriptif (retry) :`, depthValidation.errors);
-          }
-          
-          // VALIDATION ANALYSE INTERPRÉTATIVE : Vérifier que le matching est vraiment interprétatif (retry)
-          const analysisValidation = validateInterpretiveAnalysis(aiText, allUserAnswers, 'matching');
-          
-          if (!analysisValidation.valid) {
-            // ZONE CRITIQUE : Matching final (retry) → LOG WARN OBLIGATOIRE
-            console.warn(`[REVELIOM][MATCHING][CRITIQUE] Matching pas assez interprétatif (retry) :`, {
-              errors: analysisValidation.errors,
-              hasReformulation: analysisValidation.hasReformulation,
-              hasExclusion: analysisValidation.hasExclusion,
-              hasInterpretiveShift: analysisValidation.hasInterpretiveShift,
-              rejectedTextPreview: aiText.substring(0, 300),
-            });
-          }
-        }
-      } catch (e) {
-        console.error('[AXIOM_EXECUTION_ERROR_RETRY]', e);
-      }
-    }
-
-    // Si toujours vide → erreur
-    if (!aiText) {
-      console.error('[AXIOM_CRITICAL_ERROR]', { sessionId: candidate.candidateId, state: currentState });
+      // Construire le contexte des réponses depuis conversationHistory
+      const conversationHistory = candidate.conversationHistory || [];
+      const allUserAnswers = conversationHistory
+        .filter(m => m.role === 'user' && m.kind !== 'mirror_validation')
+        .map(m => m.content.trim())
+        .filter(a => a.length > 0);
+      
+      // Contexte additionnel : synthèse finale si disponible
+      const additionalContext = candidate.finalProfileText 
+        ? `SYNTHÈSE FINALE AXIOM:\n${candidate.finalProfileText}`
+        : undefined;
+      
+      // Générer matching avec nouvelle architecture
+      const generatedMatching = await generateMirrorWithNewArchitecture(allUserAnswers, 'matching', additionalContext);
+      
+      aiText = generatedMatching;
+      console.log(`[AXIOM_EXECUTOR] Matching généré avec succès (nouvelle architecture)`);
+    } catch (error) {
+      console.error(`[AXIOM_EXECUTOR] Erreur génération matching avec nouvelle architecture:`, error);
       aiText = 'Erreur lors de la génération du matching. Veuillez réessayer.';
-    } else {
-      // REFORMULATION STYLISTIQUE : Adapter le matching au style mentor incarné
-      try {
-        const adaptedMatching = await adaptToMentorStyle(aiText, 'matching');
-        aiText = adaptedMatching; // Utiliser le matching adapté
-        console.log(`[AXIOM_EXECUTOR] Matching adapté au style mentor`);
-      } catch (e) {
-        // Fail-soft : utiliser matching original
-        console.error(`[AXIOM_EXECUTOR] Erreur adaptation matching`, e);
-      }
     }
 
     currentState = DONE_MATCHING;
@@ -2618,7 +2297,7 @@ La différence : le premier liste des correspondances, le second révèle une lo
     };
   }
 
-  // État inconnu
+  // État inconnu (fallback pour satisfaire TypeScript)
   console.error('[AXIOM_UNKNOWN_STATE]', { sessionId: candidate.candidateId, state: currentState });
   logTransition(candidate.candidateId, stateIn, DONE_MATCHING, 'message');
   return {
@@ -2665,5 +2344,6 @@ export async function executeWithAutoContinue(
     });
   }
 
-  return result;
+  return result!; // result est toujours défini car executeAxiom retourne toujours une valeur
 }
+
