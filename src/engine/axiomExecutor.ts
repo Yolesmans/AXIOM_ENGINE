@@ -1932,9 +1932,11 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
 
     // Si fin du bloc 10 → transition automatique
     if (nextState === STEP_99_MATCH_READY) {
-      const finalResponse = (aiText || '') + '\n\nProfil terminé. Quand tu es prêt, génère ton matching.';
+      // Retourner UNIQUEMENT la synthèse finale (sans concaténation du message CTA)
+      // Le message CTA sera retourné séparément dans l'état STEP_99_MATCH_READY
+      const finalResponse = aiText || '';
       
-      // Enregistrer la réponse assistant finale
+      // Enregistrer la réponse assistant finale (synthèse seule)
       if (finalResponse) {
         candidateStore.appendAssistantMessage(candidate.candidateId, finalResponse, {
           step: nextState,
@@ -1982,7 +1984,7 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
     if (!userMessage && !event) {
       logTransition(candidate.candidateId, stateIn, currentState, 'message');
       return {
-        response: 'Profil terminé. Quand tu es prêt, génère ton matching.',
+        response: 'Ton profil est terminé.\n\n👉 Découvre ton matching pour savoir si ce poste te correspond vraiment.',
         step: currentState,
         lastQuestion: null,
         expectsAnswer: false,

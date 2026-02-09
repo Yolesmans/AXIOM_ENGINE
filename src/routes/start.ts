@@ -74,6 +74,7 @@ export async function registerStartRoute(app: FastifyInstance) {
       state: responseState,
       currentBlock: candidate.session.currentBlock,
       response: result.response,
+      step: result.step,
       expectsAnswer: result.expectsAnswer,
       autoContinue: result.autoContinue,
     });
