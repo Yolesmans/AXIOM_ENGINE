@@ -21,6 +21,7 @@ export interface CandidateSession {
     lastQuestion: string | null;
     tutoiement?: 'tutoiement' | 'vouvoiement';
     identityDone?: boolean;
+    mirrorValidated?: boolean;
   };
 }
 

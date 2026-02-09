@@ -133,6 +133,15 @@ function normalizeSingleResponse(response?: string): string {
   return response.trim();
 }
 
+/**
+ * LOT1 — Vérifie si un message utilisateur est une validation explicite de miroir
+ * Condition UNIQUE : message === "GO" (trim + uppercase)
+ */
+function isMirrorValidation(input: string | null): boolean {
+  if (!input) return false;
+  return input.trim().toUpperCase() === 'GO';
+}
+
 export interface OrchestratorResult {
   response: string;
   step: string;
@@ -148,6 +157,55 @@ export class BlockOrchestrator {
     userMessage: string | null,
     event: string | null,
   ): Promise<OrchestratorResult> {
+    // LOT1 — VÉRIFICATION VERROU VALIDATION MIROIR (avant tout traitement)
+    const mirrorValidated = candidate.session.ui?.mirrorValidated;
+    if (mirrorValidated === false && userMessage) {
+      // Verrou actif — vérifier si validation explicite
+      if (isMirrorValidation(userMessage)) {
+        // Validation reçue → lever le verrou
+        console.log('[LOT1] Mirror validation received — unlocking');
+        candidateStore.updateUIState(candidate.candidateId, {
+          mirrorValidated: true,
+        });
+        // Recharger candidate après mise à jour
+        let updatedCandidate = candidateStore.get(candidate.candidateId);
+        if (!updatedCandidate) {
+          updatedCandidate = await candidateStore.getAsync(candidate.candidateId);
+        }
+        if (!updatedCandidate) {
+          throw new Error(`Candidate ${candidate.candidateId} not found after unlocking mirror`);
+        }
+        // Continuer avec le traitement normal (le verrou est levé)
+        candidate = updatedCandidate;
+      } else {
+        // Message ≠ "GO" → bloquer et renvoyer le même miroir
+        console.log('[LOT1] Mirror not validated — blocking progression');
+        const conversationHistory = candidate.conversationHistory || [];
+        const lastMirror = [...conversationHistory]
+          .reverse()
+          .find(m => m.role === 'assistant' && m.kind === 'mirror');
+        
+        if (lastMirror) {
+          const mirrorSections = parseMirrorSections(lastMirror.content);
+          return {
+            response: normalizeSingleResponse(lastMirror.content),
+            step: candidate.session.ui?.step || '',
+            expectsAnswer: true,
+            autoContinue: false,
+            progressiveDisplay: mirrorSections.length === 3,
+            mirrorSections: mirrorSections.length === 3 ? mirrorSections : undefined,
+          };
+        }
+        // Fallback si miroir non trouvé (ne devrait pas arriver)
+        return {
+          response: 'Veuillez valider le miroir en tapant "GO" pour continuer.',
+          step: candidate.session.ui?.step || '',
+          expectsAnswer: true,
+          autoContinue: false,
+        };
+      }
+    }
+
     // Déterminer le bloc en cours
     const currentBlock = candidate.session.currentBlock || 1;
     const currentStep = candidate.session.ui?.step || '';
@@ -213,6 +271,8 @@ export class BlockOrchestrator {
         throw new Error(`Queue for block ${blockNumber} not found`);
       }
 
+      // LOT1 — La validation miroir est déjà gérée par le verrou au début de handleMessage
+      // Si on arrive ici, c'est que le verrou a été levé (message === "GO")
       // Vérifier si on est en attente de validation miroir (toutes questions répondues + miroir déjà généré)
       const allQuestionsAnswered = currentQueue.cursorIndex >= currentQueue.questions.length;
       const conversationHistory = currentCandidate.conversationHistory || [];
@@ -234,6 +294,7 @@ export class BlockOrchestrator {
           step: BLOC_02,
           lastQuestion: null,
           identityDone: true,
+          mirrorValidated: true, // Verrou levé
         });
         
         // Recharger le candidate pour avoir l'état à jour
@@ -300,6 +361,7 @@ export class BlockOrchestrator {
       if (finalQueue.cursorIndex >= finalQueue.questions.length) {
         // Toutes les questions répondues → Générer miroir (sans question 2A)
         console.log('[ORCHESTRATOR] generate mirror bloc 1 (API)');
+        console.log('[LOT1] Mirror generated — awaiting validation');
         candidateStore.markBlockComplete(currentCandidate.candidateId, blockNumber);
         const mirror = await this.generateMirrorForBlock1(currentCandidate);
         
@@ -311,10 +373,12 @@ export class BlockOrchestrator {
         });
 
         // Mettre à jour UI state (currentBlock reste 1 jusqu'à validation)
+        // LOT1 — Activer le verrou de validation miroir
         candidateStore.updateUIState(currentCandidate.candidateId, {
           step: BLOC_01, // Rester sur BLOC_01
           lastQuestion: null,
           identityDone: true,
+          mirrorValidated: false, // Verrou activé
         });
 
         // Parser le miroir en sections pour affichage progressif
@@ -981,6 +1045,8 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
           .find(m => m.role === 'assistant' && m.kind === 'mirror' && m.block === blockNumber);
         
         if (lastAssistantMessage && userMessage) {
+          // LOT1 — La validation miroir est déjà gérée par le verrou au début de handleMessage
+          // Si on arrive ici, c'est que le verrou a été levé (message === "GO")
           // Validation miroir BLOC 2B → Stocker validation et générer question BLOC 3
           console.log('[ORCHESTRATOR] Validation miroir BLOC 2B reçue');
           candidateStore.appendMirrorValidation(candidateId, blockNumber, userMessage);
@@ -994,6 +1060,7 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
             step: BLOC_03,
             lastQuestion: null,
             identityDone: true,
+            mirrorValidated: true, // Verrou levé
           });
           
           // Recharger le candidate pour avoir l'état à jour
@@ -1023,6 +1090,7 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
         
         // Toutes les questions répondues → Générer miroir (sans question 3)
         console.log('[ORCHESTRATOR] Generating BLOC 2B final mirror (API)');
+        console.log('[LOT1] Mirror generated — awaiting validation');
         candidateStore.markBlockComplete(candidateId, blockNumber);
         
         const mirror = await this.generateMirror2B(currentCandidate, works, coreWorkAnswer);
@@ -1035,10 +1103,12 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
         });
 
         // Mettre à jour UI state (currentBlock reste 2 jusqu'à validation)
+        // LOT1 — Activer le verrou de validation miroir
         candidateStore.updateUIState(candidateId, {
           step: BLOC_02, // Rester sur BLOC_02
           lastQuestion: null,
           identityDone: true,
+          mirrorValidated: false, // Verrou activé
         });
 
         // Parser le miroir en sections pour affichage progressif (si format REVELIOM)

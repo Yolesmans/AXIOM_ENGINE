@@ -329,6 +329,7 @@ class CandidateStore {
       lastQuestion: string | null;
       tutoiement: 'tutoiement' | 'vouvoiement';
       identityDone: boolean;
+      mirrorValidated: boolean;
     }>,
   ): AxiomCandidate | undefined {
     const candidate = this.candidates.get(candidateId);
