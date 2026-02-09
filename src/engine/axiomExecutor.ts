@@ -9,6 +9,7 @@ import { parseMirrorSections } from '../services/parseMirrorSections.js';
 import { getFullAxiomPrompt, getMatchingPrompt } from './prompts.js';
 import { adaptToMentorStyle } from '../services/mirrorNarrativeAdapter.js';
 import { validateInterpretiveDepth } from '../services/validateInterpretiveDepth.js';
+import { validateInterpretiveAnalysis } from '../services/validateInterpretiveAnalysis.js';
 
 
 function extractPreambuleFromPrompt(prompt: string): string {
@@ -1889,6 +1890,65 @@ Format strict : 3 sections. 20/25 mots. Lecture en creux. Inférence obligatoire
             }
           }
           
+          // VALIDATION ANALYSE INTERPRÉTATIVE : Vérifier que le miroir est vraiment interprétatif (pas descriptif/récapitulatif)
+          const analysisValidation = validateInterpretiveAnalysis(mirror, userAnswersInBlock);
+          
+          if (!analysisValidation.valid) {
+            // Miroir trop descriptif/récapitulatif → retry avec prompt renforcé
+            if (retries < maxRetries) {
+              console.warn(`[AXIOM_EXECUTOR] Miroir BLOC ${blocNumber} pas assez interprétatif, retry ${retries + 1}/${maxRetries}`, analysisValidation.errors);
+              
+              try {
+                const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
+                const retryCompletion = await callOpenAI({
+                  messages: [
+                    { role: 'system', content: FULL_AXIOM_PROMPT },
+                    {
+                      role: 'system',
+                      content: `RÈGLE ABSOLUE AXIOM — RETRY MIROIR BLOC ${blocNumber} (ANALYSE INTERPRÉTATIVE OBLIGATOIRE)
+
+⚠️ ERREURS DÉTECTÉES DANS LE MIROIR PRÉCÉDENT :
+${analysisValidation.errors.map(e => `- ${e}`).join('\n')}
+
+Miroir invalide précédent (TROP DESCRIPTIF/RÉCAPITULATIF) :
+${mirror}
+
+Tu es en fin de BLOC ${blocNumber}.
+RÉÉCRIS EN CONFORMITÉ STRICTE REVELIOM :
+
+⚠️ INTERDICTIONS ABSOLUES :
+- Reformuler les réponses du candidat
+- Paraphraser ce qu'il a dit
+- Répéter ce qu'il a exprimé
+- Lister des faits
+- Si le candidat peut dire "oui, c'est exactement ce que j'ai dit" → INVALIDE
+
+⚠️ OBLIGATIONS STRICTES :
+- INFÉRER ce que les réponses RÉVÈLENT du fonctionnement réel
+- Contenir une lecture en creux OBLIGATOIRE : "ce n'est probablement pas X, mais plutôt Y"
+- Apporter un décalage interprétatif : tension, contradiction, logique sous-jacente, moteur implicite
+- Le texte doit provoquer "oui... ok, vu comme ça" et non "oui, c'est exactement ce que j'ai dit"
+
+Format strict : 3 sections. 20/25 mots. Lecture en creux. Inférence obligatoire.`,
+                    },
+                    ...messages,
+                  ],
+                });
+                
+                const retrySeparated = separateTransitionAnnouncement(retryCompletion.trim(), blocNumber);
+                mirror = retrySeparated.mirror;
+                retries++;
+                continue; // Re-valider le retry
+              } catch (e) {
+                console.error(`[AXIOM_EXECUTOR] Erreur retry analyse miroir BLOC ${blocNumber}`, e);
+                break;
+              }
+            } else {
+              // Fail-soft : servir quand même le miroir avec log d'erreur
+              console.warn(`[REVELIOM][BLOC${blocNumber}] Miroir pas assez interprétatif après retry :`, analysisValidation.errors);
+            }
+          }
+          
           // REFORMULATION STYLISTIQUE : Adapter au style mentor incarné
           try {
             const adaptedMirror = await adaptToMentorStyle(mirror, 'mirror');
@@ -2039,6 +2099,14 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
             // Note : Pas de retry pour synthèse finale (trop coûteux), mais log d'erreur
           }
           
+          // VALIDATION ANALYSE INTERPRÉTATIVE : Vérifier que la synthèse est vraiment interprétative
+          const analysisValidation = validateInterpretiveAnalysis(aiText, allUserAnswers);
+          
+          if (!analysisValidation.valid) {
+            console.warn(`[REVELIOM][BLOC10] Synthèse finale pas assez interprétative :`, analysisValidation.errors);
+            // Note : Pas de retry pour synthèse finale (trop coûteux), mais log d'erreur
+          }
+          
           // REFORMULATION STYLISTIQUE : Adapter la synthèse finale au style mentor incarné
           try {
             const adaptedSynthesis = await adaptToMentorStyle(aiText, 'synthesis');
@@ -2076,6 +2144,14 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
           
           if (!depthValidation.valid || depthValidation.isDescriptive) {
             console.warn(`[REVELIOM][BLOC10] Synthèse finale trop descriptive :`, depthValidation.errors);
+            // Note : Pas de retry pour synthèse finale (trop coûteux), mais log d'erreur
+          }
+          
+          // VALIDATION ANALYSE INTERPRÉTATIVE : Vérifier que la synthèse est vraiment interprétative
+          const analysisValidation = validateInterpretiveAnalysis(aiText, allUserAnswers);
+          
+          if (!analysisValidation.valid) {
+            console.warn(`[REVELIOM][BLOC10] Synthèse finale pas assez interprétative :`, analysisValidation.errors);
             // Note : Pas de retry pour synthèse finale (trop coûteux), mais log d'erreur
           }
           
@@ -2271,6 +2347,14 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
           console.warn(`[REVELIOM][MATCHING] Matching trop descriptif :`, depthValidation.errors);
           // Note : Pas de retry pour matching (trop coûteux), mais log d'erreur
         }
+        
+        // VALIDATION ANALYSE INTERPRÉTATIVE : Vérifier que le matching est vraiment interprétatif
+        const analysisValidation = validateInterpretiveAnalysis(aiText, allUserAnswers);
+        
+        if (!analysisValidation.valid) {
+          console.warn(`[REVELIOM][MATCHING] Matching pas assez interprétatif :`, analysisValidation.errors);
+          // Note : Pas de retry pour matching (trop coûteux), mais log d'erreur
+        }
       }
     } catch (e) {
       console.error('[AXIOM_EXECUTION_ERROR]', e);
@@ -2306,6 +2390,13 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
           
           if (!depthValidation.valid || depthValidation.isDescriptive) {
             console.warn(`[REVELIOM][MATCHING] Matching trop descriptif (retry) :`, depthValidation.errors);
+          }
+          
+          // VALIDATION ANALYSE INTERPRÉTATIVE : Vérifier que le matching est vraiment interprétatif (retry)
+          const analysisValidation = validateInterpretiveAnalysis(aiText, allUserAnswers);
+          
+          if (!analysisValidation.valid) {
+            console.warn(`[REVELIOM][MATCHING] Matching pas assez interprétatif (retry) :`, analysisValidation.errors);
           }
         }
       } catch (e) {

@@ -14,6 +14,7 @@ import {
 } from './validators.js';
 import { validateMirrorREVELIOM, type MirrorValidationResult } from './validateMirrorReveliom.js';
 import { validateInterpretiveDepth } from './validateInterpretiveDepth.js';
+import { validateInterpretiveAnalysis } from './validateInterpretiveAnalysis.js';
 import { parseMirrorSections } from './parseMirrorSections.js';
 import { adaptToMentorStyle } from './mirrorNarrativeAdapter.js';
 
@@ -576,6 +577,22 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
           } else {
             // Fail-soft : servir quand même le miroir avec log d'erreur
             console.warn(`[REVELIOM][BLOC1] Miroir descriptif après retry :`, depthValidation.errors);
+          }
+        }
+        
+        // VALIDATION ANALYSE INTERPRÉTATIVE : Vérifier que le miroir est vraiment interprétatif (pas descriptif/récapitulatif)
+        const analysisValidation = validateInterpretiveAnalysis(mirror, block1UserMessages);
+        
+        if (!analysisValidation.valid) {
+          // Miroir trop descriptif/récapitulatif → retry avec prompt renforcé
+          if (retries < maxRetries) {
+            console.warn(`[ORCHESTRATOR] Miroir BLOC 1 pas assez interprétatif, retry ${retries + 1}/${maxRetries}`, analysisValidation.errors);
+            lastValidationErrors = analysisValidation.errors;
+            retries++;
+            continue; // Re-générer avec prompt renforcé
+          } else {
+            // Fail-soft : servir quand même le miroir avec log d'erreur
+            console.warn(`[REVELIOM][BLOC1] Miroir pas assez interprétatif après retry :`, analysisValidation.errors);
           }
         }
         
@@ -1929,6 +1946,59 @@ Format : 4-6 lignes. Synthèse projective, pas descriptive.`,
           }
         } catch (e) {
           console.error(`[ORCHESTRATOR] Erreur retry profondeur miroir BLOC 2B`, e);
+        }
+      }
+      
+      // VALIDATION ANALYSE INTERPRÉTATIVE : Vérifier que le miroir est vraiment interprétatif (pas descriptif/récapitulatif)
+      const analysisValidation = validateInterpretiveAnalysis(mirror, block2BAnswers);
+      
+      if (!analysisValidation.valid) {
+        // Miroir trop descriptif/récapitulatif → retry avec prompt renforcé
+        console.warn(`[ORCHESTRATOR] Miroir BLOC 2B pas assez interprétatif, retry avec analyse interprétative`, analysisValidation.errors);
+        
+        try {
+          const retryCompletion = await callOpenAI({
+            messages: [
+              { role: 'system', content: FULL_AXIOM_PROMPT },
+              {
+                role: 'system',
+                content: `RÈGLE ABSOLUE AXIOM — RETRY SYNTHÈSE BLOC 2B (ANALYSE INTERPRÉTATIVE OBLIGATOIRE)
+
+⚠️ ERREURS DÉTECTÉES DANS LA SYNTHÈSE PRÉCÉDENTE :
+${analysisValidation.errors.map(e => `- ${e}`).join('\n')}
+
+Synthèse invalide précédente (TROP DESCRIPTIVE/RÉCAPITULATIVE) :
+${mirror}
+
+Tu es en fin de BLOC 2B.
+RÉÉCRIS EN CONFORMITÉ STRICTE REVELIOM :
+
+⚠️ INTERDICTIONS ABSOLUES :
+- Reformuler les réponses du candidat
+- Paraphraser ce qu'il a dit
+- Répéter ce qu'il a exprimé
+- Lister des faits
+
+⚠️ OBLIGATIONS STRICTES :
+- INFÉRER ce que les réponses RÉVÈLENT du fonctionnement réel
+- Contenir une lecture en creux OBLIGATOIRE : "ce n'est probablement pas X, mais plutôt Y"
+- Apporter un décalage interprétatif : tension, contradiction, logique sous-jacente, moteur implicite
+- Le texte doit provoquer "oui... ok, vu comme ça" et non "oui, c'est exactement ce que j'ai dit"
+
+Format : 4-6 lignes. Synthèse projective, pas descriptive.`,
+              },
+              ...messages,
+            ],
+          });
+          
+          mirror = retryCompletion.trim();
+          // Re-valider le format après retry
+          const retryFormatValidation = validateSynthesis2B(mirror);
+          if (!retryFormatValidation.valid) {
+            console.warn(`[ORCHESTRATOR] Miroir BLOC 2B (retry analyse) format invalide, utilisation original`, retryFormatValidation.error);
+          }
+        } catch (e) {
+          console.error(`[ORCHESTRATOR] Erreur retry analyse miroir BLOC 2B`, e);
         }
       }
       
