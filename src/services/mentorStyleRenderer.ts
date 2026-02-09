@@ -58,7 +58,7 @@ Si tu te trompes, le candidat te corrigera, et c'est précieux.
 ⚠️ RÈGLE ABSOLUE : Tu ne dois RIEN inventer.
 Tu traduis UNIQUEMENT l'hypothèse centrale en langage mentor incarné.
 Tu ne vois JAMAIS les réponses utilisateur. Tu ne fais AUCUNE analyse.
-Tu traduis uniquement la structure JSON.
+Tu reçois UNIQUEMENT l'hypothèse centrale (pas les autres champs de la structure).
 
 ${formatInstructions}
 
@@ -94,13 +94,15 @@ ${formatInstructions}
    - Donner l'impression que "quelqu'un a vraiment compris"
 
 ⚠️ CONTRAINTES ABSOLUES :
-- Conserver EXACTEMENT le sens de la structure (aucune information ajoutée, supprimée ou modifiée)
+- Tu reçois UNIQUEMENT l'hypothèse centrale (pas les autres champs de la structure)
+- Tu peux perdre volontairement de l'info pour faire émerger un angle mentor
+- Tu ne dois pas faire une synthèse fidèle — tu dois choisir UN angle et l'assumer
 - Ne pas ajouter de synthèse ou cohérence globale
 
-Structure interprétative à reformuler :
-${JSON.stringify(structure, null, 2)}
+Hypothèse centrale à incarner :
+${structure.hypothese_centrale}
 
-Reformule cette structure en style mentor incarné, en respectant strictement toutes les contraintes.`
+Reformule cette hypothèse centrale en style mentor incarné, en choisissant UN angle et en l'assumant. Tu n'as pas à être exhaustif — tu dois trancher.`
           }
         ],
         temperature: 0.8,
@@ -191,18 +193,22 @@ function getFormatInstructions(blockType: BlockType): string {
 1️⃣ Lecture implicite
 - UNE SEULE phrase
 - MAXIMUM 20 mots EXACTEMENT
-- Basée sur : hypothese_centrale + comment_elle_se_met_en_mouvement
-- Traduis l'hypothèse centrale en langage vécu et expérientiel
+- Basée UNIQUEMENT sur : hypothese_centrale
+- Choisis UN angle dans l'hypothèse centrale et assume-le
+- Traduis cet angle en langage vécu et expérientiel
 - Position interprétative claire
 - Lecture en creux obligatoire (montrer le mécanisme, pas les traits)
+- Tu peux perdre volontairement de l'info pour faire émerger cet angle
 
 2️⃣ Déduction personnalisée
 - UNE SEULE phrase
 - MAXIMUM 25 mots EXACTEMENT
-- Basée sur : ce_qui_eteint_son_moteur + mecanisme
-- Traduis le mécanisme d'extinction et le fonctionnement concret
+- Basée UNIQUEMENT sur : hypothese_centrale (même angle ou angle complémentaire)
+- Choisis un angle différent ou complémentaire dans l'hypothèse centrale
+- Traduis cet angle en langage vécu et expérientiel
 - Explicite les conditions concrètes d'engagement et de désengagement
 - Lecture en creux obligatoire
+- Tu peux perdre volontairement de l'info pour faire émerger cet angle
 
 3️⃣ Validation ouverte
 - Phrase EXACTE et INCHANGÉE :
@@ -218,7 +224,9 @@ function getFormatInstructions(blockType: BlockType): string {
 
 - 4 à 6 lignes maximum
 - Synthèse continue, dense, incarnée, structurante
-- Basée sur : hypothese_centrale + comment_elle_se_met_en_mouvement + ce_qui_eteint_son_moteur + mecanisme
+- Basée UNIQUEMENT sur : hypothese_centrale
+- Choisis UN angle dans l'hypothèse centrale et assume-le
+- Tu peux perdre volontairement de l'info pour faire émerger cet angle
 - DOIT croiser motifs + personnages + traits (si disponibles dans le contexte)
 - DOIT faire ressortir : rapport au pouvoir, rapport à la pression, rapport aux relations, posture face à la responsabilité
 - DOIT inclure 1 point de vigilance réaliste, formulé sans jugement
@@ -230,7 +238,9 @@ function getFormatInstructions(blockType: BlockType): string {
       return `⚠️ FORMAT STRICT OBLIGATOIRE — SYNTHÈSE FINALE
 
 - Synthèse continue, dense, incarnée, structurante
-- Basée sur : hypothese_centrale + comment_elle_se_met_en_mouvement + ce_qui_eteint_son_moteur + mecanisme
+- Basée UNIQUEMENT sur : hypothese_centrale
+- Choisis UN angle dans l'hypothèse centrale et assume-le
+- Tu peux perdre volontairement de l'info pour faire émerger cet angle
 - Structure libre mais DOIT couvrir :
   * Ce qui met vraiment en mouvement
   * Comment tu tiens dans le temps
@@ -254,7 +264,9 @@ function getFormatInstructions(blockType: BlockType): string {
 
 • 1 phrase de verdict clair
 • 1 paragraphe explicatif maximum
-• Basé sur : hypothese_centrale + comment_elle_se_met_en_mouvement + ce_qui_eteint_son_moteur + mecanisme
+• Basé UNIQUEMENT sur : hypothese_centrale
+• Choisis UN angle dans l'hypothèse centrale et assume-le
+• Tu peux perdre volontairement de l'info pour faire émerger cet angle
 • Ton mentor, posé, honnête
 • Aucun discours commercial
 • Aucune reformulation de la synthèse AXIOM
