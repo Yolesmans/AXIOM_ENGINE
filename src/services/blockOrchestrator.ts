@@ -14,6 +14,7 @@ import {
 } from './validators.js';
 import { validateMirrorREVELIOM, type MirrorValidationResult } from './validateMirrorReveliom.js';
 import { parseMirrorSections } from './parseMirrorSections.js';
+import { adaptToMentorStyle } from './mirrorNarrativeAdapter.js';
 
 function getFullAxiomPrompt(): string {
   return `${PROMPT_AXIOM_ENGINE}\n\n${PROMPT_AXIOM_PROFIL}`;
@@ -561,7 +562,26 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
       const validation = validateMirrorREVELIOM(mirror);
 
       if (validation.valid) {
-        return mirror;
+        // REFORMULATION STYLISTIQUE : Adapter au style mentor incarné
+        try {
+          const adaptedMirror = await adaptToMentorStyle(mirror, 'mirror');
+          
+          // Re-valider le miroir adapté (format doit rester conforme)
+          const adaptedValidation = validateMirrorREVELIOM(adaptedMirror);
+          
+          if (adaptedValidation.valid) {
+            console.log(`[ORCHESTRATOR] Miroir BLOC 1 adapté au style mentor`);
+            return adaptedMirror;
+          } else {
+            // Si adaptation invalide, utiliser miroir original
+            console.warn(`[ORCHESTRATOR] Adaptation miroir BLOC 1 invalide, utilisation original`, adaptedValidation.errors);
+            return mirror;
+          }
+        } catch (e) {
+          // Si erreur adaptation, utiliser miroir original
+          console.error(`[ORCHESTRATOR] Erreur adaptation miroir BLOC 1`, e);
+          return mirror;
+        }
       }
 
       lastValidationErrors = validation.errors;
@@ -1839,6 +1859,19 @@ Une lecture projective qui révèle, pas une description qui résume.`
 
     // Validation synthèse avec retry
     const validation = validateSynthesis2B(mirror);
+    if (validation.valid) {
+      // REFORMULATION STYLISTIQUE : Adapter au style mentor incarné
+      try {
+        const adaptedMirror = await adaptToMentorStyle(mirror, 'mirror');
+        console.log(`[ORCHESTRATOR] Miroir BLOC 2B adapté au style mentor`);
+        return adaptedMirror;
+      } catch (e) {
+        // Si erreur adaptation, utiliser miroir original
+        console.error(`[ORCHESTRATOR] Erreur adaptation miroir BLOC 2B`, e);
+        return mirror;
+      }
+    }
+    
     if (!validation.valid) {
       console.error('[ORCHESTRATOR] [2B_VALIDATION_FAIL] type=synthesis', validation.error);
       console.log('[ORCHESTRATOR] [2B_RETRY_TRIGGERED] retry=1');
@@ -1888,11 +1921,28 @@ Format : Synthèse continue, dense, incarnée, structurante.`
       
       mirror = retryCompletion.trim();
       const retryValidation = validateSynthesis2B(mirror);
-      if (!retryValidation.valid) {
+      if (retryValidation.valid) {
+        // REFORMULATION STYLISTIQUE : Adapter au style mentor incarné (après retry)
+        try {
+          const adaptedMirror = await adaptToMentorStyle(mirror, 'mirror');
+          console.log(`[ORCHESTRATOR] Miroir BLOC 2B (retry) adapté au style mentor`);
+          return adaptedMirror;
+        } catch (e) {
+          console.error(`[ORCHESTRATOR] Erreur adaptation miroir BLOC 2B (retry)`, e);
+          return mirror;
+        }
+      } else {
         console.error('[ORCHESTRATOR] [2B_VALIDATION_FAIL] type=synthesis (after retry)', retryValidation.error);
       }
     }
 
-    return mirror;
+    // REFORMULATION STYLISTIQUE : Adapter même si validation échouée (fail-soft)
+    try {
+      const adaptedMirror = await adaptToMentorStyle(mirror, 'mirror');
+      return adaptedMirror;
+    } catch (e) {
+      console.error(`[ORCHESTRATOR] Erreur adaptation miroir BLOC 2B (fail-soft)`, e);
+      return mirror;
+    }
   }
 }

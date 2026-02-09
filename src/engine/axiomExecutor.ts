@@ -7,6 +7,7 @@ import { candidateToSession, updateCandidateFromSession } from '../utils/candida
 import { validateMirrorREVELIOM, type MirrorValidationResult } from '../services/validateMirrorReveliom.js';
 import { parseMirrorSections } from '../services/parseMirrorSections.js';
 import { getFullAxiomPrompt, getMatchingPrompt } from './prompts.js';
+import { adaptToMentorStyle } from '../services/mirrorNarrativeAdapter.js';
 
 
 function extractPreambuleFromPrompt(prompt: string): string {
@@ -1823,8 +1824,29 @@ Toute sortie hors règles = invalide.`,
         const validation = validateMirrorREVELIOM(mirror);
         
         if (validation.valid) {
-          cleanMirrorText = mirror;
-          aiText = mirror; // Utiliser le miroir nettoyé (sans annonce)
+          // REFORMULATION STYLISTIQUE : Adapter au style mentor incarné
+          try {
+            const adaptedMirror = await adaptToMentorStyle(mirror, 'mirror');
+            
+            // Re-valider le miroir adapté (format doit rester conforme)
+            const adaptedValidation = validateMirrorREVELIOM(adaptedMirror);
+            
+            if (adaptedValidation.valid) {
+              cleanMirrorText = adaptedMirror;
+              aiText = adaptedMirror;
+              console.log(`[AXIOM_EXECUTOR] Miroir BLOC ${blocNumber} adapté au style mentor`);
+            } else {
+              // Si adaptation invalide, utiliser miroir original
+              console.warn(`[AXIOM_EXECUTOR] Adaptation miroir BLOC ${blocNumber} invalide, utilisation original`, adaptedValidation.errors);
+              cleanMirrorText = mirror;
+              aiText = mirror;
+            }
+          } catch (e) {
+            // Si erreur adaptation, utiliser miroir original
+            console.error(`[AXIOM_EXECUTOR] Erreur adaptation miroir BLOC ${blocNumber}`, e);
+            cleanMirrorText = mirror;
+            aiText = mirror;
+          }
           break;
         }
 
@@ -1938,9 +1960,22 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
         nextState = blocStates[blocNumber] as any;
       } else if (!expectsAnswer && blocNumber === 10) {
         // Fin du bloc 10 → générer synthèse et passer à match_ready
-        // TODO: Générer synthèse finale
+        // REFORMULATION STYLISTIQUE : Adapter la synthèse finale au style mentor incarné
+        if (aiText) {
+          try {
+            const adaptedSynthesis = await adaptToMentorStyle(aiText, 'synthesis');
+            candidateStore.setFinalProfileText(candidate.candidateId, adaptedSynthesis);
+            aiText = adaptedSynthesis; // Utiliser la synthèse adaptée
+            console.log(`[AXIOM_EXECUTOR] Synthèse finale BLOC 10 adaptée au style mentor`);
+          } catch (e) {
+            // Fail-soft : utiliser synthèse originale
+            console.error(`[AXIOM_EXECUTOR] Erreur adaptation synthèse finale`, e);
+            candidateStore.setFinalProfileText(candidate.candidateId, aiText);
+          }
+        } else {
+          candidateStore.setFinalProfileText(candidate.candidateId, aiText);
+        }
         nextState = STEP_99_MATCH_READY;
-        candidateStore.setFinalProfileText(candidate.candidateId, aiText);
       } else if (isMirror && expectsAnswer) {
         // Miroir affiché → rester sur le bloc courant jusqu'à validation (LOT 1)
         nextState = currentState;
@@ -1952,9 +1987,22 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
         nextState = blocStates[blocNumber] as any;
       } else if (!expectsAnswer && blocNumber === 10) {
         // Fin du bloc 10 → générer synthèse et passer à match_ready
-        // TODO: Générer synthèse finale
+        // REFORMULATION STYLISTIQUE : Adapter la synthèse finale au style mentor incarné
+        if (aiText) {
+          try {
+            const adaptedSynthesis = await adaptToMentorStyle(aiText, 'synthesis');
+            candidateStore.setFinalProfileText(candidate.candidateId, adaptedSynthesis);
+            aiText = adaptedSynthesis; // Utiliser la synthèse adaptée
+            console.log(`[AXIOM_EXECUTOR] Synthèse finale BLOC 10 adaptée au style mentor`);
+          } catch (e) {
+            // Fail-soft : utiliser synthèse originale
+            console.error(`[AXIOM_EXECUTOR] Erreur adaptation synthèse finale`, e);
+            candidateStore.setFinalProfileText(candidate.candidateId, aiText);
+          }
+        } else {
+          candidateStore.setFinalProfileText(candidate.candidateId, aiText);
+        }
         nextState = STEP_99_MATCH_READY;
-        candidateStore.setFinalProfileText(candidate.candidateId, aiText);
       } else if (isMirror && expectsAnswer) {
         // Miroir affiché → rester sur le bloc courant jusqu'à validation (LOT 1)
         nextState = currentState;
@@ -2153,6 +2201,16 @@ Réécris en conformité STRICTE REVELIOM. 3 sections. 20/25 mots. Lecture en cr
     if (!aiText) {
       console.error('[AXIOM_CRITICAL_ERROR]', { sessionId: candidate.candidateId, state: currentState });
       aiText = 'Erreur lors de la génération du matching. Veuillez réessayer.';
+    } else {
+      // REFORMULATION STYLISTIQUE : Adapter le matching au style mentor incarné
+      try {
+        const adaptedMatching = await adaptToMentorStyle(aiText, 'matching');
+        aiText = adaptedMatching; // Utiliser le matching adapté
+        console.log(`[AXIOM_EXECUTOR] Matching adapté au style mentor`);
+      } catch (e) {
+        // Fail-soft : utiliser matching original
+        console.error(`[AXIOM_EXECUTOR] Erreur adaptation matching`, e);
+      }
     }
 
     currentState = DONE_MATCHING;
