@@ -496,8 +496,8 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
       const structure = await generateInterpretiveStructureBlock1(userAnswers);
       
       console.log('[BLOC1][ETAPE1] Structure générée:', {
-        hypothese_principale: structure.hypothese_principale.substring(0, 50) + '...',
-        exclusion: structure.exclusion.substring(0, 50) + '...',
+        axe_dominant: structure.axe_dominant.substring(0, 50) + '...',
+        faux_moteur: structure.faux_moteur.substring(0, 50) + '...',
       });
 
       // ============================================

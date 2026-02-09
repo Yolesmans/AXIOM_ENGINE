@@ -52,15 +52,15 @@ Si tu te trompes, le candidat te corrigera, et c'est précieux.
 1️⃣ Lecture implicite
 - UNE SEULE phrase
 - MAXIMUM 20 mots EXACTEMENT
-- Basée sur : hypothese_principale + exclusion
+- Basée sur : axe_dominant + faux_moteur (montrer ce qui met réellement en mouvement vs ce qui ne le fait pas)
 - Position interprétative claire
-- Lecture en creux obligatoire (utilise le champ "exclusion")
+- Lecture en creux obligatoire (utilise le champ "faux_moteur" pour exclure ce qui n'est pas le vrai moteur)
 
 2️⃣ Déduction personnalisée
 - UNE SEULE phrase
 - MAXIMUM 25 mots EXACTEMENT
-- Basée sur : tension_centrale + moteur_implicite + risque_comportemental
-- Explicite une tension, un moteur ou un besoin implicite
+- Basée sur : condition_activation + condition_extinction + tension_centrale + risque_comportemental
+- Explicite les conditions concrètes d'engagement et de désengagement
 - Lecture en creux obligatoire
 
 3️⃣ Validation ouverte
