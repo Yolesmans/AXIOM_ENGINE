@@ -33,6 +33,9 @@ export async function renderMentorStyle(
   // Adapter le format selon le type de bloc
   const formatInstructions = getFormatInstructions(blockType);
 
+  // Construire le contexte mental positionnel (uniquement pour miroirs fin de bloc 1-9)
+  const positionalContext = buildPositionalContext(blockType);
+
   let retries = 0;
   const maxRetries = 1;
 
@@ -43,7 +46,7 @@ export async function renderMentorStyle(
         messages: [
           {
             role: 'system',
-            content: `Tu es un mentor humain qui reformule une analyse structurée en langage vécu et incarné.
+            content: `${positionalContext}Tu es un mentor humain qui reformule une analyse structurée en langage vécu et incarné.
 
 MISSION : Transformer cette structure logique en texte mentor qui provoque "ok… je n'avais pas formulé ça comme ça".
 
@@ -179,6 +182,67 @@ export async function renderMentorStyleBlock1(
   mentorAngle: string
 ): Promise<string> {
   return renderMentorStyle(mentorAngle, 'block1');
+}
+
+/**
+ * Construit le contexte mental positionnel (uniquement pour miroirs fin de bloc 1-9)
+ */
+function buildPositionalContext(blockType: BlockType): string {
+  // Extraire le numéro de bloc depuis blockType
+  const blockNumber = extractBlockNumber(blockType);
+  
+  // Appliquer uniquement pour les miroirs fin de bloc (1-9)
+  if (blockNumber === null || blockNumber < 1 || blockNumber > 9) {
+    return '';
+  }
+
+  return `🎯 CONTEXTE POSITIONNEL — MIROIR REVELIOM
+
+Tu es en FIN DE BLOC ${blockNumber}.
+Toutes les questions de ce bloc ont été intégralement répondues.
+
+Ce que tu produis maintenant :
+- n'est PAS une synthèse,
+- n'est PAS une conclusion,
+- n'est PAS une lecture globale.
+
+Ce miroir est un SIGNAL FAIBLE.
+Il marque une direction provisoire.
+Il peut être contredit plus tard.
+Il ne clôt rien.
+
+Ta compréhension PROGRESSE,
+mais elle est encore INCOMPLÈTE.
+
+Tu ne cherches pas à expliquer.
+Tu ne cherches pas à équilibrer.
+Tu ne cherches pas à rassurer.
+
+Tu révèles une dynamique vécue,
+comme un mentor qui pose un jalon,
+pas comme un système qui résume.
+
+`;
+
+}
+
+/**
+ * Extrait le numéro de bloc depuis blockType
+ * Retourne null si ce n'est pas un bloc numéroté (1-9)
+ */
+function extractBlockNumber(blockType: BlockType): number | null {
+  if (blockType === 'block1') return 1;
+  if (blockType === 'block2b') return null; // BLOC 2B n'est pas un miroir fin de bloc standard
+  if (blockType === 'block3') return 3;
+  if (blockType === 'block4') return 4;
+  if (blockType === 'block5') return 5;
+  if (blockType === 'block6') return 6;
+  if (blockType === 'block7') return 7;
+  if (blockType === 'block8') return 8;
+  if (blockType === 'block9') return 9;
+  if (blockType === 'synthesis') return null;
+  if (blockType === 'matching') return null;
+  return null;
 }
 
 /**
