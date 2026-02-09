@@ -96,6 +96,8 @@ class CandidateStore {
             answers: [],
             conversationHistory: [],
             blockSummaries: {},
+            blockQueues: {},
+            answerMaps: {},
         };
         this.candidates.set(candidateId, candidate);
         this.persistCandidate(candidateId);
@@ -317,6 +319,198 @@ class CandidateStore {
             kind: meta?.kind || 'other',
         };
         return this.appendConversationMessage(candidateId, message);
+    }
+    appendMirrorValidation(candidateId, mirrorBlock, validationText) {
+        const candidate = this.candidates.get(candidateId);
+        if (!candidate) {
+            throw new Error(`Candidate ${candidateId} not found`);
+        }
+        const message = {
+            role: 'user',
+            content: validationText,
+            createdAt: new Date().toISOString(),
+            block: mirrorBlock,
+            step: `BLOC_${String(mirrorBlock).padStart(2, '0')}`,
+            kind: 'mirror_validation',
+        };
+        const updated = {
+            ...candidate,
+            conversationHistory: [...(candidate.conversationHistory || []), message],
+            session: {
+                ...candidate.session,
+                lastActivityAt: new Date(),
+            },
+        };
+        this.candidates.set(candidateId, updated);
+        this.persistCandidate(candidateId);
+        return updated;
+    }
+    initQuestionQueue(candidateId, blockNumber) {
+        const candidate = this.candidates.get(candidateId);
+        if (!candidate) {
+            throw new Error(`Candidate ${candidateId} not found`);
+        }
+        const blockQueues = candidate.blockQueues || {};
+        // Si la queue existe déjà, la retourner
+        if (blockQueues[blockNumber]) {
+            return blockQueues[blockNumber];
+        }
+        // Sinon créer une queue vide
+        const nowISO = new Date().toISOString();
+        const queue = {
+            blockNumber,
+            questions: [],
+            cursorIndex: 0,
+            isComplete: false,
+            generatedAt: nowISO,
+            completedAt: null,
+        };
+        const updated = {
+            ...candidate,
+            blockQueues: {
+                ...blockQueues,
+                [blockNumber]: queue,
+            },
+            session: {
+                ...candidate.session,
+                lastActivityAt: new Date(),
+            },
+        };
+        this.candidates.set(candidateId, updated);
+        this.persistCandidate(candidateId);
+        return queue;
+    }
+    setQuestionsForBlock(candidateId, blockNumber, questions) {
+        const candidate = this.candidates.get(candidateId);
+        if (!candidate) {
+            throw new Error(`Candidate ${candidateId} not found`);
+        }
+        // Appeler initQuestionQueue si nécessaire
+        const queue = this.initQuestionQueue(candidateId, blockNumber);
+        // Remplacer questions par le tableau fourni
+        const updatedQueue = {
+            ...queue,
+            questions,
+            cursorIndex: 0,
+            isComplete: false,
+            completedAt: null,
+        };
+        const blockQueues = candidate.blockQueues || {};
+        const updated = {
+            ...candidate,
+            blockQueues: {
+                ...blockQueues,
+                [blockNumber]: updatedQueue,
+            },
+            session: {
+                ...candidate.session,
+                lastActivityAt: new Date(),
+            },
+        };
+        this.candidates.set(candidateId, updated);
+        this.persistCandidate(candidateId);
+        return updatedQueue;
+    }
+    advanceQuestionCursor(candidateId, blockNumber) {
+        const candidate = this.candidates.get(candidateId);
+        if (!candidate) {
+            return undefined;
+        }
+        const blockQueues = candidate.blockQueues || {};
+        const queue = blockQueues[blockNumber];
+        // Si queue absente -> undefined
+        if (!queue) {
+            return undefined;
+        }
+        // cursorIndex++
+        const updatedQueue = {
+            ...queue,
+            cursorIndex: queue.cursorIndex + 1,
+        };
+        const updated = {
+            ...candidate,
+            blockQueues: {
+                ...blockQueues,
+                [blockNumber]: updatedQueue,
+            },
+            session: {
+                ...candidate.session,
+                lastActivityAt: new Date(),
+            },
+        };
+        this.candidates.set(candidateId, updated);
+        this.persistCandidate(candidateId);
+        return updatedQueue;
+    }
+    markBlockComplete(candidateId, blockNumber) {
+        const candidate = this.candidates.get(candidateId);
+        if (!candidate) {
+            return;
+        }
+        const blockQueues = candidate.blockQueues || {};
+        const queue = blockQueues[blockNumber];
+        if (!queue) {
+            return;
+        }
+        const nowISO = new Date().toISOString();
+        const updatedQueue = {
+            ...queue,
+            isComplete: true,
+            completedAt: nowISO,
+        };
+        const updated = {
+            ...candidate,
+            blockQueues: {
+                ...blockQueues,
+                [blockNumber]: updatedQueue,
+            },
+            session: {
+                ...candidate.session,
+                lastActivityAt: new Date(),
+            },
+        };
+        this.candidates.set(candidateId, updated);
+        this.persistCandidate(candidateId);
+    }
+    storeAnswerForBlock(candidateId, blockNumber, questionIndex, answer) {
+        const candidate = this.candidates.get(candidateId);
+        if (!candidate) {
+            throw new Error(`Candidate ${candidateId} not found`);
+        }
+        const answerMaps = candidate.answerMaps || {};
+        let answerMap = answerMaps[blockNumber];
+        // Créer answerMaps[blockNumber] si absent
+        if (!answerMap) {
+            const nowISO = new Date().toISOString();
+            answerMap = {
+                blockNumber,
+                answers: {},
+                lastAnswerAt: nowISO,
+            };
+        }
+        // answers[questionIndex] = answer
+        const updatedAnswerMap = {
+            ...answerMap,
+            answers: {
+                ...answerMap.answers,
+                [questionIndex]: answer,
+            },
+            lastAnswerAt: new Date().toISOString(),
+        };
+        const updated = {
+            ...candidate,
+            answerMaps: {
+                ...answerMaps,
+                [blockNumber]: updatedAnswerMap,
+            },
+            session: {
+                ...candidate.session,
+                lastActivityAt: new Date(),
+            },
+        };
+        this.candidates.set(candidateId, updated);
+        this.persistCandidate(candidateId);
+        return updatedAnswerMap;
     }
 }
 export const candidateStore = new CandidateStore();

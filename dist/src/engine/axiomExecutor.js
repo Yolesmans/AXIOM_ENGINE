@@ -1,5 +1,10 @@
 import { callOpenAI } from '../services/openaiClient.js';
 import { candidateStore } from '../store/sessionStore.js';
+import { validateMirrorREVELIOM } from '../services/validateMirrorReveliom.js';
+import { parseMirrorSections } from '../services/parseMirrorSections.js';
+import { getFullAxiomPrompt } from './prompts.js';
+import { generateInterpretiveStructure } from '../services/interpretiveStructureGenerator.js';
+import { renderMentorStyle } from '../services/mentorStyleRenderer.js';
 function extractPreambuleFromPrompt(prompt) {
     const match = prompt.match(/PRÉAMBULE MÉTIER[^]*?(?=🔒|🟢|$)/i);
     if (match && match[0]) {
@@ -8,6 +13,38 @@ function extractPreambuleFromPrompt(prompt) {
             .trim();
     }
     return '';
+}
+/**
+ * Génère un miroir avec la nouvelle architecture séparée (analyse/rendu)
+ *
+ * ⚠️ ARCHITECTURE NOUVELLE — SÉPARATION ANALYSE/RENDU
+ * 1. INTERPRÉTATION : Structure JSON froide et logique (gpt-4o-mini, temp 0.3)
+ * 2. RENDU MENTOR : Texte incarné et vécu (gpt-4o, temp 0.8)
+ *
+ * - Suppression validations heuristiques complexes
+ * - Validation simple : structure JSON + format REVELIOM
+ */
+async function generateMirrorWithNewArchitecture(userAnswers, blockType, additionalContext) {
+    console.log(`[AXIOM_EXECUTOR][NEW_ARCHITECTURE] Génération miroir en 2 étapes (interprétation + rendu) pour ${blockType}`);
+    console.log(`[AXIOM_EXECUTOR] Réponses utilisateur:`, userAnswers.length);
+    try {
+        // ÉTAPE 1 — INTERPRÉTATION (FROIDE, LOGIQUE)
+        console.log(`[AXIOM_EXECUTOR][ETAPE1] Génération structure interprétative pour ${blockType}...`);
+        const structure = await generateInterpretiveStructure(userAnswers, blockType, additionalContext);
+        console.log(`[AXIOM_EXECUTOR][ETAPE1] Structure générée pour ${blockType}:`, {
+            hypothese_centrale: structure.hypothese_centrale.substring(0, 50) + '...',
+            mecanisme: structure.mecanisme.substring(0, 50) + '...',
+        });
+        // ÉTAPE 2 — RENDU MENTOR INCARNÉ
+        console.log(`[AXIOM_EXECUTOR][ETAPE2] Rendu mentor incarné pour ${blockType}...`);
+        const mentorText = await renderMentorStyle(structure, blockType);
+        console.log(`[AXIOM_EXECUTOR][ETAPE2] Texte mentor généré pour ${blockType}`);
+        return mentorText;
+    }
+    catch (error) {
+        console.error(`[AXIOM_EXECUTOR][ERROR] Erreur nouvelle architecture pour ${blockType}:`, error);
+        throw new Error(`Failed to generate mirror with new architecture: ${error}`);
+    }
 }
 // ============================================
 // PROMPTS INTÉGRÉS (MÉMOIRE UNIQUEMENT)
@@ -816,14 +853,7 @@ Aucune question.
 Aucune analyse supplémentaire.
 
 Le matching est terminé.`;
-// Fonction pour obtenir le prompt complet (mémoire uniquement)
-function getFullAxiomPrompt() {
-    return `${PROMPT_AXIOM_ENGINE}\n\n${PROMPT_AXIOM_PROFIL}`;
-}
-// Fonction pour obtenir le prompt matching (mémoire uniquement)
-function getMatchingPrompt() {
-    return PROMPT_AXIOM_MATCHING;
-}
+// Les fonctions getFullAxiomPrompt() et getMatchingPrompt() sont importées depuis './prompts.js'
 // ============================================
 // ÉTATS STRICTS (FSM)
 // ============================================
@@ -831,7 +861,6 @@ export const STEP_01_IDENTITY = 'STEP_01_IDENTITY';
 export const STEP_02_TONE = 'STEP_02_TONE';
 export const STEP_03_PREAMBULE = 'STEP_03_PREAMBULE';
 export const STEP_03_BLOC1 = 'STEP_03_BLOC1'; // wait_start_button
-export const PREAMBULE_DONE = 'PREAMBULE_DONE';
 export const BLOC_01 = 'BLOC_01';
 // ============================================
 // HELPER : Construction historique conversationnel pour OpenAI
@@ -900,7 +929,11 @@ function deriveStateFromConversationHistory(candidate) {
     // Trouver le dernier message assistant
     const lastAssistant = history.filter(m => m.role === 'assistant').pop();
     if (!lastAssistant) {
-        // Aucun message assistant → STEP_01_IDENTITY
+        // Aucun message assistant encore dans l'historique.
+        // Règle métier : si l'identité est complétée, on doit enchaîner vers la question tone.
+        if (candidate.identity?.completedAt) {
+            return STEP_02_TONE;
+        }
         return STEP_01_IDENTITY;
     }
     // Dériver selon le type de message
@@ -1018,6 +1051,14 @@ export async function executeAxiom(input) {
     let ui = candidate.session.ui;
     // Dériver l'état depuis conversationHistory
     const derivedState = deriveStateFromConversationHistory(candidate);
+    // Log de diagnostic temporaire
+    console.info("[AXIOM][DERIVE_STATE]", {
+        candidateId: candidate.candidateId,
+        identityDone: !!candidate.identity?.completedAt,
+        historyLen: (candidate.conversationHistory || []).length,
+        hasLastAssistant: !!(candidate.conversationHistory || []).slice().reverse().find(m => m.role === "assistant"),
+        derivedState,
+    });
     if (!ui) {
         // UI n'existe pas → Créer depuis l'historique
         ui = {
@@ -1058,6 +1099,12 @@ export async function executeAxiom(input) {
         }
     }
     // UTILISER L'ÉTAT DÉRIVÉ (pas ui.step directement comme garde bloquante)
+    // Assertion TypeScript : ui ne peut pas être undefined après l'initialisation ci-dessus
+    if (!ui) {
+        throw new Error('UI state should be initialized at this point');
+    }
+    // TypeScript assertion : ui est maintenant non-null
+    const uiNonNull = ui;
     let currentState = derivedState;
     const stateIn = currentState;
     // ============================================
@@ -1313,7 +1360,7 @@ AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
             candidateStore.updateUIState(candidate.candidateId, {
                 step: BLOC_01,
                 lastQuestion: null,
-                tutoiement: ui.tutoiement || undefined,
+                tutoiement: uiNonNull.tutoiement || undefined,
                 identityDone: true,
             });
             // Mettre à jour la session vers collecting + bloc 1
@@ -1399,7 +1446,7 @@ Toute sortie hors règles = invalide.`,
             candidateStore.updateUIState(updatedCandidate.candidateId, {
                 step: BLOC_01,
                 lastQuestion,
-                tutoiement: ui.tutoiement || undefined,
+                tutoiement: uiNonNull.tutoiement || undefined,
                 identityDone: true,
             });
             logTransition(updatedCandidate.candidateId, stateIn, BLOC_01, 'event');
@@ -1424,6 +1471,62 @@ Toute sortie hors règles = invalide.`,
         };
     }
     // ============================================
+    // HELPER — Noms des blocs pour annonce de transition
+    // ============================================
+    function getBlockName(blockNumber) {
+        const blockNames = {
+            1: 'Énergie & moteurs internes',
+            2: 'Projections narratives',
+            3: 'Valeurs profondes & fonctionnement cognitif',
+            4: 'Compétences réelles & illusions',
+            5: 'Ambition & trajectoire future',
+            6: 'Contraintes & réalités (mobilité, salaire, rythme)',
+            7: 'Identité professionnelle (métier naturel, métier rêvé, métier apprenable)',
+            8: 'Relation au management',
+            9: 'Style social & dynamique interpersonnelle',
+            10: 'Synthèse finale (lecture globale unifiée)',
+        };
+        return blockNames[blockNumber] || `BLOC ${blockNumber}`;
+    }
+    // ============================================
+    // HELPER — Séparer annonce de transition du miroir
+    // ============================================
+    function separateTransitionAnnouncement(text, blocNumber) {
+        if (!text) {
+            return { mirror: text, announcement: null };
+        }
+        // Pattern pour détecter l'annonce de transition
+        // Format attendu : "Fin du BLOC X. On passe au BLOC Y — [nom bloc]."
+        const transitionPattern = /Fin du BLOC \d+\.\s*On passe au BLOC \d+[^]*?$/m;
+        const match = text.match(transitionPattern);
+        if (match) {
+            // Extraire l'annonce
+            const announcement = match[0].trim();
+            // Extraire le miroir (tout sauf l'annonce)
+            const mirror = text.replace(transitionPattern, '').trim();
+            return { mirror, announcement };
+        }
+        // Aucune annonce détectée
+        return { mirror: text, announcement: null };
+    }
+    // ============================================
+    // HELPER — Vérifier si toutes les questions sont répondues
+    // ============================================
+    function areAllQuestionsAnswered(candidate, blocNumber) {
+        const conversationHistory = candidate.conversationHistory || [];
+        // Compter les questions posées (assistant avec kind: 'question' dans ce bloc)
+        const questionsInBlock = conversationHistory.filter(m => m.role === 'assistant' && m.block === blocNumber && m.kind === 'question');
+        // Compter les réponses utilisateur (user dans ce bloc, exclure mirror_validation)
+        const answersInBlock = conversationHistory.filter(m => m.role === 'user' && m.block === blocNumber && m.kind !== 'mirror_validation');
+        // Si au moins une question posée et nombre de réponses >= nombre de questions
+        // (on accepte >= car l'utilisateur peut avoir répondu plusieurs fois)
+        if (questionsInBlock.length > 0) {
+            return answersInBlock.length >= questionsInBlock.length;
+        }
+        // Si aucune question posée, on ne peut pas être en fin de bloc
+        return false;
+    }
+    // ============================================
     // BLOCS 1 à 10
     // ============================================
     const blocStates = [BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10];
@@ -1435,35 +1538,35 @@ Toute sortie hors règles = invalide.`,
         if (userMessage) {
             messages.push({ role: 'user', content: userMessage });
         }
+        // VÉRIFICATION SYSTÈME : Toutes les questions sont-elles répondues ? (BLOCS 3-10)
+        const allQuestionsAnswered = blocNumber >= 3 && blocNumber <= 10
+            ? areAllQuestionsAnswered(candidate, blocNumber)
+            : false;
         let aiText = null;
-        try {
-            const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
-            const completion = await callOpenAI({
-                messages: [
-                    { role: 'system', content: FULL_AXIOM_PROMPT },
-                    {
-                        role: 'system',
-                        content: `RÈGLE ABSOLUE AXIOM :
-Le moteur AXIOM n'interprète pas les prompts. Il les exécute STRICTEMENT.
-Tu es en état ${currentState} (BLOC ${blocNumber}).
-Tu exécutes STRICTEMENT le protocole AXIOM pour ce bloc.
-Tu produis UNIQUEMENT le texte autorisé à cette étape.
-INTERDICTIONS : improviser, commenter le système, reformuler le prompt, revenir en arrière.
-Si tu dois poser une question, pose-la. Si tu dois afficher un miroir, affiche-le.
-AUCUNE sortie générique type "On continue", "D'accord", etc.
-Toute sortie hors règles = invalide.`,
-                    },
-                    ...messages,
-                ],
-            });
-            if (typeof completion === 'string' && completion.trim()) {
-                aiText = completion.trim();
+        // DÉCISION : Forcer prompt miroir si toutes questions répondues (BLOCS 3-9)
+        const shouldForceMirror = blocNumber >= 3 && blocNumber <= 9 && allQuestionsAnswered;
+        // DÉCISION : Synthèse finale BLOC 10 → utiliser nouvelle architecture directement
+        const shouldForceSynthesis = blocNumber === 10 && allQuestionsAnswered;
+        // Si synthèse finale → utiliser nouvelle architecture directement
+        if (shouldForceSynthesis) {
+            try {
+                const conversationHistory = candidate.conversationHistory || [];
+                const allUserAnswers = conversationHistory
+                    .filter(m => m.role === 'user' && m.kind !== 'mirror_validation')
+                    .map(m => m.content.trim())
+                    .filter(a => a.length > 0);
+                // Générer synthèse avec nouvelle architecture
+                const generatedSynthesis = await generateMirrorWithNewArchitecture(allUserAnswers, 'synthesis');
+                candidateStore.setFinalProfileText(candidate.candidateId, generatedSynthesis);
+                aiText = generatedSynthesis;
+                console.log(`[AXIOM_EXECUTOR] Synthèse finale BLOC 10 générée avec nouvelle architecture (direct)`);
+            }
+            catch (error) {
+                console.error(`[AXIOM_EXECUTOR] Erreur génération synthèse finale avec nouvelle architecture:`, error);
+                // Fallback : continuer avec logique normale (ne pas générer via OpenAI)
             }
         }
-        catch (e) {
-            console.error('[AXIOM_EXECUTION_ERROR]', e);
-        }
-        // Si échec → réessayer une fois
+        // Si pas de synthèse générée → génération normale (questions ou miroirs BLOCS 3-9)
         if (!aiText) {
             try {
                 const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
@@ -1472,7 +1575,126 @@ Toute sortie hors règles = invalide.`,
                         { role: 'system', content: FULL_AXIOM_PROMPT },
                         {
                             role: 'system',
-                            content: `RÈGLE ABSOLUE AXIOM :
+                            content: shouldForceMirror
+                                ? `🎯 POSTURE MENTALE
+
+Tu es un mentor qui observe ce qui n'est pas dit.
+Tu ne répètes pas ce qu'on te dit, tu révèles ce qui se cache derrière.
+Tu ne décris pas, tu infères.
+Tu prends un risque interprétatif — c'est ta responsabilité.
+Si tu te trompes, le candidat te corrigera, et c'est précieux.
+
+📖 EXEMPLES DE RENDU ATTENDU
+
+❌ "Tu recherches l'autonomie et la progression."
+✅ "Quand tu sens que tu avances à ton rythme, sans qu'on te dise comment, c'est là que tu te mets vraiment en mouvement."
+
+❌ "Ton moteur est l'impact."
+✅ "Il y a des moments où tu as besoin de sentir que ce que tu fais change quelque chose, sinon tu perds l'envie."
+
+❌ "Tu as tendance à préférer les environnements structurés."
+✅ "Dès que tu sens que les règles sont claires et que tu sais où tu vas, tu peux vraiment te lancer — sinon, tu hésites."
+
+La différence : le premier décrit, le second révèle une dynamique vécue.
+
+⸻
+
+RÈGLE ABSOLUE AXIOM — MIROIR INTERPRÉTATIF ACTIF (REVELIOM)
+
+Tu es en FIN DE BLOC ${blocNumber}.
+Toutes les questions de ce bloc ont été répondues.
+
+⚠️ FUSION CUMULATIVE OBLIGATOIRE
+Tu DOIS fusionner cette lecture avec les miroirs des blocs précédents présents dans l'historique.
+La compréhension doit PROGRESSER, sans jamais devenir suffisante.
+Le profil est INCOMPLET tant que le BLOC 9 n'est pas terminé.
+
+⚠️ FORMAT STRICT OBLIGATOIRE — NON NÉGOCIABLE
+
+1️⃣ Lecture implicite
+- UNE SEULE phrase
+- MAXIMUM 20 mots EXACTEMENT
+- Position interprétative claire
+- Lecture en creux obligatoire (ce n'est probablement pas X, mais plutôt Y)
+- Interdiction ABSOLUE de paraphraser ou lister
+
+2️⃣ Déduction personnalisée
+- UNE SEULE phrase
+- MAXIMUM 25 mots EXACTEMENT
+- Explicite une tension, un moteur ou un besoin implicite
+- Lecture en creux obligatoire
+- Interdiction de neutralité ou de synthèse
+
+3️⃣ Validation ouverte
+- Phrase EXACTE et INCHANGÉE :
+"Dis-moi si ça te parle, ou s'il y a une nuance importante que je n'ai pas vue."
+
+⚠️ INTERDICTIONS ABSOLUES
+- Toute synthèse
+- Toute lecture globale
+- Toute cohérence finale
+- Toute projection métier, environnement ou compatibilité
+
+⚠️ PORTÉE
+- Ce miroir est STRICTEMENT LOCAL et PROVISOIRE
+- Il peut être contredit plus tard
+- Il ne clôt RIEN
+
+Ce miroir est un SIGNAL FAIBLE.
+Il marque une direction, pas une conclusion.
+
+⚠️ ANNONCE DE TRANSITION (OBLIGATOIRE — APRÈS LE MIROIR)
+Après avoir produit le miroir (3 sections strictes), tu DOIS annoncer explicitement :
+"Fin du BLOC ${blocNumber}. On passe au BLOC ${blocNumber + 1} — ${getBlockName(blocNumber + 1)}."
+
+Cette annonce doit être SÉPARÉE du miroir par un saut de ligne.
+Le miroir reste STRICTEMENT dans son format (20/25 mots, 3 sections).
+L'annonce est un texte additionnel, clair et explicite.`
+                                : `RÈGLE ABSOLUE AXIOM :
+Le moteur AXIOM n'interprète pas les prompts. Il les exécute STRICTEMENT.
+Tu es en état ${currentState} (BLOC ${blocNumber}).
+Tu exécutes STRICTEMENT le protocole AXIOM pour ce bloc.
+Tu produis UNIQUEMENT le texte autorisé à cette étape.
+INTERDICTIONS : improviser, commenter le système, reformuler le prompt, revenir en arrière.
+Si tu dois poser une question, pose-la. Si tu dois afficher un miroir, affiche-le.
+AUCUNE sortie générique type "On continue", "D'accord", etc.
+Toute sortie hors règles = invalide.`,
+                        },
+                        ...messages,
+                    ],
+                });
+                if (typeof completion === 'string' && completion.trim()) {
+                    aiText = completion.trim();
+                }
+            }
+            catch (e) {
+                console.error('[AXIOM_EXECUTION_ERROR]', e);
+            }
+        }
+        // Si échec → réessayer une fois (sauf si synthèse finale déjà générée)
+        if (!aiText && !shouldForceSynthesis) {
+            try {
+                const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
+                const completion = await callOpenAI({
+                    messages: [
+                        { role: 'system', content: FULL_AXIOM_PROMPT },
+                        {
+                            role: 'system',
+                            content: blocNumber >= 3 && blocNumber <= 9
+                                ? `RÈGLE ABSOLUE AXIOM — RETRY MIROIR BLOC ${blocNumber} (FORMAT STRICT OBLIGATOIRE)
+
+⚠️ ERREURS DÉTECTÉES : Miroir non conforme
+
+Tu es en fin de BLOC ${blocNumber}.
+Réécris en conformité stricte REVELIOM :
+- Section 1️⃣ : EXACTEMENT 20 mots maximum, 1 phrase unique
+- Section 2️⃣ : EXACTEMENT 25 mots maximum, 1 phrase unique
+- Lecture en creux obligatoire : "ce n'est probablement pas X, mais plutôt Y"
+- Aucune synthèse, conclusion, cohérence globale, projection métier
+- Pas de texte additionnel
+
+Format strict : 3 sections séparées, pas de narration continue.`
+                                : `RÈGLE ABSOLUE AXIOM :
 Le moteur AXIOM n'interprète pas les prompts. Il les exécute STRICTEMENT.
 Tu es en état ${currentState} (BLOC ${blocNumber}).
 Tu exécutes STRICTEMENT le protocole AXIOM pour ce bloc.
@@ -1495,7 +1717,7 @@ Toute sortie hors règles = invalide.`,
         }
         // Si toujours vide → utiliser lastQuestion
         if (!aiText) {
-            aiText = ui.lastQuestion || '';
+            aiText = uiNonNull.lastQuestion || '';
         }
         // Si toujours vide → erreur critique
         if (!aiText) {
@@ -1509,37 +1731,195 @@ Toute sortie hors règles = invalide.`,
                 autoContinue: false,
             };
         }
-        const expectsAnswer = aiText.trim().endsWith('?');
+        // SÉPARATION ANNONCE DE TRANSITION AVANT VALIDATION/PARSING (BLOCS 3-9)
+        let transitionAnnouncement = null;
+        let cleanMirrorText = aiText || '';
+        if (aiText && blocNumber >= 3 && blocNumber <= 9) {
+            const separated = separateTransitionAnnouncement(aiText, blocNumber);
+            cleanMirrorText = separated.mirror;
+            transitionAnnouncement = separated.announcement;
+            if (transitionAnnouncement) {
+                console.log(`[AXIOM_EXECUTOR] Annonce de transition détectée et séparée pour BLOC ${blocNumber}`);
+            }
+        }
+        // Validation REVELIOM pour miroirs (blocs 3-9 uniquement) — sur texte nettoyé
+        let expectsAnswer = cleanMirrorText ? cleanMirrorText.trim().endsWith('?') : false;
+        let isMirror = false;
+        if (cleanMirrorText && blocNumber >= 3 && blocNumber <= 9 && !expectsAnswer) {
+            // C'est un miroir → utiliser nouvelle architecture séparée
+            isMirror = true;
+            try {
+                // Construire le contexte des réponses depuis conversationHistory
+                const conversationHistory = candidate.conversationHistory || [];
+                const userAnswersInBlock = conversationHistory
+                    .filter(m => m.role === 'user' && m.block === blocNumber && m.kind !== 'mirror_validation')
+                    .map(m => m.content.trim())
+                    .filter(a => a.length > 0);
+                // Mapper le numéro de bloc au type BlockType
+                const blockTypeMap = {
+                    3: 'block3',
+                    4: 'block4',
+                    5: 'block5',
+                    6: 'block6',
+                    7: 'block7',
+                    8: 'block8',
+                    9: 'block9',
+                };
+                const blockType = blockTypeMap[blocNumber];
+                if (!blockType) {
+                    console.error(`[AXIOM_EXECUTOR] Type de bloc inconnu: ${blocNumber}`);
+                    // Fallback : utiliser texte original
+                }
+                else {
+                    // Générer miroir avec nouvelle architecture
+                    const generatedMirror = await generateMirrorWithNewArchitecture(userAnswersInBlock, blockType);
+                    // Valider format REVELIOM
+                    const validation = validateMirrorREVELIOM(generatedMirror);
+                    if (validation.valid) {
+                        cleanMirrorText = generatedMirror;
+                        aiText = generatedMirror;
+                        console.log(`[AXIOM_EXECUTOR] Miroir BLOC ${blocNumber} généré avec succès (nouvelle architecture)`);
+                    }
+                    else {
+                        console.warn(`[AXIOM_EXECUTOR] Format REVELIOM invalide pour BLOC ${blocNumber}, mais texte servi (fail-soft):`, validation.errors);
+                        cleanMirrorText = generatedMirror;
+                        aiText = generatedMirror;
+                    }
+                }
+            }
+            catch (error) {
+                console.error(`[AXIOM_EXECUTOR] Erreur génération miroir BLOC ${blocNumber} avec nouvelle architecture:`, error);
+                // Fallback : utiliser texte original
+            }
+            // Forcer expectsAnswer: true pour les miroirs (C3)
+            expectsAnswer = true;
+        }
+        else if (aiText && !cleanMirrorText) {
+            // Si ce n'est pas un miroir, utiliser le texte original
+            aiText = aiText;
+        }
         let lastQuestion = null;
         if (expectsAnswer) {
             lastQuestion = aiText;
         }
         // Stocker la réponse utilisateur
         if (userMessage) {
-            const answerRecord = {
-                block: blocNumber,
-                message: userMessage,
-                createdAt: new Date().toISOString(),
-            };
-            candidateStore.addAnswer(candidate.candidateId, answerRecord);
-            // AUSSI stocker dans conversationHistory
-            candidateStore.appendUserMessage(candidate.candidateId, userMessage, {
-                block: blocNumber,
-                step: currentState,
-                kind: 'other',
-            });
+            // Vérifier si c'est une validation miroir (dernier message assistant est un miroir de ce bloc)
+            const conversationHistory = candidate.conversationHistory || [];
+            const lastAssistantMessage = [...conversationHistory]
+                .reverse()
+                .find(m => m.role === 'assistant' && m.kind === 'mirror' && m.block === blocNumber);
+            const isMirrorValidation = blocNumber >= 3 && blocNumber <= 9 &&
+                currentState.startsWith('BLOC_') &&
+                lastAssistantMessage !== undefined;
+            if (isMirrorValidation) {
+                // Validation miroir → Stocker avec kind: 'mirror_validation'
+                console.log(`[AXIOM_EXECUTOR] Validation miroir BLOC ${blocNumber} reçue`);
+                candidateStore.appendMirrorValidation(candidate.candidateId, blocNumber, userMessage);
+            }
+            else {
+                // Réponse normale à une question
+                const answerRecord = {
+                    block: blocNumber,
+                    message: userMessage,
+                    createdAt: new Date().toISOString(),
+                };
+                candidateStore.addAnswer(candidate.candidateId, answerRecord);
+                // AUSSI stocker dans conversationHistory
+                candidateStore.appendUserMessage(candidate.candidateId, userMessage, {
+                    block: blocNumber,
+                    step: currentState,
+                    kind: 'other',
+                });
+            }
         }
         // Déterminer l'état suivant
         let nextState = currentState;
-        if (!expectsAnswer && blocNumber < 10) {
-            // Fin du bloc → passer au suivant
-            nextState = blocStates[blocNumber];
+        // Si c'est une validation miroir, passer au bloc suivant
+        if (userMessage) {
+            const conversationHistory = candidate.conversationHistory || [];
+            const lastAssistantMessage = [...conversationHistory]
+                .reverse()
+                .find(m => m.role === 'assistant' && m.kind === 'mirror' && m.block === blocNumber);
+            if (lastAssistantMessage && blocNumber >= 3 && blocNumber <= 9 && currentState.startsWith('BLOC_')) {
+                // Validation miroir reçue → passer au bloc suivant
+                if (blocNumber < 10) {
+                    nextState = blocStates[blocNumber];
+                }
+            }
+            else if (!expectsAnswer && blocNumber < 10 && !isMirror) {
+                // Fin du bloc (pas un miroir) → passer au suivant
+                nextState = blocStates[blocNumber];
+            }
+            else if (!expectsAnswer && blocNumber === 10) {
+                // Fin du bloc 10 → synthèse déjà générée avec nouvelle architecture (si shouldForceSynthesis était vrai)
+                // Sinon, générer maintenant
+                if (!aiText) {
+                    try {
+                        const conversationHistory = candidate.conversationHistory || [];
+                        const allUserAnswers = conversationHistory
+                            .filter(m => m.role === 'user' && m.kind !== 'mirror_validation')
+                            .map(m => m.content.trim())
+                            .filter(a => a.length > 0);
+                        // Générer synthèse avec nouvelle architecture
+                        const generatedSynthesis = await generateMirrorWithNewArchitecture(allUserAnswers, 'synthesis');
+                        candidateStore.setFinalProfileText(candidate.candidateId, generatedSynthesis);
+                        aiText = generatedSynthesis;
+                        console.log(`[AXIOM_EXECUTOR] Synthèse finale BLOC 10 générée avec succès (nouvelle architecture)`);
+                    }
+                    catch (error) {
+                        console.error(`[AXIOM_EXECUTOR] Erreur génération synthèse finale avec nouvelle architecture:`, error);
+                        console.error('[AXIOM_EXECUTOR] Synthèse finale vide');
+                    }
+                }
+                else {
+                    // Synthèse déjà générée → s'assurer qu'elle est stockée
+                    candidateStore.setFinalProfileText(candidate.candidateId, aiText);
+                }
+                nextState = STEP_99_MATCH_READY;
+            }
+            else if (isMirror && expectsAnswer) {
+                // Miroir affiché → rester sur le bloc courant jusqu'à validation (LOT 1)
+                nextState = currentState;
+            }
         }
-        else if (!expectsAnswer && blocNumber === 10) {
-            // Fin du bloc 10 → générer synthèse et passer à match_ready
-            // TODO: Générer synthèse finale
-            nextState = STEP_99_MATCH_READY;
-            candidateStore.setFinalProfileText(candidate.candidateId, aiText);
+        else {
+            // Pas de userMessage → logique normale (génération miroir ou question)
+            if (!expectsAnswer && blocNumber < 10 && !isMirror) {
+                // Fin du bloc (pas un miroir) → passer au suivant
+                nextState = blocStates[blocNumber];
+            }
+            else if (!expectsAnswer && blocNumber === 10) {
+                // Fin du bloc 10 → synthèse déjà générée avec nouvelle architecture (si shouldForceSynthesis était vrai)
+                // Sinon, générer maintenant
+                if (!aiText) {
+                    try {
+                        const conversationHistory = candidate.conversationHistory || [];
+                        const allUserAnswers = conversationHistory
+                            .filter(m => m.role === 'user' && m.kind !== 'mirror_validation')
+                            .map(m => m.content.trim())
+                            .filter(a => a.length > 0);
+                        // Générer synthèse avec nouvelle architecture
+                        const generatedSynthesis = await generateMirrorWithNewArchitecture(allUserAnswers, 'synthesis');
+                        candidateStore.setFinalProfileText(candidate.candidateId, generatedSynthesis);
+                        aiText = generatedSynthesis;
+                        console.log(`[AXIOM_EXECUTOR] Synthèse finale BLOC 10 générée avec succès (nouvelle architecture)`);
+                    }
+                    catch (error) {
+                        console.error(`[AXIOM_EXECUTOR] Erreur génération synthèse finale avec nouvelle architecture:`, error);
+                        console.error('[AXIOM_EXECUTOR] Synthèse finale vide');
+                    }
+                }
+                else {
+                    // Synthèse déjà générée → s'assurer qu'elle est stockée
+                    candidateStore.setFinalProfileText(candidate.candidateId, aiText);
+                }
+                nextState = STEP_99_MATCH_READY;
+            }
+            else if (isMirror && expectsAnswer) {
+                // Miroir affiché → rester sur le bloc courant jusqu'à validation (LOT 1)
+                nextState = currentState;
+            }
         }
         candidateStore.updateUIState(candidate.candidateId, {
             step: nextState,
@@ -1547,6 +1927,33 @@ Toute sortie hors règles = invalide.`,
             tutoiement: ui.tutoiement || undefined,
             identityDone: true,
         });
+        // Mise à jour currentBlock pour BLOCS 3-10 (source de vérité unique)
+        if ([
+            BLOC_03,
+            BLOC_04,
+            BLOC_05,
+            BLOC_06,
+            BLOC_07,
+            BLOC_08,
+            BLOC_09,
+            BLOC_10,
+        ].includes(nextState)) {
+            const nextBlocNumber = [
+                BLOC_01,
+                BLOC_02,
+                BLOC_03,
+                BLOC_04,
+                BLOC_05,
+                BLOC_06,
+                BLOC_07,
+                BLOC_08,
+                BLOC_09,
+                BLOC_10,
+            ].indexOf(nextState) + 1;
+            candidateStore.updateSession(candidate.candidateId, {
+                currentBlock: nextBlocNumber,
+            });
+        }
         // Enregistrer la réponse assistant APRÈS avoir déterminé nextState
         if (aiText) {
             candidateStore.appendAssistantMessage(candidate.candidateId, aiText, {
@@ -1558,8 +1965,10 @@ Toute sortie hors règles = invalide.`,
         logTransition(candidate.candidateId, stateIn, nextState, userMessage ? 'message' : 'event');
         // Si fin du bloc 10 → transition automatique
         if (nextState === STEP_99_MATCH_READY) {
-            const finalResponse = (aiText || '') + '\n\nProfil terminé. Quand tu es prêt, génère ton matching.';
-            // Enregistrer la réponse assistant finale
+            // Retourner UNIQUEMENT la synthèse finale (sans concaténation du message CTA)
+            // Le message CTA sera retourné séparément dans l'état STEP_99_MATCH_READY
+            const finalResponse = aiText || '';
+            // Enregistrer la réponse assistant finale (synthèse seule)
             if (finalResponse) {
                 candidateStore.appendAssistantMessage(candidate.candidateId, finalResponse, {
                     step: nextState,
@@ -1574,12 +1983,29 @@ Toute sortie hors règles = invalide.`,
                 autoContinue: false,
             };
         }
+        // Parser le miroir en sections pour affichage progressif (si c'est un miroir REVELIOM, blocs 3-9)
+        // IMPORTANT : Parser uniquement le miroir nettoyé (sans annonce)
+        let progressiveDisplay = false;
+        let mirrorSections = undefined;
+        if (cleanMirrorText && !expectsAnswer && blocNumber >= 3 && blocNumber <= 9 && isMirror) {
+            const sections = parseMirrorSections(cleanMirrorText);
+            if (sections.length === 3) {
+                progressiveDisplay = true;
+                mirrorSections = sections;
+                console.log(`[AXIOM_EXECUTOR] Miroir BLOC ${blocNumber} parsé avec succès (3 sections)`);
+            }
+            else {
+                console.warn(`[AXIOM_EXECUTOR] Miroir BLOC ${blocNumber} parsing échoué : ${sections.length} sections trouvées (attendu: 3)`);
+            }
+        }
         return {
             response: aiText || '',
             step: nextState,
             lastQuestion,
             expectsAnswer,
             autoContinue: false,
+            progressiveDisplay,
+            mirrorSections,
         };
     }
     // ============================================
@@ -1590,7 +2016,7 @@ Toute sortie hors règles = invalide.`,
         if (!userMessage && !event) {
             logTransition(candidate.candidateId, stateIn, currentState, 'message');
             return {
-                response: 'Profil terminé. Quand tu es prêt, génère ton matching.',
+                response: 'Ton profil est terminé.\n\n👉 Découvre ton matching pour savoir si ce poste te correspond vraiment.',
                 step: currentState,
                 lastQuestion: null,
                 expectsAnswer: false,
@@ -1618,50 +2044,23 @@ Toute sortie hors règles = invalide.`,
     if (currentState === STEP_99_MATCHING) {
         let aiText = null;
         try {
-            const MATCHING_PROMPT = getMatchingPrompt();
-            const messages = buildConversationHistory(candidate);
-            // Ajouter la synthèse finale si disponible
-            if (candidate.finalProfileText) {
-                messages.push({ role: 'system', content: `SYNTHÈSE FINALE AXIOM:\n${candidate.finalProfileText}` });
-            }
-            const completion = await callOpenAI({
-                messages: [
-                    { role: 'system', content: MATCHING_PROMPT },
-                    ...messages,
-                ],
-            });
-            if (typeof completion === 'string' && completion.trim()) {
-                aiText = completion.trim();
-            }
+            // Construire le contexte des réponses depuis conversationHistory
+            const conversationHistory = candidate.conversationHistory || [];
+            const allUserAnswers = conversationHistory
+                .filter(m => m.role === 'user' && m.kind !== 'mirror_validation')
+                .map(m => m.content.trim())
+                .filter(a => a.length > 0);
+            // Contexte additionnel : synthèse finale si disponible
+            const additionalContext = candidate.finalProfileText
+                ? `SYNTHÈSE FINALE AXIOM:\n${candidate.finalProfileText}`
+                : undefined;
+            // Générer matching avec nouvelle architecture
+            const generatedMatching = await generateMirrorWithNewArchitecture(allUserAnswers, 'matching', additionalContext);
+            aiText = generatedMatching;
+            console.log(`[AXIOM_EXECUTOR] Matching généré avec succès (nouvelle architecture)`);
         }
-        catch (e) {
-            console.error('[AXIOM_EXECUTION_ERROR]', e);
-        }
-        // Si échec → réessayer une fois
-        if (!aiText) {
-            try {
-                const MATCHING_PROMPT = getMatchingPrompt();
-                const messages = buildConversationHistory(candidate);
-                if (candidate.finalProfileText) {
-                    messages.push({ role: 'system', content: `SYNTHÈSE FINALE AXIOM:\n${candidate.finalProfileText}` });
-                }
-                const completion = await callOpenAI({
-                    messages: [
-                        { role: 'system', content: MATCHING_PROMPT },
-                        ...messages,
-                    ],
-                });
-                if (typeof completion === 'string' && completion.trim()) {
-                    aiText = completion.trim();
-                }
-            }
-            catch (e) {
-                console.error('[AXIOM_EXECUTION_ERROR_RETRY]', e);
-            }
-        }
-        // Si toujours vide → erreur
-        if (!aiText) {
-            console.error('[AXIOM_CRITICAL_ERROR]', { sessionId: candidate.candidateId, state: currentState });
+        catch (error) {
+            console.error(`[AXIOM_EXECUTOR] Erreur génération matching avec nouvelle architecture:`, error);
             aiText = 'Erreur lors de la génération du matching. Veuillez réessayer.';
         }
         currentState = DONE_MATCHING;
@@ -1700,7 +2099,7 @@ Toute sortie hors règles = invalide.`,
             autoContinue: false,
         };
     }
-    // État inconnu
+    // État inconnu (fallback pour satisfaire TypeScript)
     console.error('[AXIOM_UNKNOWN_STATE]', { sessionId: candidate.candidateId, state: currentState });
     logTransition(candidate.candidateId, stateIn, DONE_MATCHING, 'message');
     return {
@@ -1714,10 +2113,11 @@ Toute sortie hors règles = invalide.`,
 // ============================================
 // AUTO-ENCHAÎNEMENT FSM STRICT
 // ============================================
-export async function executeWithAutoContinue(candidate, userMessage = null) {
+export async function executeWithAutoContinue(candidate, userMessage = null, event = null) {
     let result = await executeAxiom({
         candidate,
         userMessage: userMessage,
+        event: event || undefined,
     });
     // 🔁 AUTO-ENCHAÎNEMENT FSM STRICT
     // Tant que l'état est non interactif ET demande à continuer
@@ -1732,7 +2132,8 @@ export async function executeWithAutoContinue(candidate, userMessage = null) {
         result = await executeAxiom({
             candidate: updatedCandidate,
             userMessage: null,
+            event: undefined,
         });
     }
-    return result;
+    return result; // result est toujours défini car executeAxiom retourne toujours une valeur
 }

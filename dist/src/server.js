@@ -3,7 +3,8 @@ import cors from "cors";
 import { candidateStore } from "./store/sessionStore.js";
 import { v4 as uuidv4 } from "uuid";
 import { getPostConfig } from "./store/postRegistry.js";
-import { executeAxiom, executeWithAutoContinue, STEP_01_IDENTITY, STEP_02_TONE, STEP_03_PREAMBULE, STEP_03_BLOC1, BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10, STEP_99_MATCH_READY, STEP_99_MATCHING, DONE_MATCHING, } from "./engine/axiomExecutor.js";
+import { executeWithAutoContinue, STEP_01_IDENTITY, STEP_02_TONE, STEP_03_PREAMBULE, STEP_03_BLOC1, BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10, STEP_99_MATCH_READY, STEP_99_MATCHING, DONE_MATCHING, } from "./engine/axiomExecutor.js";
+import { BlockOrchestrator } from "./services/blockOrchestrator.js";
 import { z } from "zod";
 import { IdentitySchema } from "./validators/identity.js";
 import { candidateToLiveTrackingRow, googleSheetsLiveTrackingService } from "./services/googleSheetsService.js";
@@ -32,6 +33,24 @@ function deriveStepFromHistory(candidate) {
     }
     // Règle 5 : Sinon → nouveau candidat, identité
     return STEP_01_IDENTITY;
+}
+// ============================================
+// HELPER : Mapping step → state (source unique de vérité)
+// ============================================
+function mapStepToState(step) {
+    if (step === STEP_03_BLOC1) {
+        return "wait_start_button";
+    }
+    if ([BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10].includes(step)) {
+        return "collecting";
+    }
+    if (step === STEP_99_MATCH_READY) {
+        return "match_ready";
+    }
+    if (step === STEP_99_MATCHING || step === DONE_MATCHING) {
+        return "matching";
+    }
+    return "idle";
 }
 const app = express();
 // BODY PARSER
@@ -198,39 +217,9 @@ app.get("/start", async (req, res) => {
         }
         // Si identité complétée, continuer normalement avec auto-enchaînement
         const result = await executeWithAutoContinue(candidate);
-        // Aligner le mapping /start sur le mapping /axiom
-        let responseState = "collecting";
-        let responseStep = result.step;
-        if (result.step === STEP_01_IDENTITY || result.step === 'IDENTITY') {
-            responseState = "identity";
-            responseStep = "STEP_01_IDENTITY";
-        }
-        else if (result.step === STEP_02_TONE) {
-            responseState = "tone_choice";
-            responseStep = "STEP_02_TONE";
-        }
-        else if (result.step === STEP_03_PREAMBULE) {
-            responseState = "preambule";
-            responseStep = "STEP_03_PREAMBULE";
-        }
-        else if (result.step === STEP_03_BLOC1) {
-            responseState = "wait_start_button";
-            responseStep = "STEP_03_BLOC1";
-        }
-        else if (result.step === "PREAMBULE_DONE") {
-            responseState = "wait_start_button";
-            responseStep = "PREAMBULE_DONE";
-        }
-        else if ([BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10].includes(result.step)) {
-            responseState = "collecting";
-            // responseStep reste result.step
-        }
-        else if (result.step === STEP_99_MATCH_READY) {
-            responseState = "match_ready";
-        }
-        else if (result.step === STEP_99_MATCHING || result.step === DONE_MATCHING) {
-            responseState = "matching";
-        }
+        // Utiliser la fonction unique de mapping
+        const responseState = mapStepToState(result.step);
+        const responseStep = result.step;
         // C) CONTRAT DE SÉCURITÉ — Toujours renvoyer data.response non vide
         const response = result.response || '';
         const finalResponse = response || "Une erreur technique est survenue. Recharge la page.";
@@ -387,7 +376,6 @@ app.post("/axiom", async (req, res) => {
             }
             else if (result.step === BLOC_01) {
                 responseState = "collecting";
-                candidateStore.updateSession(candidate.candidateId, { state: "collecting", currentBlock: 1 });
             }
             candidate = candidateStore.get(candidate.candidateId);
             if (!candidate) {
@@ -567,12 +555,13 @@ app.post("/axiom", async (req, res) => {
         }
         // PARTIE 5 — Gérer les events techniques (boutons)
         if (event === "START_BLOC_1") {
-            // START_BLOC_1 est un event, pas un auto-enchaînement
-            const candidateIdBeforeReload = candidate.candidateId;
-            const result = await executeAxiom({ candidate, userMessage: null, event: "START_BLOC_1" });
-            candidate = candidateStore.get(candidateIdBeforeReload);
+            // START_BLOC_1 → Déléguer à l'orchestrateur pour BLOC 1
+            const orchestrator = new BlockOrchestrator();
+            const result = await orchestrator.handleMessage(candidate, null, "START_BLOC_1");
+            const candidateId = candidate.candidateId;
+            candidate = candidateStore.get(candidateId);
             if (!candidate) {
-                candidate = await candidateStore.getAsync(candidateIdBeforeReload);
+                candidate = await candidateStore.getAsync(candidateId);
             }
             if (!candidate) {
                 return res.status(500).json({
@@ -604,6 +593,159 @@ app.post("/axiom", async (req, res) => {
         }
         // Gérer les messages utilisateur
         const userMessageText = userMessage || null;
+        // Garde : Si step === STEP_03_BLOC1 ET userMessage présent ET event !== START_BLOC_1
+        // → Ignorer le message ou retourner erreur explicite
+        if (candidate.session.ui?.step === STEP_03_BLOC1 && userMessageText && event !== 'START_BLOC_1') {
+            return res.status(200).json({
+                sessionId: candidate.candidateId,
+                currentBlock: candidate.session.currentBlock,
+                state: "wait_start_button",
+                response: "Pour commencer le profil, clique sur le bouton 'Je commence mon profil' ci-dessus.",
+                step: STEP_03_BLOC1,
+                expectsAnswer: false,
+                autoContinue: false,
+            });
+        }
+        // PHASE 2 : Déléguer BLOC 1 à l'orchestrateur (LOT 1 : uniquement si BLOC 1 déjà démarré)
+        // IMPORTANT : Ne pas déléguer si step === STEP_03_BLOC1 (attente bouton START_BLOC_1)
+        if (candidate.session.ui?.step === BLOC_01 && candidate.session.currentBlock === 1) {
+            // BLOC 1 déjà démarré → déléguer à l'orchestrateur
+            // Enregistrer le message utilisateur dans conversationHistory AVANT d'appeler l'orchestrateur
+            if (userMessageText) {
+                const candidateIdForUserMessage = candidate.candidateId;
+                candidateStore.appendUserMessage(candidateIdForUserMessage, userMessageText, {
+                    block: 1,
+                    step: BLOC_01,
+                    kind: 'other',
+                });
+                // Recharger candidate après enregistrement
+                candidate = candidateStore.get(candidateIdForUserMessage);
+                if (!candidate) {
+                    candidate = await candidateStore.getAsync(candidateIdForUserMessage);
+                }
+                if (!candidate) {
+                    return res.status(500).json({
+                        error: "INTERNAL_ERROR",
+                        message: "Failed to store user message",
+                    });
+                }
+            }
+            const orchestrator = new BlockOrchestrator();
+            // LOT 1 : Ne pas passer d'event (null) car le BLOC 1 est déjà démarré
+            const result = await orchestrator.handleMessage(candidate, userMessageText, null);
+            // Recharger le candidate AVANT le mapping pour avoir l'état à jour
+            const candidateIdAfterExecution = candidate.candidateId;
+            candidate = candidateStore.get(candidateIdAfterExecution);
+            if (!candidate) {
+                candidate = await candidateStore.getAsync(candidateIdAfterExecution);
+            }
+            if (!candidate) {
+                return res.status(500).json({
+                    error: "INTERNAL_ERROR",
+                    message: "Failed to get candidate",
+                });
+            }
+            // Utiliser la fonction unique de mapping
+            const responseState = mapStepToState(result.step);
+            const responseStep = result.step;
+            try {
+                const trackingRow = candidateToLiveTrackingRow(candidate);
+                await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+            }
+            catch (error) {
+                console.error("Error updating live tracking:", error);
+            }
+            return res.status(200).json({
+                sessionId: candidate.candidateId,
+                currentBlock: candidate.session.currentBlock,
+                state: responseState,
+                response: result.response || '',
+                step: responseStep,
+                expectsAnswer: result.expectsAnswer,
+                autoContinue: result.autoContinue,
+            });
+        }
+        // PHASE 2A : Déléguer BLOC 2A à l'orchestrateur
+        if (candidate.session.ui?.step === BLOC_02 && candidate.session.currentBlock === 2) {
+            // Enregistrer le message utilisateur dans conversationHistory AVANT d'appeler l'orchestrateur
+            if (userMessageText) {
+                const candidateIdForUserMessage = candidate.candidateId;
+                candidateStore.appendUserMessage(candidateIdForUserMessage, userMessageText, {
+                    block: 2,
+                    step: BLOC_02,
+                    kind: 'other',
+                });
+                // Recharger candidate après enregistrement
+                candidate = candidateStore.get(candidateIdForUserMessage);
+                if (!candidate) {
+                    candidate = await candidateStore.getAsync(candidateIdForUserMessage);
+                }
+                if (!candidate) {
+                    return res.status(500).json({
+                        error: "INTERNAL_ERROR",
+                        message: "Failed to store user message",
+                    });
+                }
+            }
+            const orchestrator = new BlockOrchestrator();
+            let result;
+            try {
+                result = await orchestrator.handleMessage(candidate, userMessageText, null);
+            }
+            catch (error) {
+                // Gérer spécifiquement erreur validation BLOC 2B
+                if (error instanceof Error && error.message.includes('BLOC 2B validation failed')) {
+                    console.error('[ORCHESTRATOR] [2B_VALIDATION_FAIL] fatal=true', error.message);
+                    return res.status(200).json({
+                        sessionId: candidate.candidateId,
+                        currentBlock: candidate.session.currentBlock,
+                        state: "collecting",
+                        response: "Une erreur technique est survenue lors de la génération des questions. Veuillez réessayer ou contacter le support.",
+                        step: BLOC_02,
+                        expectsAnswer: false,
+                        autoContinue: false,
+                    });
+                }
+                // Re-throw autres erreurs
+                throw error;
+            }
+            // Recharger le candidate AVANT le mapping pour avoir l'état à jour
+            const candidateIdAfterExecution = candidate.candidateId;
+            candidate = candidateStore.get(candidateIdAfterExecution);
+            if (!candidate) {
+                candidate = await candidateStore.getAsync(candidateIdAfterExecution);
+            }
+            if (!candidate) {
+                return res.status(500).json({
+                    error: "INTERNAL_ERROR",
+                    message: "Failed to get candidate",
+                });
+            }
+            // Utiliser la fonction unique de mapping
+            const responseState = mapStepToState(result.step);
+            const responseStep = result.step;
+            // Mise à jour Google Sheet
+            if (candidate.identity.completedAt) {
+                try {
+                    const trackingRow = candidateToLiveTrackingRow(candidate);
+                    await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+                }
+                catch (error) {
+                    console.error("[axiom] live tracking error:", error);
+                }
+            }
+            const response = result.response || '';
+            const finalResponse = response || "Une erreur technique est survenue. Recharge la page.";
+            return res.status(200).json({
+                sessionId: candidate.candidateId,
+                currentBlock: candidate.session.currentBlock,
+                state: responseState,
+                response: finalResponse,
+                step: responseStep,
+                expectsAnswer: response ? result.expectsAnswer : false,
+                autoContinue: result.autoContinue,
+            });
+        }
         // Enregistrer le message utilisateur dans conversationHistory AVANT d'appeler le moteur
         if (userMessageText) {
             const candidateIdForUserMessage = candidate.candidateId;
@@ -624,7 +766,7 @@ app.post("/axiom", async (req, res) => {
                 });
             }
         }
-        const result = await executeWithAutoContinue(candidate, userMessageText);
+        const result = await executeWithAutoContinue(candidate, userMessageText, event || null);
         // Recharger le candidate AVANT le mapping pour avoir l'état à jour
         const candidateIdAfterExecution = candidate.candidateId;
         candidate = candidateStore.get(candidateIdAfterExecution);
@@ -637,42 +779,9 @@ app.post("/axiom", async (req, res) => {
                 message: "Failed to get candidate",
             });
         }
-        // Mapper les états
-        let responseState = "collecting";
-        let responseStep = result.step;
-        // FSM STRICTE — Mapper les états
-        if (result.step === STEP_01_IDENTITY || result.step === 'IDENTITY') {
-            responseState = "identity";
-            responseStep = "STEP_01_IDENTITY";
-        }
-        else if (result.step === STEP_02_TONE) {
-            responseState = "tone_choice";
-        }
-        else if (result.step === STEP_03_PREAMBULE) {
-            responseState = "preambule";
-        }
-        else if (result.step === STEP_03_BLOC1) {
-            responseState = "wait_start_button";
-            responseStep = "STEP_03_BLOC1";
-        }
-        else if (result.step === "PREAMBULE_DONE") {
-            responseState = "wait_start_button";
-            responseStep = "PREAMBULE_DONE";
-        }
-        else if ([BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10].includes(result.step)) {
-            const blocNumber = [BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10].indexOf(result.step) + 1;
-            responseState = `bloc_${blocNumber.toString().padStart(2, '0')}`;
-            candidateStore.updateSession(candidate.candidateId, { state: "collecting", currentBlock: blocNumber });
-        }
-        else if (result.step === STEP_99_MATCH_READY) {
-            responseState = "match_ready";
-        }
-        else if (result.step === STEP_99_MATCHING) {
-            responseState = "matching";
-        }
-        else if (result.step === DONE_MATCHING) {
-            responseState = "done";
-        }
+        // Utiliser la fonction unique de mapping
+        const responseState = mapStepToState(result.step);
+        const responseStep = result.step;
         // Mise à jour Google Sheet (sauf si on est en identity)
         if (responseState !== "identity" && candidate.identity.completedAt) {
             try {
@@ -709,6 +818,51 @@ app.post("/axiom", async (req, res) => {
             expectsAnswer: false,
             autoContinue: false,
         });
+    }
+});
+// POST /axiom/stream — SSE hybrid streaming (mirrors, final profile, matching only)
+app.post("/axiom/stream", async (req, res) => {
+    // Headers SSE obligatoires
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    try {
+        const parsed = AxiomBodySchema.safeParse(req.body);
+        if (!parsed.success) {
+            res.write(`event: error\n`);
+            res.write(`data: ${JSON.stringify({ error: "BAD_REQUEST", details: parsed.error.flatten() })}\n\n`);
+            res.end();
+            return;
+        }
+        const { tenantId, posteId, sessionId: providedSessionId, identity: providedIdentity, message: userMessage, event, } = parsed.data;
+        const sessionId = req.headers["x-session-id"] || providedSessionId;
+        if (!sessionId) {
+            res.write(`event: error\n`);
+            res.write(`data: ${JSON.stringify({ error: "MISSING_SESSION_ID", message: "sessionId requis" })}\n\n`);
+            res.end();
+            return;
+        }
+        try {
+            getPostConfig(tenantId, posteId);
+        }
+        catch (error) {
+            res.write(`event: error\n`);
+            res.write(`data: ${JSON.stringify({ error: "INVALID_POSTE", message: error instanceof Error ? error.message : "Invalid posteId" })}\n\n`);
+            res.end();
+            return;
+        }
+        // Pour l'instant, cette route refuse le streaming pour tous les types
+        // L'implémentation complète nécessitera de modifier executeAxiom et blockOrchestrator
+        // pour accepter un paramètre "stream: boolean" et utiliser callOpenAIStream
+        res.write(`event: error\n`);
+        res.write(`data: ${JSON.stringify({ error: "NOT_IMPLEMENTED", message: "Streaming route not yet fully implemented. Use /axiom for now." })}\n\n`);
+        res.end();
+    }
+    catch (error) {
+        console.error("[axiom/stream] error:", error);
+        res.write(`event: error\n`);
+        res.write(`data: ${JSON.stringify({ error: "INTERNAL_ERROR", message: "Streaming error" })}\n\n`);
+        res.end();
     }
 });
 const PORT = Number(process.env.PORT) || 3000;

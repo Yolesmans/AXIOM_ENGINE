@@ -13,12 +13,9 @@ import {
   type ValidationResult
 } from './validators.js';
 import { validateMirrorREVELIOM, type MirrorValidationResult } from './validateMirrorReveliom.js';
-import { validateInterpretiveDepth } from './validateInterpretiveDepth.js';
-import { validateInterpretiveAnalysis } from './validateInterpretiveAnalysis.js';
 import { parseMirrorSections } from './parseMirrorSections.js';
-import { adaptToMentorStyle } from './mirrorNarrativeAdapter.js';
-import { generateInterpretiveStructureBlock1 } from './interpretiveStructureGenerator.js';
-import { renderMentorStyleBlock1 } from './mentorStyleRenderer.js';
+import { generateInterpretiveStructure, type BlockType } from './interpretiveStructureGenerator.js';
+import { renderMentorStyle } from './mentorStyleRenderer.js';
 
 function getFullAxiomPrompt(): string {
   return `${PROMPT_AXIOM_ENGINE}\n\n${PROMPT_AXIOM_PROFIL}`;
@@ -493,7 +490,7 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
       // ============================================
       console.log('[BLOC1][ETAPE1] Génération structure interprétative...');
       
-      const structure = await generateInterpretiveStructureBlock1(userAnswers);
+        const structure = await generateInterpretiveStructure(userAnswers, 'block1');
       
       console.log('[BLOC1][ETAPE1] Structure générée:', {
         hypothese_centrale: structure.hypothese_centrale.substring(0, 80) + '...',
@@ -505,7 +502,7 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
       // ============================================
       console.log('[BLOC1][ETAPE2] Rendu mentor incarné...');
       
-      const mentorText = await renderMentorStyleBlock1(structure);
+          const mentorText = await renderMentorStyle(structure, 'block1');
       
       console.log('[BLOC1][ETAPE2] Texte mentor généré');
 
@@ -1686,328 +1683,80 @@ Format de sortie OBLIGATOIRE :
 
   /**
    * Génère le miroir final BLOC 2B
+   * 
+   * ⚠️ ARCHITECTURE NOUVELLE — SÉPARATION ANALYSE/RENDU
+   * 1. INTERPRÉTATION : Structure JSON froide et logique (gpt-4o-mini, temp 0.3)
+   * 2. RENDU MENTOR : Texte incarné et vécu (gpt-4o, temp 0.8)
+   * 
+   * - Suppression validations heuristiques complexes (validateInterpretiveAnalysis, validateInterpretiveDepth)
+   * - Validation simple : structure JSON + marqueurs expérientiels
    */
   private async generateMirror2B(
     candidate: AxiomCandidate,
     works: string[],
     coreWork: string
   ): Promise<string> {
-    const messages = buildConversationHistoryForBlock2B(candidate);
-    const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
-
-    // LOT1 — Construire le contexte des réponses depuis conversationHistory (source robuste)
+    // Construire le contexte des réponses depuis conversationHistory (source robuste)
     const conversationHistory = candidate.conversationHistory || [];
     const block2UserMessages = conversationHistory
       .filter(m => m.role === 'user' && m.block === 2 && m.kind !== 'mirror_validation')
       .map(m => m.content);
     
-    let answersContext = '';
-    let source = 'history';
+    // Filtrer pour ne garder que les réponses BLOC 2B (après les 3 réponses BLOC 2A)
+    const block2BAnswers = block2UserMessages.length > 3 
+      ? block2UserMessages.slice(3).map(a => a.trim()).filter(a => a.length > 0)
+      : [];
     
-    if (block2UserMessages.length > 0) {
-      // Source principale : conversationHistory
-      // Filtrer pour ne garder que les réponses BLOC 2B (après les 3 réponses BLOC 2A)
-      // Les 3 premières sont BLOC 2A, les suivantes sont BLOC 2B
-      const block2BAnswers = block2UserMessages.slice(3);
-      const queue = candidate.blockQueues?.[2];
-      answersContext = block2BAnswers
-        .map((answer, index) => {
-          const questionIndex = index + 3; // BLOC 2B commence après les 3 réponses 2A
-          const question = queue?.questions[questionIndex] || '';
-          return `Question ${questionIndex} (${question.substring(0, 50)}...): ${answer}`;
-        })
-        .join('\n');
-    } else {
+    if (block2BAnswers.length === 0) {
       // Fallback : answerMaps
       const answerMap = candidate.answerMaps?.[2];
       const answers = answerMap?.answers || {};
       const sortedEntries = Object.entries(answers)
         .sort(([a], [b]) => parseInt(a) - parseInt(b));
-      const queue = candidate.blockQueues?.[2];
-      answersContext = sortedEntries
-        .map(([index, answer]) => {
-          const questionIndex = parseInt(index, 10);
-          const question = queue?.questions[questionIndex] || '';
-          return `Question ${questionIndex} (${question.substring(0, 50)}...): ${answer}`;
-        })
-        .join('\n');
-      source = 'answerMaps';
+      block2BAnswers.push(...sortedEntries.slice(3).map(([, answer]) => answer as string).filter(a => a && a.trim().length > 0));
     }
     
-    console.log('[BLOC2B] answersContext.count=', block2UserMessages.length >= 3 ? block2UserMessages.length - 3 : Object.keys(candidate.answerMaps?.[2]?.answers || {}).length, 'source=', source);
+    console.log('[BLOC2B][NEW_ARCHITECTURE] Génération miroir en 2 étapes (interprétation + rendu)');
+    console.log('[BLOC2B] Réponses utilisateur:', block2BAnswers.length);
 
-    const completion = await callOpenAI({
-      messages: [
-        { role: 'system', content: FULL_AXIOM_PROMPT },
-        {
-          role: 'system',
-          content: `🎯 POSTURE MENTALE
-
-Tu es un mentor qui observe ce qui n'est pas dit.
-Tu ne répètes pas ce qu'on te dit, tu révèles ce qui se cache derrière.
-Tu ne décris pas, tu infères.
-Tu prends un risque interprétatif — c'est ta responsabilité.
-Si tu te trompes, le candidat te corrigera, et c'est précieux.
-
-📖 EXEMPLES DE RENDU ATTENDU
-
-❌ "Les personnages choisis montrent une préférence pour l'autonomie et la loyauté."
-✅ "Quand tu choisis des personnages qui fonctionnent seuls mais restent fidèles à leur groupe, ça révèle quelque chose : tu cherches probablement moins l'indépendance totale que la liberté dans un cadre qui te protège."
-
-❌ "Les motifs récurrents sont l'ascension et la stratégie."
-✅ "Il y a des moments où tu as besoin de sentir que tu montes, que tu progresses vers quelque chose de concret — pas juste avancer, mais vraiment gravir."
-
-❌ "Le rapport au pouvoir est complexe."
-✅ "Ce n'est probablement pas le pouvoir pour le pouvoir que tu cherches, mais plutôt la capacité de décider sans avoir à demander permission à chaque étape."
-
-La différence : le premier liste, le second révèle une logique sous-jacente.
-
-⸻
-
-RÈGLE ABSOLUE AXIOM — SYNTHÈSE FINALE BLOC 2B :
-
-Tu es en fin de BLOC 2B.
-Toutes les questions projectives ont été répondues.
-
-ŒUVRES DU CANDIDAT :
-- Œuvre #3 : ${works[2] || 'N/A'}
-- Œuvre #2 : ${works[1] || 'N/A'}
-- Œuvre #1 : ${works[0] || 'N/A'}
-- Œuvre noyau : ${coreWork}
-
-RÉPONSES DU CANDIDAT :
-${answersContext}
-
-⚠️ RÈGLES ABSOLUES POUR LA SYNTHÈSE :
-
-1. La synthèse DOIT être VRAIMENT PERSONNALISÉE (4 à 6 lignes max).
-2. Elle DOIT croiser explicitement :
-   - motifs choisis + personnages cités + traits valorisés
-3. Elle DOIT faire ressortir des constantes claires :
-   - rapport au pouvoir
-   - rapport à la pression
-   - rapport aux relations
-   - posture face à la responsabilité
-4. Elle DOIT inclure 1 point de vigilance réaliste, formulé sans jugement.
-5. Elle DOIT citer explicitement les œuvres ET les personnages.
-6. Elle DOIT être exploitable pour la suite du profil (management, ambition, environnements).
-
-⚠️ PROFONDEUR INTERPRÉTATIVE OBLIGATOIRE :
-La synthèse DOIT être PROJECTIVE, pas descriptive :
-- Lecture en creux : "ce n'est probablement pas X, mais plutôt Y"
-- Position interprétative claire : prendre un angle, pas rester neutre
-- Tension ou moteur implicite : expliciter ce qui n'est pas dit mais révélé
-- Ton mentor lucide : non flatteur, non générique, non descriptif
-
-INTERDICTIONS ABSOLUES :
-- Synthèse descriptive (liste de traits, paraphrase des réponses)
-- Ton analytique neutre (sans position interprétative)
-- Formulations génériques réutilisables
-
-Format : Synthèse continue, dense, incarnée, structurante, PROJECTIVE.
-PAS de liste à puces. PAS de formatage excessif.
-Une lecture projective qui révèle, pas une description qui résume.`
-        },
-        ...messages,
-      ],
-    });
-
-    let mirror = completion.trim();
-
-    // Validation synthèse avec retry
-    const validation = validateSynthesis2B(mirror);
-    if (validation.valid) {
-      // VALIDATION PROFONDEUR INTERPRÉTATIVE : Vérifier que le miroir infère, ne reformule pas
-      const block2BAnswers = block2UserMessages.length >= 3 ? block2UserMessages.slice(3) : [];
-      const depthValidation = validateInterpretiveDepth(mirror, block2BAnswers);
-      
-      if (!depthValidation.valid || depthValidation.isDescriptive) {
-        // Miroir trop descriptif → retry avec prompt renforcé
-        console.warn(`[ORCHESTRATOR] Miroir BLOC 2B trop descriptif, retry avec profondeur interprétative`, depthValidation.errors);
-        
-        try {
-          const retryCompletion = await callOpenAI({
-            messages: [
-              { role: 'system', content: FULL_AXIOM_PROMPT },
-              {
-                role: 'system',
-                content: `RÈGLE ABSOLUE AXIOM — RETRY SYNTHÈSE BLOC 2B (PROFONDEUR INTERPRÉTATIVE OBLIGATOIRE)
-
-⚠️ ERREURS DÉTECTÉES DANS LA SYNTHÈSE PRÉCÉDENTE :
-${depthValidation.errors.map(e => `- ${e}`).join('\n')}
-
-Synthèse invalide précédente (TROP DESCRIPTIVE) :
-${mirror}
-
-Tu es en fin de BLOC 2B.
-RÉÉCRIS EN CONFORMITÉ STRICTE REVELIOM :
-
-⚠️ INTERDICTIONS ABSOLUES :
-- Reformuler les réponses du candidat
-- Paraphraser ce qu'il a dit
-- Décrire ce qu'il a mentionné
-- Lister des faits
-
-⚠️ OBLIGATIONS STRICTES :
-- INFÉRER ce que les réponses RÉVÈLENT du fonctionnement réel
-- Prendre une position interprétative claire
-- Formuler une lecture en creux : "ce n'est probablement pas X, mais plutôt Y"
-- Exclure au moins une autre lecture possible
-- Parler de ce que ça DIT de la personne, pas de ce qu'elle a dit
-
-Format : 4-6 lignes. Synthèse projective, pas descriptive.`,
-              },
-              ...messages,
-            ],
-          });
-          
-          mirror = retryCompletion.trim();
-          // Re-valider le format après retry
-          const retryFormatValidation = validateSynthesis2B(mirror);
-          if (!retryFormatValidation.valid) {
-            console.warn(`[ORCHESTRATOR] Miroir BLOC 2B (retry profondeur) format invalide, utilisation original`, retryFormatValidation.error);
-          }
-        } catch (e) {
-          console.error(`[ORCHESTRATOR] Erreur retry profondeur miroir BLOC 2B`, e);
-        }
-      }
-      
-      // VALIDATION ANALYSE INTERPRÉTATIVE : Vérifier que le miroir est vraiment interprétatif (pas descriptif/récapitulatif)
-      const analysisValidation = validateInterpretiveAnalysis(mirror, block2BAnswers, 'mirror', 2);
-      
-      if (!analysisValidation.valid) {
-        // Miroir trop descriptif/récapitulatif → retry avec prompt renforcé
-        console.warn(`[ORCHESTRATOR] Miroir BLOC 2B pas assez interprétatif, retry avec analyse interprétative`, analysisValidation.errors);
-        
-        try {
-          const retryCompletion = await callOpenAI({
-            messages: [
-              { role: 'system', content: FULL_AXIOM_PROMPT },
-              {
-                role: 'system',
-                content: `RÈGLE ABSOLUE AXIOM — RETRY SYNTHÈSE BLOC 2B (ANALYSE INTERPRÉTATIVE OBLIGATOIRE)
-
-⚠️ ERREURS DÉTECTÉES DANS LA SYNTHÈSE PRÉCÉDENTE :
-${analysisValidation.errors.map(e => `- ${e}`).join('\n')}
-
-Synthèse invalide précédente (TROP DESCRIPTIVE/RÉCAPITULATIVE) :
-${mirror}
-
-Tu es en fin de BLOC 2B.
-RÉÉCRIS EN CONFORMITÉ STRICTE REVELIOM :
-
-⚠️ INTERDICTIONS ABSOLUES :
-- Reformuler les réponses du candidat
-- Paraphraser ce qu'il a dit
-- Répéter ce qu'il a exprimé
-- Lister des faits
-
-⚠️ OBLIGATIONS STRICTES :
-- INFÉRER ce que les réponses RÉVÈLENT du fonctionnement réel
-- Contenir une lecture en creux OBLIGATOIRE : "ce n'est probablement pas X, mais plutôt Y"
-- Apporter un décalage interprétatif : tension, contradiction, logique sous-jacente, moteur implicite
-- Le texte doit provoquer "oui... ok, vu comme ça" et non "oui, c'est exactement ce que j'ai dit"
-
-Format : 4-6 lignes. Synthèse projective, pas descriptive.`,
-              },
-              ...messages,
-            ],
-          });
-          
-          mirror = retryCompletion.trim();
-          // Re-valider le format après retry
-          const retryFormatValidation = validateSynthesis2B(mirror);
-          if (!retryFormatValidation.valid) {
-            console.warn(`[ORCHESTRATOR] Miroir BLOC 2B (retry analyse) format invalide, utilisation original`, retryFormatValidation.error);
-          }
-        } catch (e) {
-          console.error(`[ORCHESTRATOR] Erreur retry analyse miroir BLOC 2B`, e);
-        }
-      }
-      
-      // REFORMULATION STYLISTIQUE : Adapter au style mentor incarné
-      try {
-        const adaptedMirror = await adaptToMentorStyle(mirror, 'mirror');
-        console.log(`[ORCHESTRATOR] Miroir BLOC 2B adapté au style mentor`);
-        return adaptedMirror;
-      } catch (e) {
-        // Si erreur adaptation, utiliser miroir original
-        console.error(`[ORCHESTRATOR] Erreur adaptation miroir BLOC 2B`, e);
-        return mirror;
-      }
-    }
-    
-    if (!validation.valid) {
-      console.error('[ORCHESTRATOR] [2B_VALIDATION_FAIL] type=synthesis', validation.error);
-      console.log('[ORCHESTRATOR] [2B_RETRY_TRIGGERED] retry=1');
-      
-      // Retry avec prompt renforcé
-      const retryCompletion = await callOpenAI({
-        messages: [
-          { role: 'system', content: FULL_AXIOM_PROMPT },
-          {
-            role: 'system',
-            content: `RÈGLE ABSOLUE AXIOM — SYNTHÈSE FINALE BLOC 2B (RETRY - FORMAT STRICT) :
-
-La synthèse précédente n'a pas respecté le format requis.
-
-Tu es en fin de BLOC 2B.
-Toutes les questions projectives ont été répondues.
-
-ŒUVRES DU CANDIDAT :
-- Œuvre #3 : ${works[2] || 'N/A'}
-- Œuvre #2 : ${works[1] || 'N/A'}
-- Œuvre #1 : ${works[0] || 'N/A'}
-- Œuvre noyau : ${coreWork}
-
-RÉPONSES DU CANDIDAT :
-${answersContext}
-
-⚠️ FORMAT STRICT OBLIGATOIRE :
-
-1. La synthèse DOIT faire EXACTEMENT 4 à 6 lignes.
-2. Elle DOIT mentionner explicitement :
-   - au moins 2 œuvres par leur nom
-   - au moins 2 personnages par leur nom
-   - les motifs choisis
-   - les traits valorisés
-3. Elle DOIT croiser motifs + personnages + traits pour faire ressortir :
-   - rapport au pouvoir (OBLIGATOIRE)
-   - rapport à la pression (OBLIGATOIRE)
-   - rapport aux relations (OBLIGATOIRE)
-   - posture face à la responsabilité (OBLIGATOIRE)
-4. Elle DOIT inclure 1 point de vigilance réaliste.
-
-Format : Synthèse continue, dense, incarnée, structurante.`
-          },
-          ...messages,
-        ],
-      });
-      
-      mirror = retryCompletion.trim();
-      const retryValidation = validateSynthesis2B(mirror);
-      if (retryValidation.valid) {
-        // REFORMULATION STYLISTIQUE : Adapter au style mentor incarné (après retry)
-        try {
-          const adaptedMirror = await adaptToMentorStyle(mirror, 'mirror');
-          console.log(`[ORCHESTRATOR] Miroir BLOC 2B (retry) adapté au style mentor`);
-          return adaptedMirror;
-        } catch (e) {
-          console.error(`[ORCHESTRATOR] Erreur adaptation miroir BLOC 2B (retry)`, e);
-          return mirror;
-        }
-      } else {
-        console.error('[ORCHESTRATOR] [2B_VALIDATION_FAIL] type=synthesis (after retry)', retryValidation.error);
-      }
-    }
-
-    // REFORMULATION STYLISTIQUE : Adapter même si validation échouée (fail-soft)
     try {
-      const adaptedMirror = await adaptToMentorStyle(mirror, 'mirror');
-      return adaptedMirror;
-    } catch (e) {
-      console.error(`[ORCHESTRATOR] Erreur adaptation miroir BLOC 2B (fail-soft)`, e);
-      return mirror;
+      // ÉTAPE 1 — INTERPRÉTATION (FROIDE, LOGIQUE)
+      console.log('[BLOC2B][ETAPE1] Génération structure interprétative...');
+
+      const additionalContext = `ŒUVRES DU CANDIDAT :
+- Œuvre #3 : ${works[2] || 'N/A'}
+- Œuvre #2 : ${works[1] || 'N/A'}
+- Œuvre #1 : ${works[0] || 'N/A'}
+- Œuvre noyau : ${coreWork}`;
+
+      const structure = await generateInterpretiveStructure(block2BAnswers, 'block2b', additionalContext);
+
+      console.log('[BLOC2B][ETAPE1] Structure générée:', {
+        hypothese_centrale: structure.hypothese_centrale.substring(0, 50) + '...',
+        mecanisme: structure.mecanisme.substring(0, 50) + '...',
+      });
+
+      // ÉTAPE 2 — RENDU MENTOR INCARNÉ
+      console.log('[BLOC2B][ETAPE2] Rendu mentor incarné...');
+
+      const mentorText = await renderMentorStyle(structure, 'block2b');
+
+      console.log('[BLOC2B][ETAPE2] Texte mentor généré');
+
+      // VALIDATION FINALE (FORMAT SYNTHÈSE 2B)
+      const validation = validateSynthesis2B(mentorText);
+
+      if (validation.valid) {
+        console.log('[BLOC2B][SUCCESS] Miroir généré avec succès (nouvelle architecture)');
+        return mentorText;
+      } else {
+        console.warn('[BLOC2B][WARN] Format synthèse invalide, mais texte servi (fail-soft):', validation.error);
+        return mentorText;
+      }
+
+    } catch (error) {
+      console.error('[BLOC2B][ERROR] Erreur nouvelle architecture, fallback ancienne méthode:', error);
+      throw new Error(`Failed to generate mirror with new architecture: ${error}`);
     }
   }
 }

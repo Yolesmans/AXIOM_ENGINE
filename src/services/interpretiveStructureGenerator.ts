@@ -26,18 +26,45 @@ export type InterpretiveStructure = {
 };
 
 /**
- * Génère une structure interprétative froide et logique pour le BLOC 1
+ * Type de bloc pour adapter le contexte d'interprétation
+ */
+export type BlockType = 
+  | 'block1' 
+  | 'block2b' 
+  | 'block3' 
+  | 'block4' 
+  | 'block5' 
+  | 'block6' 
+  | 'block7' 
+  | 'block8' 
+  | 'block9' 
+  | 'synthesis' 
+  | 'matching';
+
+/**
+ * Génère une structure interprétative froide et logique pour TOUS les blocs
  * 
  * ÉTAPE 1 — INTERPRÉTATION (FROIDE, LOGIQUE)
  * - Modèle : gpt-4o-mini (coût réduit)
  * - Temperature : 0.3 (stabilité)
  * - Output : JSON structuré (pas de texte final)
  * 
- * @param userAnswers Réponses utilisateur BLOC 1 uniquement
+ * ⚠️ RÈGLE ABSOLUE : HYPOTHÈSE CENTRALE OBLIGATOIRE
+ * L'output doit être UNE hypothèse centrale de fonctionnement,
+ * formulable à l'oral ainsi : "Cette personne fonctionne comme ça : ..."
+ * 
+ * Ce n'est PAS : une moyenne, une liste de traits, un résumé, une reformulation.
+ * C'est un MÉCANISME : ce qui met en mouvement, ce qui éteint le moteur, la tension centrale.
+ * 
+ * @param userAnswers Réponses utilisateur du bloc concerné
+ * @param blockType Type de bloc (contexte ≠ profondeur)
+ * @param additionalContext Contexte additionnel (œuvres, personnages, etc.) pour certains blocs
  * @returns Structure interprétative JSON
  */
-export async function generateInterpretiveStructureBlock1(
-  userAnswers: string[]
+export async function generateInterpretiveStructure(
+  userAnswers: string[],
+  blockType: BlockType,
+  additionalContext?: string
 ): Promise<InterpretiveStructure> {
   if (!userAnswers || userAnswers.length === 0) {
     throw new Error('userAnswers cannot be empty');
@@ -46,6 +73,9 @@ export async function generateInterpretiveStructureBlock1(
   const answersContext = userAnswers
     .map((answer, index) => `Q${index + 1}: ${answer}`)
     .join('\n');
+
+  // Adapter le contexte selon le type de bloc (contexte ≠ profondeur)
+  const blockContext = getBlockContext(blockType, additionalContext);
 
   let retries = 0;
   const maxRetries = 1;
@@ -108,7 +138,9 @@ INTERDICTIONS ABSOLUES :
 - Produire du texte final (seulement JSON)
 - Hypothèse centrale non formulable comme "Cette personne fonctionne comme ça : ..."
 
-Réponses du candidat BLOC 1 (ENSEMBLE À ANALYSER) :
+${blockContext}
+
+Réponses du candidat (ENSEMBLE À ANALYSER) :
 ${answersContext}
 
 ÉTAPE 1 : Formule dans ta tête l'hypothèse centrale : "Cette personne fonctionne comme ça : ..."
@@ -118,7 +150,7 @@ Produis UNIQUEMENT un JSON valide avec TOUS les champs remplis de manière PRÉC
           }
         ],
         temperature: 0.3,
-        max_tokens: 300, // 4 champs au lieu de 7
+        max_tokens: 300,
         response_format: { type: 'json_object' },
       });
 
@@ -151,7 +183,7 @@ Produis UNIQUEMENT un JSON valide avec TOUS les champs remplis de manière PRÉC
         throw new Error(`Invalid structure: ${validation.errors.join(', ')}`);
       }
 
-      console.log('[INTERPRETIVE_STRUCTURE] Structure générée avec succès pour BLOC 1');
+      console.log(`[INTERPRETIVE_STRUCTURE] Structure générée avec succès pour ${blockType}`);
       return structure;
 
     } catch (error: any) {
@@ -165,6 +197,50 @@ Produis UNIQUEMENT un JSON valide avec TOUS les champs remplis de manière PRÉC
   }
 
   throw new Error('Failed to generate interpretive structure after retries');
+}
+
+/**
+ * Génère une structure interprétative froide et logique pour le BLOC 1
+ * (Fonction de compatibilité pour migration progressive)
+ * 
+ * @deprecated Utiliser generateInterpretiveStructure() avec blockType='block1'
+ */
+export async function generateInterpretiveStructureBlock1(
+  userAnswers: string[]
+): Promise<InterpretiveStructure> {
+  return generateInterpretiveStructure(userAnswers, 'block1');
+}
+
+/**
+ * Retourne le contexte spécifique au bloc (contexte ≠ profondeur)
+ */
+function getBlockContext(blockType: BlockType, additionalContext?: string): string {
+  switch (blockType) {
+    case 'block1':
+      return 'CONTEXTE : BLOC 1 — Énergie & moteurs internes\nAnalyse le mécanisme de fonctionnement basé sur les réponses concernant l\'énergie, les moteurs, la pression et l\'ennui.';
+    case 'block2b':
+      return `CONTEXTE : BLOC 2B — Analyse projective des œuvres\n${additionalContext || ''}\nAnalyse le mécanisme de fonctionnement basé sur les projections narratives (motifs, personnages, traits valorisés).`;
+    case 'block3':
+      return 'CONTEXTE : BLOC 3 — Valeurs profondes & fonctionnement cognitif\nAnalyse le mécanisme de fonctionnement basé sur les valeurs et la manière de décider.';
+    case 'block4':
+      return 'CONTEXTE : BLOC 4 — Compétences réelles & illusions\nAnalyse le mécanisme de fonctionnement basé sur le rapport à la valeur, la lucidité, l\'effort vs statut.';
+    case 'block5':
+      return 'CONTEXTE : BLOC 5 — Ambition & trajectoire future\nAnalyse le mécanisme de fonctionnement basé sur le niveau d\'ambition, l\'horizon, le type de trajectoire.';
+    case 'block6':
+      return 'CONTEXTE : BLOC 6 — Contraintes & réalités\nAnalyse le mécanisme de fonctionnement basé sur les contraintes réelles (mobilité, salaire, rythme).';
+    case 'block7':
+      return 'CONTEXTE : BLOC 7 — Identité professionnelle\nAnalyse le mécanisme de fonctionnement basé sur le métier naturel, rêvé, apprenable.';
+    case 'block8':
+      return 'CONTEXTE : BLOC 8 — Relation au management\nAnalyse le mécanisme de fonctionnement basé sur le style de manager idéal, insupportable, capacité à manager.';
+    case 'block9':
+      return 'CONTEXTE : BLOC 9 — Style social & dynamique interpersonnelle\nAnalyse le mécanisme de fonctionnement basé sur l\'intro/extraversion, selectivité, rapport au groupe, gestion des conflits.';
+    case 'synthesis':
+      return 'CONTEXTE : SYNTHÈSE FINALE — Lecture globale unifiée\nAnalyse le mécanisme de fonctionnement global basé sur l\'ENSEMBLE des réponses des blocs 1 à 9.';
+    case 'matching':
+      return 'CONTEXTE : MATCHING — Compatibilité avec le poste\nAnalyse le mécanisme de fonctionnement en relation avec les exigences du poste (vente, exposition, effort, incertitude, long terme).';
+    default:
+      return 'CONTEXTE : Analyse du mécanisme de fonctionnement.';
+  }
 }
 
 /**

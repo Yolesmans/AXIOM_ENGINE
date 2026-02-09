@@ -1,0 +1,13 @@
+{
+  "sessionId": null,
+  "steps": [
+    {
+      "step": "UNKNOWN",
+      "state": "UNKNOWN",
+      "expectsAnswer": false,
+      "response": "",
+      "currentBlock": null
+    }
+  ],
+  "completed": false
+}
