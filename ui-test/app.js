@@ -63,6 +63,40 @@ function addMessage(role, text, isProgressiveMirror = false) {
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
 
+// SAFEGUARD : Extraire uniquement la première question d'un texte
+// Garantit qu'une seule question est affichée même si le backend en envoie plusieurs
+function extractFirstQuestion(text) {
+  if (!text) return text;
+  
+  // Cas 1 : Détection séparateur explicite (déjà géré)
+  if (text.includes('---QUESTION_SEPARATOR---')) {
+    return text.split('---QUESTION_SEPARATOR---')[0].trim();
+  }
+  
+  // Cas 2 : Détection sémantique — plusieurs points d'interrogation
+  const questionMarks = (text.match(/\?/g) || []).length;
+  if (questionMarks > 1) {
+    // Chercher le premier point d'interrogation
+    const firstQuestionEnd = text.indexOf('?');
+    if (firstQuestionEnd !== -1) {
+      const afterQuestionMark = text.substring(firstQuestionEnd + 1);
+      // Chercher un double saut de ligne (fin de question probable)
+      const nextDoubleLineBreak = afterQuestionMark.search(/\n\s*\n/);
+      if (nextDoubleLineBreak !== -1) {
+        const truncated = text.substring(0, firstQuestionEnd + 1 + nextDoubleLineBreak).trim();
+        console.warn('[FRONTEND] [SEQUENTIAL_LOCK] Multiple questions detected (semantic) — displaying only first');
+        return truncated;
+      }
+      // Sinon, prendre jusqu'au premier point d'interrogation inclus
+      const truncated = text.substring(0, firstQuestionEnd + 1).trim();
+      console.warn('[FRONTEND] [SEQUENTIAL_LOCK] Multiple questions detected (semantic) — displaying only first');
+      return truncated;
+    }
+  }
+  
+  return text.trim();
+}
+
 // Fonction pour appeler l'API /axiom
 async function callAxiom(message, event = null) {
   if (isWaiting || !sessionId) {
@@ -141,21 +175,10 @@ async function callAxiom(message, event = null) {
         }, 900);
       } else {
         // Affichage normal (pas de découpage progressif)
-        // LOT 1 : data.response doit contenir UNIQUEMENT une question ou UNIQUEMENT un miroir
+        // SAFEGUARD : Extraire uniquement la première question pour garantir séquentialité stricte
         const responseText = data.response.trim();
-        
-        // Protection LOT 1 : Détecter et isoler une seule question/miroir
-        // Si plusieurs questions sont présentes (séparateur ---QUESTION_SEPARATOR---), n'afficher que la première
-        if (responseText.includes('---QUESTION_SEPARATOR---')) {
-          // Plusieurs questions détectées → n'afficher que la première (LOT 1 : séquentiel strict)
-          const firstQuestion = responseText.split('---QUESTION_SEPARATOR---')[0].trim();
-          console.warn('[FRONTEND] [LOT1] Multiple questions detected in response, displaying only first question');
-          addMessage('assistant', firstQuestion);
-        } else {
-          // Une seule question/miroir → afficher normalement
-          // LOT 1 : Garantir qu'on n'affiche qu'un seul message assistant à la fois
-          addMessage('assistant', responseText);
-        }
+        const firstQuestion = extractFirstQuestion(responseText);
+        addMessage('assistant', firstQuestion);
       }
     }
 
