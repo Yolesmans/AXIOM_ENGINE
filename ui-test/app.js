@@ -8,6 +8,7 @@ let posteId = null;
 let isWaiting = false;
 let showStartButton = false;
 let isInitializing = false;
+let hasActiveQuestion = false; // Verrou UI séquentiel : empêche l'affichage de plusieurs questions simultanément
 
 // Fonction pour obtenir la clé localStorage
 function getStorageKey() {
@@ -16,9 +17,17 @@ function getStorageKey() {
 
 // Fonction pour ajouter un message
 // LOT 1 : Protection anti-doublon pour garantir séquentialité stricte
-function addMessage(role, text) {
+function addMessage(role, text, isProgressiveMirror = false) {
   const messagesContainer = document.getElementById('messages');
   if (!messagesContainer) return;
+
+  // Verrou UI séquentiel : refuser d'afficher une nouvelle question si une question est déjà active
+  if (role === 'assistant' && !isProgressiveMirror) {
+    if (hasActiveQuestion) {
+      console.warn('[FRONTEND] [SEQUENTIAL_LOCK] Question active déjà affichée, refus d\'affichage de nouvelle question');
+      return; // Refuser d'afficher une nouvelle question
+    }
+  }
 
   // LOT 1 : Protection anti-doublon - ne pas afficher le même message deux fois
   if (role === 'assistant') {
@@ -116,16 +125,17 @@ async function callAxiom(message, event = null) {
       // Affichage progressif des miroirs REVELIOM
       if (data.progressiveDisplay === true && Array.isArray(data.mirrorSections) && data.mirrorSections.length === 3) {
         // LOT 1 : Miroir seul, aucune question suivante dans le même message
+        // Les miroirs progressifs NE verrouillent JAMAIS (isProgressiveMirror = true)
         // Afficher section 1️⃣
-        addMessage('assistant', data.mirrorSections[0]);
+        addMessage('assistant', data.mirrorSections[0], true);
         
         // Attendre 900ms puis afficher section 2️⃣
         setTimeout(() => {
-          addMessage('assistant', data.mirrorSections[1]);
+          addMessage('assistant', data.mirrorSections[1], true);
           
           // Attendre 900ms puis afficher section 3️⃣
           setTimeout(() => {
-            addMessage('assistant', data.mirrorSections[2]);
+            addMessage('assistant', data.mirrorSections[2], true);
             // LOT 1 : Pas de question suivante affichée ici - le backend retourne uniquement le miroir
           }, 900);
         }, 900);
@@ -157,6 +167,9 @@ async function callAxiom(message, event = null) {
       showStartButton = true;
       displayMatchingButton();
     } else if (data.expectsAnswer === true) {
+      // Activer le verrou UI séquentiel : une question est maintenant active
+      hasActiveQuestion = true;
+      
       // Réafficher le champ de saisie si on attend une réponse
       const chatForm = document.getElementById('chat-form');
       if (chatForm) {
@@ -166,6 +179,9 @@ async function callAxiom(message, event = null) {
       if (userInput) {
         userInput.disabled = false;
       }
+    } else {
+      // expectsAnswer === false : pas de question active (miroir, bouton, etc.)
+      hasActiveQuestion = false;
     }
 
     return data;
@@ -174,6 +190,8 @@ async function callAxiom(message, event = null) {
       typingIndicator.classList.add('hidden');
     }
     console.error('Erreur:', error);
+    // En cas d'erreur API, relâcher le verrou pour permettre une nouvelle tentative
+    hasActiveQuestion = false;
     throw error;
   } finally {
     isWaiting = false;
@@ -458,6 +476,9 @@ window.addEventListener('DOMContentLoaded', async () => {
         if (!message || isWaiting || !sessionId) {
           return;
         }
+
+        // Désactiver le verrou UI séquentiel : l'utilisateur a répondu
+        hasActiveQuestion = false;
 
         // Afficher le message de l'utilisateur
         addMessage('user', message);
