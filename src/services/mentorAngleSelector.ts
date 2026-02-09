@@ -95,11 +95,46 @@ STRUCTURE DE L'ANALYSE COMPLÈTE :
 
 ⚠️ TU DOIS :
 - Choisir UN angle unique dans l'analyse
-- Le formuler comme "Cette personne fonctionne comme ça : ..."
 - Accepter de perdre le reste
 - Tranché, assumé, non équilibré
 
-Produis UNIQUEMENT l'angle mentor (UNE phrase, formulable oralement), sans texte additionnel.`
+⚠️ FORMAT OBLIGATOIRE DE L'ANGLE — RENVERSEMENT INTERPRÉTATIF (NON NÉGOCIABLE)
+
+L'angle DOIT être formulé sous la forme EXACTE :
+
+"Ce n'est probablement pas X, mais Y."
+
+Où :
+- X = ce qui semble évident ou attendu à la lecture des réponses
+  (effort, performance, sécurité, ambition, reconnaissance, stabilité, etc.)
+- Y = le moteur réel, plus profond, non évident
+  (impact concret, utilité vécue, construction personnelle, alignement, valeur incarnée, etc.)
+
+⚠️ Toute sortie qui n'utilise PAS explicitement ce renversement est invalide.
+
+📌 INSTRUCTIONS IMPÉRATIVES :
+
+1. TU DOIS produire un angle sous forme de RENVERSEMENT INTERPRÉTATIF.
+2. TU DOIS identifier implicitement :
+   - ce qui semble évident mais n'est PAS le vrai moteur (X)
+   - ce qui se cache derrière et explique réellement le fonctionnement (Y)
+3. TU DOIS formuler l'angle avec le pattern :
+   "Ce n'est probablement pas X, mais Y."
+4. TU NE DOIS JAMAIS produire :
+   - une phrase descriptive simple
+   - une affirmation directe sans renversement
+   - une liste
+   - une explication
+
+📚 EXEMPLES DE FORMAT ATTENDU (OBLIGATOIRES) :
+
+- "Ce n'est probablement pas l'effort ou la performance qui te met en mouvement, mais le moment où tu sens que ton action a un impact réel sur quelqu'un."
+
+- "Ce n'est probablement pas la recherche de sécurité qui te guide, mais le besoin de construire quelque chose qui te ressemble vraiment."
+
+- "Ce n'est probablement pas l'objectif final qui te fait tenir, mais le sentiment d'être utile et décisif dans le parcours de quelqu'un."
+
+Produis UNIQUEMENT l'angle mentor (UNE phrase avec renversement interprétatif, formulable oralement), sans texte additionnel.`
           },
           {
             role: 'user',
@@ -117,7 +152,7 @@ ${structure.ce_qui_eteint_son_moteur}
 MÉCANISME :
 ${structure.mecanisme}
 
-Choisis UN angle unique et tranché. Formule-le comme "Cette personne fonctionne comme ça : ..."`
+Choisis UN angle unique et tranché. Formule-le avec un renversement interprétatif : "Ce n'est probablement pas X, mais Y."`
           }
         ],
         temperature: 0.5,
@@ -156,6 +191,18 @@ Choisis UN angle unique et tranché. Formule-le comme "Cette personne fonctionne
         }
         // Fail-soft : servir quand même
         console.warn(`[MENTOR_ANGLE_SELECTOR] Angle servi malgré détection résumé`);
+      }
+
+      // Validation : l'angle DOIT contenir un renversement interprétatif
+      const hasReversal = /(probablement pas|n'est probablement pas).*mais/i.test(mentorAngle);
+      if (!hasReversal) {
+        console.warn(`[MENTOR_ANGLE_SELECTOR] Angle sans renversement interprétatif (retry ${retries})`);
+        if (retries < maxRetries) {
+          retries++;
+          continue;
+        }
+        // Fail-soft : servir quand même mais log warning
+        console.warn(`[MENTOR_ANGLE_SELECTOR] Angle servi sans renversement interprétatif (non conforme format requis)`);
       }
 
       console.log(`[MENTOR_ANGLE_SELECTOR] Angle mentor sélectionné avec succès`);
