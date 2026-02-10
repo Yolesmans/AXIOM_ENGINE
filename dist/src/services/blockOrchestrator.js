@@ -1,6 +1,7 @@
 import { candidateStore } from '../store/sessionStore.js';
 import { callOpenAI } from './openaiClient.js';
 import { BLOC_01, BLOC_02, BLOC_03, executeAxiom } from '../engine/axiomExecutor.js';
+import { STATIC_QUESTIONS } from '../engine/staticQuestions.js';
 // getFullAxiomPrompt n'est pas exporté, on doit le reconstruire
 import { PROMPT_AXIOM_ENGINE, PROMPT_AXIOM_PROFIL } from '../engine/prompts.js';
 import { validateTraitsSpecificity, validateMotifsSpecificity, validateSynthesis2B, validateQuestion2A1, validateQuestion2A3 } from './validators.js';
@@ -158,9 +159,12 @@ export class BlockOrchestrator {
                 console.log('[ORCHESTRATOR] BLOC 1 déjà démarré, servir question depuis queue');
                 return this.serveNextQuestion(currentCandidate.candidateId, blockNumber);
             }
-            // Générer toutes les questions BLOC 1 (génération interne, pas affichage)
-            console.log('[ORCHESTRATOR] generate questions bloc 1 (API)');
-            const questions = await this.generateQuestionsForBlock1(currentCandidate);
+            // BLOC 1 : questions statiques (0 token, pas d'appel LLM)
+            const questions = STATIC_QUESTIONS[1] ?? [];
+            if (questions.length === 0) {
+                throw new Error('BLOC 1 static questions not found');
+            }
+            console.log('[ORCHESTRATOR] BLOC 1 questions from static catalog (no API)');
             candidateStore.setQuestionsForBlock(currentCandidate.candidateId, blockNumber, questions);
             // Servir UNIQUEMENT la première question (LOT 1 : séquentiel strict)
             return this.serveNextQuestion(currentCandidate.candidateId, blockNumber);
