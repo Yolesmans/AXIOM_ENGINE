@@ -16,7 +16,7 @@ import { validateMirrorREVELIOM, type MirrorValidationResult } from './validateM
 import { parseMirrorSections } from './parseMirrorSections.js';
 import { generateInterpretiveStructure, type BlockType } from './interpretiveStructureGenerator.js';
 import { selectMentorAngle } from './mentorAngleSelector.js';
-import { renderMentorStyle } from './mentorStyleRenderer.js';
+import { renderMentorStyle, transposeToSecondPerson } from './mentorStyleRenderer.js';
 
 function getFullAxiomPrompt(): string {
   return `${PROMPT_AXIOM_ENGINE}\n\n${PROMPT_AXIOM_PROFIL}`;
@@ -160,6 +160,7 @@ export class BlockOrchestrator {
     userMessage: string | null,
     event: string | null,
     onChunk?: (s: string) => void,
+    onUx?: (s: string) => void,
   ): Promise<OrchestratorResult> {
     // Déterminer le bloc en cours
     const currentBlock = candidate.session.currentBlock || 1;
@@ -174,11 +175,11 @@ export class BlockOrchestrator {
       
       // Si BLOC 2A terminé (3 réponses) → passer à BLOC 2B
       if (answeredCount >= 3) {
-        return this.handleBlock2B(candidate, userMessage, event, onChunk);
+        return this.handleBlock2B(candidate, userMessage, event, onChunk, onUx);
       }
       
       // Sinon → continuer BLOC 2A
-      return this.handleBlock2A(candidate, userMessage, event, onChunk);
+      return this.handleBlock2A(candidate, userMessage, event, onChunk, onUx);
     }
     
     // BLOC 1 (logique existante)
@@ -330,7 +331,7 @@ export class BlockOrchestrator {
         console.log('[ORCHESTRATOR] generate mirror bloc 1 (API)');
         console.log('[LOT1] Mirror generated — awaiting validation');
         candidateStore.markBlockComplete(currentCandidate.candidateId, blockNumber);
-        const mirror = await this.generateMirrorForBlock1(currentCandidate, onChunk);
+        const mirror = await this.generateMirrorForBlock1(currentCandidate, onChunk, onUx);
         
         // Enregistrer le miroir dans conversationHistory
         candidateStore.appendAssistantMessage(currentCandidate.candidateId, mirror, {
@@ -466,7 +467,7 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
    * - Suppression validations heuristiques complexes (validateInterpretiveAnalysis)
    * - Validation simple : structure JSON + marqueurs expérientiels
    */
-  private async generateMirrorForBlock1(candidate: AxiomCandidate, onChunk?: (s: string) => void): Promise<string> {
+  private async generateMirrorForBlock1(candidate: AxiomCandidate, onChunk?: (s: string) => void, onUx?: (s: string) => void): Promise<string> {
     // Construire le contexte des réponses depuis conversationHistory (source robuste)
     const conversationHistory = candidate.conversationHistory || [];
     const block1UserMessages = conversationHistory
@@ -486,13 +487,21 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
     console.log('[BLOC1][NEW_ARCHITECTURE] Génération miroir en 3 étapes (interprétation + angle + rendu)');
     console.log('[BLOC1] Réponses utilisateur:', userAnswers.length);
 
+    // UX FAST — occupation pendant analyse (1 message statique max)
+    let occupationTimer: ReturnType<typeof setTimeout> | null = null;
+    if (onUx) {
+      occupationTimer = setTimeout(() => {
+        onUx('⏳ Je cherche ce qui relie vraiment tes réponses.\n\n');
+      }, 1500);
+    }
+
     try {
       // ============================================
       // ÉTAPE 1 — INTERPRÉTATION (FROIDE, LOGIQUE)
       // ============================================
       console.log('[BLOC1][ETAPE1] Génération structure interprétative...');
       
-        const structure = await generateInterpretiveStructure(userAnswers, 'block1');
+      const structure = await generateInterpretiveStructure(userAnswers, 'block1');
       
       console.log('[BLOC1][ETAPE1] Structure générée:', {
         hypothese_centrale: structure.hypothese_centrale.substring(0, 80) + '...',
@@ -504,16 +513,27 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
       // ============================================
       console.log('[BLOC1][ETAPE2] Sélection angle mentor...');
       
-        const mentorAngle = await selectMentorAngle(structure);
+      const mentorAngle = await selectMentorAngle(structure);
+      
+      if (occupationTimer) {
+        clearTimeout(occupationTimer);
+        occupationTimer = null;
+      }
       
       console.log('[BLOC1][ETAPE2] Angle mentor sélectionné:', mentorAngle.substring(0, 80) + '...');
 
+      // UX FAST — révélation anticipée : 1️⃣ Lecture implicite AVANT rendu 4o
+      if (onChunk) {
+        const earlyPrefix = '1️⃣ Lecture implicite\n\n' + transposeToSecondPerson(mentorAngle) + '\n\n2️⃣ Déduction personnalisée\n\n';
+        onChunk(earlyPrefix);
+      }
+
       // ============================================
-      // ÉTAPE 3 — RENDU MENTOR INCARNÉ
+      // ÉTAPE 3 — RENDU MENTOR INCARNÉ (prefix déjà envoyé si onChunk)
       // ============================================
       console.log('[BLOC1][ETAPE3] Rendu mentor incarné...');
       
-          const mentorText = await renderMentorStyle(mentorAngle, 'block1', onChunk);
+      const mentorText = await renderMentorStyle(mentorAngle, 'block1', onChunk, { prefixAlreadySent: !!onChunk });
       
       console.log('[BLOC1][ETAPE3] Texte mentor généré');
 
@@ -532,6 +552,7 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
       }
 
     } catch (error) {
+      if (occupationTimer) clearTimeout(occupationTimer);
       // Erreur dans la nouvelle architecture → fallback sur ancienne méthode (temporaire)
       console.error('[BLOC1][ERROR] Erreur nouvelle architecture, fallback ancienne méthode:', error);
       
@@ -549,6 +570,7 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
     userMessage: string | null,
     event: string | null,
     onChunk?: (s: string) => void,
+    onUx?: (s: string) => void,
   ): Promise<OrchestratorResult> {
     const blockNumber = 2;
     const candidateId = candidate.candidateId;
@@ -668,7 +690,7 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
       if (updatedAnsweredCount === 3) {
         console.log('[ORCHESTRATOR] BLOC 2A terminé → transition automatique vers BLOC 2B');
         // Transition automatique vers BLOC 2B (comme BLOC 1 → BLOC 2A après validation miroir)
-        return this.handleBlock2B(currentCandidate, null, null, onChunk);
+        return this.handleBlock2B(currentCandidate, null, null, onChunk, onUx);
       }
 
     }
@@ -685,7 +707,7 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
     }
 
     // Par défaut, générer la première question
-    return this.handleBlock2A(currentCandidate, null, null, onChunk);
+    return this.handleBlock2A(currentCandidate, null, null, onChunk, onUx);
   }
 
   private async generateQuestion2A1(candidate: AxiomCandidate, retryCount: number = 0): Promise<string> {
@@ -887,6 +909,7 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
     userMessage: string | null,
     event: string | null,
     onChunk?: (s: string) => void,
+    onUx?: (s: string) => void,
   ): Promise<OrchestratorResult> {
     const blockNumber = 2;
     const candidateId = candidate.candidateId;
@@ -1051,7 +1074,7 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
         console.log('[LOT1] Mirror generated — awaiting validation');
         candidateStore.markBlockComplete(candidateId, blockNumber);
         
-        const mirror = await this.generateMirror2B(currentCandidate, works, coreWorkAnswer, onChunk);
+        const mirror = await this.generateMirror2B(currentCandidate, works, coreWorkAnswer, onChunk, onUx);
         
         // Enregistrer le miroir dans conversationHistory
         candidateStore.appendAssistantMessage(candidateId, mirror, {
@@ -1709,6 +1732,7 @@ Format de sortie OBLIGATOIRE :
     works: string[],
     coreWork: string,
     onChunk?: (s: string) => void,
+    onUx?: (s: string) => void,
   ): Promise<string> {
     // Construire le contexte des réponses depuis conversationHistory (source robuste)
     const conversationHistory = candidate.conversationHistory || [];
@@ -1733,6 +1757,14 @@ Format de sortie OBLIGATOIRE :
     console.log('[BLOC2B][NEW_ARCHITECTURE] Génération miroir en 3 étapes (interprétation + angle + rendu)');
     console.log('[BLOC2B] Réponses utilisateur:', block2BAnswers.length);
 
+    // UX FAST — occupation pendant analyse (1 message statique max)
+    let occupationTimer: ReturnType<typeof setTimeout> | null = null;
+    if (onUx) {
+      occupationTimer = setTimeout(() => {
+        onUx('⏳ Je cherche ce qui relie vraiment tes réponses.\n\n');
+      }, 1500);
+    }
+
     try {
       // ÉTAPE 1 — INTERPRÉTATION (FROIDE, LOGIQUE)
       console.log('[BLOC2B][ETAPE1] Génération structure interprétative...');
@@ -1755,9 +1787,14 @@ Format de sortie OBLIGATOIRE :
 
       const mentorAngle = await selectMentorAngle(structure);
 
+      if (occupationTimer) {
+        clearTimeout(occupationTimer);
+        occupationTimer = null;
+      }
+
       console.log('[BLOC2B][ETAPE2] Angle mentor sélectionné:', mentorAngle.substring(0, 80) + '...');
 
-      // ÉTAPE 3 — RENDU MENTOR INCARNÉ
+      // ÉTAPE 3 — RENDU MENTOR INCARNÉ (BLOC 2B : pas de format 1️⃣2️⃣3️⃣, pas de révélation anticipée)
       console.log('[BLOC2B][ETAPE3] Rendu mentor incarné...');
 
       const mentorText = await renderMentorStyle(mentorAngle, 'block2b', onChunk);
@@ -1776,6 +1813,7 @@ Format de sortie OBLIGATOIRE :
       }
 
     } catch (error) {
+      if (occupationTimer) clearTimeout(occupationTimer);
       console.error('[BLOC2B][ERROR] Erreur nouvelle architecture, fallback ancienne méthode:', error);
       throw new Error(`Failed to generate mirror with new architecture: ${error}`);
     }

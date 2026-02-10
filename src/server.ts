@@ -978,6 +978,12 @@ app.post("/axiom/stream", async (req: Request, res: Response) => {
     writeEvent(null, { type: "token", content: chunk });
   };
 
+  /** UX FAST : envoi de texte statique (ACK, occupation) sans l'ajouter au contenu final (response dans done) */
+  const onUx = (text: string) => {
+    if (!text) return;
+    writeEvent(null, { type: "token", content: text });
+  };
+
   try {
     const parsed = AxiomBodySchema.safeParse(req.body);
     if (!parsed.success) {
@@ -1018,6 +1024,9 @@ app.post("/axiom/stream", async (req: Request, res: Response) => {
       res.end();
       return;
     }
+
+    // UX FAST — ACK immédiat (T=0) : l'utilisateur voit du texte en < 300 ms
+    onUx('🧠 Je prends le temps de relier ce que tu viens d\'exprimer.\n\n');
 
     // ROUTE SSE : même logique métier que /axiom, mais avec onChunk branché
 
@@ -1101,7 +1110,7 @@ app.post("/axiom/stream", async (req: Request, res: Response) => {
         return;
       }
 
-      const result = await executeWithAutoContinue(candidate, undefined, undefined, onChunk);
+      const result = await executeWithAutoContinue(candidate, undefined, undefined, onChunk, onUx);
 
       // Mapper les états correctement (copié depuis /axiom)
       let responseState: string = "collecting";
@@ -1222,7 +1231,7 @@ app.post("/axiom/stream", async (req: Request, res: Response) => {
           return;
         }
 
-        const result = await executeWithAutoContinue(candidate, undefined, undefined, onChunk);
+        const result = await executeWithAutoContinue(candidate, undefined, undefined, onChunk, onUx);
 
         let responseState: string = "preamble";
         if (result.step === STEP_03_BLOC1) {
@@ -1340,7 +1349,7 @@ app.post("/axiom/stream", async (req: Request, res: Response) => {
     // 4) EVENT START_BLOC_1 — déléguer à l'orchestrateur avec onChunk
     if (event === "START_BLOC_1") {
       const orchestrator = new BlockOrchestrator();
-      const result = await orchestrator.handleMessage(candidate, null, "START_BLOC_1", onChunk);
+      const result = await orchestrator.handleMessage(candidate, null, "START_BLOC_1", onChunk, onUx);
 
       const candidateId = candidate.candidateId;
       candidate = candidateStore.get(candidateId);
@@ -1435,7 +1444,7 @@ app.post("/axiom/stream", async (req: Request, res: Response) => {
       }
 
       const orchestrator = new BlockOrchestrator();
-      const result = await orchestrator.handleMessage(candidate, userMessageText, null, onChunk);
+      const result = await orchestrator.handleMessage(candidate, userMessageText, null, onChunk, onUx);
 
       const candidateIdAfterExecution = candidate.candidateId;
       candidate = candidateStore.get(candidateIdAfterExecution);
@@ -1506,7 +1515,7 @@ app.post("/axiom/stream", async (req: Request, res: Response) => {
       let result: OrchestratorResult;
 
       try {
-        result = await orchestrator.handleMessage(candidate, userMessageText, null, onChunk);
+        result = await orchestrator.handleMessage(candidate, userMessageText, null, onChunk, onUx);
       } catch (error) {
         if (error instanceof Error && error.message.includes("BLOC 2B validation failed")) {
           console.error("[ORCHESTRATOR] [2B_VALIDATION_FAIL] fatal=true", error.message);
@@ -1603,7 +1612,7 @@ app.post("/axiom/stream", async (req: Request, res: Response) => {
     }
 
     // 9) Chemin générique — executeWithAutoContinue avec onChunk
-    const result = await executeWithAutoContinue(candidate, userMessageText, event || null, onChunk);
+    const result = await executeWithAutoContinue(candidate, userMessageText, event || null, onChunk, onUx);
 
     const candidateIdAfterExecution = candidate.candidateId;
     candidate = candidateStore.get(candidateIdAfterExecution);

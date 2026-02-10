@@ -821,25 +821,67 @@ app.post("/axiom", async (req, res) => {
         });
     }
 });
-// POST /axiom/stream — SSE hybrid streaming (mirrors, final profile, matching only)
+// POST /axiom/stream — SSE hybrid streaming (questions, mirrors, synthèse, matching)
 app.post("/axiom/stream", async (req, res) => {
     // Headers SSE obligatoires
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
+    // Désactiver le buffering côté proxy (si supporté)
+    try {
+        res.setHeader('X-Accel-Buffering', 'no');
+    }
+    catch {
+        // Best-effort uniquement
+    }
+    // Helper pour écrire un event SSE
+    const writeEvent = (event, data) => {
+        if (event) {
+            res.write(`event: ${event}\n`);
+        }
+        res.write(`data: ${JSON.stringify(data)}\n\n`);
+        // Support best-effort du flush (compression éventuelle désactivée par infra)
+        const anyRes = res;
+        if (typeof anyRes.flush === 'function') {
+            try {
+                anyRes.flush();
+            }
+            catch {
+                // ignorer les erreurs de flush
+            }
+        }
+    };
+    // Accumulateur de texte strictement égal au contenu final
+    let streamedText = '';
+    const onChunk = (chunk) => {
+        if (!chunk)
+            return;
+        streamedText += chunk;
+        writeEvent(null, { type: "token", content: chunk });
+    };
+    /** UX FAST : envoi de texte statique (ACK, occupation) sans l'ajouter au contenu final (response dans done) */
+    const onUx = (text) => {
+        if (!text)
+            return;
+        writeEvent(null, { type: "token", content: text });
+    };
     try {
         const parsed = AxiomBodySchema.safeParse(req.body);
         if (!parsed.success) {
-            res.write(`event: error\n`);
-            res.write(`data: ${JSON.stringify({ error: "BAD_REQUEST", details: parsed.error.flatten() })}\n\n`);
+            writeEvent("error", {
+                error: "BAD_REQUEST",
+                details: parsed.error.flatten(),
+            });
             res.end();
             return;
         }
         const { tenantId, posteId, sessionId: providedSessionId, identity: providedIdentity, message: userMessage, event, } = parsed.data;
         const sessionId = req.headers["x-session-id"] || providedSessionId;
         if (!sessionId) {
-            res.write(`event: error\n`);
-            res.write(`data: ${JSON.stringify({ error: "MISSING_SESSION_ID", message: "sessionId requis" })}\n\n`);
+            writeEvent("error", {
+                error: "MISSING_SESSION_ID",
+                message: "sessionId requis (header x-session-id ou body)",
+            });
             res.end();
             return;
         }
@@ -847,22 +889,587 @@ app.post("/axiom/stream", async (req, res) => {
             getPostConfig(tenantId, posteId);
         }
         catch (error) {
-            res.write(`event: error\n`);
-            res.write(`data: ${JSON.stringify({ error: "INVALID_POSTE", message: error instanceof Error ? error.message : "Invalid posteId" })}\n\n`);
+            writeEvent("error", {
+                error: "INVALID_POSTE",
+                message: error instanceof Error ? error.message : "Invalid posteId",
+            });
             res.end();
             return;
         }
-        // Pour l'instant, cette route refuse le streaming pour tous les types
-        // L'implémentation complète nécessitera de modifier executeAxiom et blockOrchestrator
-        // pour accepter un paramètre "stream: boolean" et utiliser callOpenAIStream
-        res.write(`event: error\n`);
-        res.write(`data: ${JSON.stringify({ error: "NOT_IMPLEMENTED", message: "Streaming route not yet fully implemented. Use /axiom for now." })}\n\n`);
+        // UX FAST — ACK immédiat (T=0) : l'utilisateur voit du texte en < 300 ms
+        onUx('🧠 Je prends le temps de relier ce que tu viens d\'exprimer.\n\n');
+        // ROUTE SSE : même logique métier que /axiom, mais avec onChunk branché
+        // 1) CAS IDENTITÉ VIA MESSAGE (Prénom/Nom/Email)
+        const messageText = userMessage || "";
+        const prenomMatch = messageText.match(/Prénom:\s*(.+)/i);
+        const nomMatch = messageText.match(/Nom:\s*(.+)/i);
+        const emailMatch = messageText.match(/Email:\s*(.+)/i);
+        if (prenomMatch && nomMatch && emailMatch) {
+            const firstName = prenomMatch[1].trim();
+            const lastName = nomMatch[1].trim();
+            const email = emailMatch[1].trim();
+            const identityValidation = IdentitySchema.safeParse({ firstName, lastName, email });
+            if (!identityValidation.success) {
+                writeEvent("error", {
+                    error: "INVALID_IDENTITY",
+                    message: "Avant de commencer AXIOM, j'ai besoin de :\n- ton prénom\n- ton nom\n- ton adresse email",
+                });
+                res.end();
+                return;
+            }
+            let candidate = candidateStore.get(sessionId);
+            if (!candidate) {
+                candidate = candidateStore.create(sessionId, tenantId);
+            }
+            // Enregistrer le message utilisateur (identité) dans conversationHistory
+            candidateStore.appendUserMessage(candidate.candidateId, messageText, {
+                step: STEP_01_IDENTITY,
+                kind: 'other',
+            });
+            candidate = candidateStore.updateIdentity(candidate.candidateId, {
+                firstName: identityValidation.data.firstName,
+                lastName: identityValidation.data.lastName,
+                email: identityValidation.data.email,
+                completedAt: new Date(),
+            });
+            if (!candidate) {
+                writeEvent("error", {
+                    error: "INTERNAL_ERROR",
+                    message: "Failed to update identity",
+                });
+                res.end();
+                return;
+            }
+            // Écriture Google Sheet non bloquante
+            try {
+                const trackingRow = candidateToLiveTrackingRow(candidate);
+                await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+            }
+            catch (error) {
+                console.error("[SHEET] ERROR", {
+                    sessionId: candidate.candidateId,
+                    email: candidate.identity.email,
+                    error: error instanceof Error ? error.message : String(error),
+                    stack: error instanceof Error ? error.stack : undefined,
+                });
+            }
+            // Passer à tone_choice après écriture Sheet
+            candidateStore.updateUIState(candidate.candidateId, {
+                identityDone: true,
+                step: STEP_02_TONE,
+            });
+            const candidateIdBeforeReload = candidate.candidateId;
+            candidate = candidateStore.get(candidateIdBeforeReload);
+            if (!candidate) {
+                candidate = await candidateStore.getAsync(candidateIdBeforeReload);
+            }
+            if (!candidate) {
+                writeEvent("error", {
+                    error: "INTERNAL_ERROR",
+                    message: "Failed to update UI state",
+                });
+                res.end();
+                return;
+            }
+            const result = await executeWithAutoContinue(candidate, undefined, undefined, onChunk, onUx);
+            // Mapper les états correctement (copié depuis /axiom)
+            let responseState = "collecting";
+            if (result.step === STEP_01_IDENTITY) {
+                responseState = "identity";
+            }
+            else if (result.step === STEP_02_TONE) {
+                responseState = "tone_choice";
+            }
+            else if (result.step === STEP_03_PREAMBULE) {
+                responseState = "preambule";
+            }
+            else if (result.step === STEP_03_BLOC1) {
+                responseState = "wait_start_button";
+            }
+            else if (result.step === BLOC_01) {
+                responseState = "collecting";
+            }
+            candidate = candidateStore.get(candidate.candidateId);
+            if (!candidate) {
+                writeEvent("error", {
+                    error: "INTERNAL_ERROR",
+                    message: "Failed to update session",
+                });
+                res.end();
+                return;
+            }
+            const payload = {
+                sessionId: candidate.candidateId,
+                currentBlock: candidate.session.currentBlock,
+                state: responseState,
+                response: streamedText || result.response || "",
+                step: result.step,
+                expectsAnswer: result.expectsAnswer,
+                autoContinue: result.autoContinue,
+                showStartButton: result.showStartButton,
+            };
+            writeEvent("done", {
+                type: "done",
+                ...payload,
+            });
+            res.end();
+            return;
+        }
+        // 2) CAS IDENTITÉ VIA BODY.identity
+        if (providedIdentity) {
+            let candidate = candidateStore.get(sessionId);
+            if (!candidate) {
+                candidate = candidateStore.create(sessionId, tenantId);
+            }
+            if (candidate && (candidate.session.state === "identity" || !candidate.identity.completedAt)) {
+                const identityValidation = IdentitySchema.safeParse(providedIdentity);
+                if (!identityValidation.success) {
+                    writeEvent("error", {
+                        error: "INVALID_IDENTITY",
+                        message: "Avant de commencer AXIOM, j'ai besoin de :\n- ton prénom\n- ton nom\n- ton adresse email",
+                        details: identityValidation.error.flatten(),
+                    });
+                    res.end();
+                    return;
+                }
+                // Enregistrer le message utilisateur (identité) dans conversationHistory
+                candidateStore.appendUserMessage(candidate.candidateId, `Prénom: ${identityValidation.data.firstName}\nNom: ${identityValidation.data.lastName}\nEmail: ${identityValidation.data.email}`, {
+                    step: STEP_01_IDENTITY,
+                    kind: 'other',
+                });
+                candidate = candidateStore.updateIdentity(candidate.candidateId, {
+                    firstName: identityValidation.data.firstName,
+                    lastName: identityValidation.data.lastName,
+                    email: identityValidation.data.email,
+                    completedAt: new Date(),
+                });
+                if (!candidate) {
+                    writeEvent("error", {
+                        error: "INTERNAL_ERROR",
+                        message: "Failed to update identity",
+                    });
+                    res.end();
+                    return;
+                }
+                // Écriture Google Sheet non bloquante
+                try {
+                    const trackingRow = candidateToLiveTrackingRow(candidate);
+                    await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+                }
+                catch (error) {
+                    console.error("[SHEET] ERROR", {
+                        sessionId: candidate.candidateId,
+                        email: candidate.identity.email,
+                        error: error instanceof Error ? error.message : String(error),
+                        stack: error instanceof Error ? error.stack : undefined,
+                    });
+                }
+                const candidateIdForReload2 = candidate.candidateId;
+                candidateStore.updateUIState(candidateIdForReload2, {
+                    identityDone: true,
+                    step: STEP_02_TONE,
+                });
+                candidate = candidateStore.get(candidateIdForReload2);
+                if (!candidate) {
+                    candidate = await candidateStore.getAsync(candidateIdForReload2);
+                }
+                if (!candidate) {
+                    writeEvent("error", {
+                        error: "INTERNAL_ERROR",
+                        message: "Failed to update UI state",
+                    });
+                    res.end();
+                    return;
+                }
+                const result = await executeWithAutoContinue(candidate, undefined, undefined, onChunk, onUx);
+                let responseState = "preamble";
+                if (result.step === STEP_03_BLOC1) {
+                    responseState = "preamble_done";
+                }
+                const candidateIdForReload3 = candidate.candidateId;
+                candidateStore.updateSession(candidateIdForReload3, { state: "preamble" });
+                candidate = candidateStore.get(candidateIdForReload3);
+                if (!candidate) {
+                    candidate = await candidateStore.getAsync(candidateIdForReload3);
+                }
+                if (!candidate) {
+                    writeEvent("error", {
+                        error: "INTERNAL_ERROR",
+                        message: "Failed to update session",
+                    });
+                    res.end();
+                    return;
+                }
+                const payload = {
+                    sessionId: candidate.candidateId,
+                    currentBlock: candidate.session.currentBlock,
+                    state: responseState,
+                    response: streamedText || result.response || "",
+                    step: result.step,
+                    expectsAnswer: result.expectsAnswer,
+                    autoContinue: result.autoContinue,
+                    showStartButton: result.showStartButton,
+                };
+                writeEvent("done", {
+                    type: "done",
+                    ...payload,
+                });
+                res.end();
+                return;
+            }
+        }
+        // 3) CHARGER / INITIALISER LE CANDIDAT (copié de /axiom)
+        let candidate = candidateStore.get(sessionId);
+        if (!candidate) {
+            candidate = await candidateStore.getAsync(sessionId);
+        }
+        if (!candidate) {
+            candidate = candidateStore.create(sessionId, tenantId);
+        }
+        else {
+            if (candidate.tenantId !== tenantId) {
+                writeEvent("error", {
+                    error: "TENANT_MISMATCH",
+                    message: "Candidate does not belong to this tenant",
+                });
+                res.end();
+                return;
+            }
+        }
+        // Contrat d'identité : si identité absente → forcer state = identity
+        if (candidate.session.state === "identity" ||
+            !candidate.identity.completedAt ||
+            !candidate.identity.firstName ||
+            !candidate.identity.lastName ||
+            !candidate.identity.email) {
+            candidateStore.updateUIState(candidate.candidateId, {
+                step: STEP_01_IDENTITY,
+                lastQuestion: null,
+                identityDone: false,
+            });
+            const payload = {
+                sessionId: candidate.candidateId,
+                currentBlock: candidate.session.currentBlock,
+                state: "identity",
+                response: "",
+                step: "STEP_01_IDENTITY",
+                expectsAnswer: true,
+                autoContinue: false,
+            };
+            writeEvent("done", {
+                type: "done",
+                ...payload,
+            });
+            res.end();
+            return;
+        }
+        // Initialiser l'état UI si manquant (dérivation depuis l'historique)
+        if (!candidate.session.ui) {
+            const initialState = deriveStepFromHistory(candidate);
+            candidateStore.updateUIState(candidate.candidateId, {
+                step: initialState,
+                lastQuestion: null,
+                identityDone: !!candidate.identity.completedAt,
+            });
+            const candidateIdBeforeReload = candidate.candidateId;
+            candidate = candidateStore.get(candidateIdBeforeReload);
+            if (!candidate) {
+                candidate = await candidateStore.getAsync(candidateIdBeforeReload);
+            }
+            if (!candidate) {
+                writeEvent("error", {
+                    error: "INTERNAL_ERROR",
+                    message: "Failed to initialize UI state",
+                });
+                res.end();
+                return;
+            }
+        }
+        // 4) EVENT START_BLOC_1 — déléguer à l'orchestrateur avec onChunk
+        if (event === "START_BLOC_1") {
+            const orchestrator = new BlockOrchestrator();
+            const result = await orchestrator.handleMessage(candidate, null, "START_BLOC_1", onChunk, onUx);
+            const candidateId = candidate.candidateId;
+            candidate = candidateStore.get(candidateId);
+            if (!candidate) {
+                candidate = await candidateStore.getAsync(candidateId);
+            }
+            if (!candidate) {
+                writeEvent("error", {
+                    error: "INTERNAL_ERROR",
+                    message: "Failed to get candidate",
+                });
+                res.end();
+                return;
+            }
+            try {
+                const trackingRow = candidateToLiveTrackingRow(candidate);
+                await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+            }
+            catch (error) {
+                console.error("[axiom/stream] live tracking error:", error);
+            }
+            let responseState = "collecting";
+            if ([BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10].includes(result.step)) {
+                responseState = "collecting";
+            }
+            const payload = {
+                sessionId: candidate.candidateId,
+                currentBlock: candidate.session.currentBlock,
+                state: responseState,
+                response: streamedText || result.response || "",
+                step: result.step,
+                expectsAnswer: result.expectsAnswer,
+                autoContinue: result.autoContinue,
+            };
+            writeEvent("done", {
+                type: "done",
+                ...payload,
+            });
+            res.end();
+            return;
+        }
+        // 5) GARDE START_BLOC_1 (attente bouton)
+        const userMessageText = userMessage || null;
+        if (candidate.session.ui?.step === STEP_03_BLOC1 && userMessageText && event !== "START_BLOC_1") {
+            const payload = {
+                sessionId: candidate.candidateId,
+                currentBlock: candidate.session.currentBlock,
+                state: "wait_start_button",
+                response: "Pour commencer le profil, clique sur le bouton 'Je commence mon profil' ci-dessus.",
+                step: STEP_03_BLOC1,
+                expectsAnswer: false,
+                autoContinue: false,
+            };
+            writeEvent("done", {
+                type: "done",
+                ...payload,
+            });
+            res.end();
+            return;
+        }
+        // 6) BLOC 1 : déléguer à l'orchestrateur avec onChunk
+        if (candidate.session.ui?.step === BLOC_01 && candidate.session.currentBlock === 1) {
+            if (userMessageText) {
+                const candidateIdForUserMessage = candidate.candidateId;
+                candidateStore.appendUserMessage(candidateIdForUserMessage, userMessageText, {
+                    block: 1,
+                    step: BLOC_01,
+                    kind: "other",
+                });
+                candidate = candidateStore.get(candidateIdForUserMessage);
+                if (!candidate) {
+                    candidate = await candidateStore.getAsync(candidateIdForUserMessage);
+                }
+                if (!candidate) {
+                    writeEvent("error", {
+                        error: "INTERNAL_ERROR",
+                        message: "Failed to store user message",
+                    });
+                    res.end();
+                    return;
+                }
+            }
+            const orchestrator = new BlockOrchestrator();
+            const result = await orchestrator.handleMessage(candidate, userMessageText, null, onChunk, onUx);
+            const candidateIdAfterExecution = candidate.candidateId;
+            candidate = candidateStore.get(candidateIdAfterExecution);
+            if (!candidate) {
+                candidate = await candidateStore.getAsync(candidateIdAfterExecution);
+            }
+            if (!candidate) {
+                writeEvent("error", {
+                    error: "INTERNAL_ERROR",
+                    message: "Failed to get candidate",
+                });
+                res.end();
+                return;
+            }
+            const responseState = mapStepToState(result.step);
+            const responseStep = result.step;
+            try {
+                const trackingRow = candidateToLiveTrackingRow(candidate);
+                await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+            }
+            catch (error) {
+                console.error("[axiom/stream] live tracking error:", error);
+            }
+            const payload = {
+                sessionId: candidate.candidateId,
+                currentBlock: candidate.session.currentBlock,
+                state: responseState,
+                response: streamedText || result.response || "",
+                step: responseStep,
+                expectsAnswer: result.expectsAnswer,
+                autoContinue: result.autoContinue,
+            };
+            writeEvent("done", {
+                type: "done",
+                ...payload,
+            });
+            res.end();
+            return;
+        }
+        // 7) BLOC 2A / 2B : déléguer à l'orchestrateur avec onChunk (copié de /axiom)
+        if (candidate.session.ui?.step === BLOC_02 && candidate.session.currentBlock === 2) {
+            if (userMessageText) {
+                const candidateIdForUserMessage = candidate.candidateId;
+                candidateStore.appendUserMessage(candidateIdForUserMessage, userMessageText, {
+                    block: 2,
+                    step: BLOC_02,
+                    kind: "other",
+                });
+                candidate = candidateStore.get(candidateIdForUserMessage);
+                if (!candidate) {
+                    candidate = await candidateStore.getAsync(candidateIdForUserMessage);
+                }
+                if (!candidate) {
+                    writeEvent("error", {
+                        error: "INTERNAL_ERROR",
+                        message: "Failed to store user message",
+                    });
+                    res.end();
+                    return;
+                }
+            }
+            const orchestrator = new BlockOrchestrator();
+            let result;
+            try {
+                result = await orchestrator.handleMessage(candidate, userMessageText, null, onChunk, onUx);
+            }
+            catch (error) {
+                if (error instanceof Error && error.message.includes("BLOC 2B validation failed")) {
+                    console.error("[ORCHESTRATOR] [2B_VALIDATION_FAIL] fatal=true", error.message);
+                    const payload = {
+                        sessionId: candidate.candidateId,
+                        currentBlock: candidate.session.currentBlock,
+                        state: "collecting",
+                        response: "Une erreur technique est survenue lors de la génération des questions. Veuillez réessayer ou contacter le support.",
+                        step: BLOC_02,
+                        expectsAnswer: false,
+                        autoContinue: false,
+                    };
+                    writeEvent("done", {
+                        type: "done",
+                        ...payload,
+                    });
+                    res.end();
+                    return;
+                }
+                throw error;
+            }
+            const candidateIdAfterExecution = candidate.candidateId;
+            candidate = candidateStore.get(candidateIdAfterExecution);
+            if (!candidate) {
+                candidate = await candidateStore.getAsync(candidateIdAfterExecution);
+            }
+            if (!candidate) {
+                writeEvent("error", {
+                    error: "INTERNAL_ERROR",
+                    message: "Failed to get candidate",
+                });
+                res.end();
+                return;
+            }
+            const responseState = mapStepToState(result.step);
+            const responseStep = result.step;
+            if (candidate.identity.completedAt) {
+                try {
+                    const trackingRow = candidateToLiveTrackingRow(candidate);
+                    await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+                }
+                catch (error) {
+                    console.error("[axiom/stream] live tracking error:", error);
+                }
+            }
+            const response = result.response || "";
+            const finalResponse = streamedText || response || "Une erreur technique est survenue. Recharge la page.";
+            const payload = {
+                sessionId: candidate.candidateId,
+                currentBlock: candidate.session.currentBlock,
+                state: responseState,
+                response: finalResponse,
+                step: responseStep,
+                expectsAnswer: response ? result.expectsAnswer : false,
+                autoContinue: result.autoContinue,
+            };
+            writeEvent("done", {
+                type: "done",
+                ...payload,
+            });
+            res.end();
+            return;
+        }
+        // 8) Enregistrer le message utilisateur dans l'historique
+        if (userMessageText) {
+            const candidateIdForUserMessage = candidate.candidateId;
+            candidateStore.appendUserMessage(candidateIdForUserMessage, userMessageText, {
+                block: candidate.session.currentBlock,
+                step: candidate.session.ui?.step,
+                kind: "other",
+            });
+            candidate = candidateStore.get(candidateIdForUserMessage);
+            if (!candidate) {
+                candidate = await candidateStore.getAsync(candidateIdForUserMessage);
+            }
+            if (!candidate) {
+                writeEvent("error", {
+                    error: "INTERNAL_ERROR",
+                    message: "Failed to store user message",
+                });
+                res.end();
+                return;
+            }
+        }
+        // 9) Chemin générique — executeWithAutoContinue avec onChunk
+        const result = await executeWithAutoContinue(candidate, userMessageText, event || null, onChunk, onUx);
+        const candidateIdAfterExecution = candidate.candidateId;
+        candidate = candidateStore.get(candidateIdAfterExecution);
+        if (!candidate) {
+            candidate = await candidateStore.getAsync(candidateIdAfterExecution);
+        }
+        if (!candidate) {
+            writeEvent("error", {
+                error: "INTERNAL_ERROR",
+                message: "Failed to get candidate",
+            });
+            res.end();
+            return;
+        }
+        const responseState = mapStepToState(result.step);
+        const responseStep = result.step;
+        if (responseState !== "identity" && candidate.identity.completedAt) {
+            try {
+                const trackingRow = candidateToLiveTrackingRow(candidate);
+                await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+            }
+            catch (error) {
+                console.error("[axiom/stream] live tracking error:", error);
+            }
+        }
+        const response = result.response || "";
+        const finalResponse = streamedText || response || "Une erreur technique est survenue. Recharge la page.";
+        const payload = {
+            sessionId: candidate.candidateId,
+            currentBlock: candidate.session.currentBlock,
+            state: responseState,
+            response: finalResponse,
+            step: responseStep,
+            expectsAnswer: response ? result.expectsAnswer : false,
+            autoContinue: result.autoContinue,
+        };
+        writeEvent("done", {
+            type: "done",
+            ...payload,
+        });
         res.end();
     }
     catch (error) {
         console.error("[axiom/stream] error:", error);
-        res.write(`event: error\n`);
-        res.write(`data: ${JSON.stringify({ error: "INTERNAL_ERROR", message: "Streaming error" })}\n\n`);
+        writeEvent("error", {
+            error: "INTERNAL_ERROR",
+            message: "Streaming error",
+        });
         res.end();
     }
 });

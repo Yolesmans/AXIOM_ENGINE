@@ -9,7 +9,7 @@ import { parseMirrorSections } from '../services/parseMirrorSections.js';
 import { getFullAxiomPrompt, getMatchingPrompt } from './prompts.js';
 import { generateInterpretiveStructure, type BlockType } from '../services/interpretiveStructureGenerator.js';
 import { selectMentorAngle } from '../services/mentorAngleSelector.js';
-import { renderMentorStyle } from '../services/mentorStyleRenderer.js';
+import { renderMentorStyle, transposeToSecondPerson } from '../services/mentorStyleRenderer.js';
 
 
 function extractPreambuleFromPrompt(prompt: string): string {
@@ -42,18 +42,30 @@ async function generateMirrorWithNewArchitecture(
   userAnswers: string[],
   blockType: BlockType,
   additionalContext?: string,
-  onChunk?: (s: string) => void
+  onChunk?: (s: string) => void,
+  onUx?: (s: string) => void
 ): Promise<string> {
   // Déterminer si ce blockType doit utiliser l'étape ANGLE (miroirs fin de bloc uniquement)
   const mirrorBlockTypes: BlockType[] = ['block1', 'block2b', 'block3', 'block4', 'block5', 'block6', 'block7', 'block8', 'block9'];
   const usesAngle = mirrorBlockTypes.includes(blockType);
-  
+  // Format REVELIOM (1️⃣2️⃣3️⃣) = blocs 1 et 3–9 uniquement (pas 2b, pas synthèse, pas matching)
+  const reveliomBlockTypes: BlockType[] = ['block1', 'block3', 'block4', 'block5', 'block6', 'block7', 'block8', 'block9'];
+  const isReveliomFormat = reveliomBlockTypes.includes(blockType);
+
   if (usesAngle) {
     console.log(`[AXIOM_EXECUTOR][NEW_ARCHITECTURE] Génération miroir en 3 étapes (interprétation + angle + rendu) pour ${blockType}`);
   } else {
     console.log(`[AXIOM_EXECUTOR][NEW_ARCHITECTURE] Génération en 2 étapes (interprétation + rendu) pour ${blockType} - PAS d'angle (synthèse complète)`);
   }
   console.log(`[AXIOM_EXECUTOR] Réponses utilisateur:`, userAnswers.length);
+
+  // UX FAST — occupation pendant analyse (1 message statique max, temporisé)
+  let occupationTimer: ReturnType<typeof setTimeout> | null = null;
+  if (onUx) {
+    occupationTimer = setTimeout(() => {
+      onUx('⏳ Je cherche ce qui relie vraiment tes réponses.\n\n');
+    }, 1500);
+  }
 
   try {
     // ÉTAPE 1 — INTERPRÉTATION (FROIDE, LOGIQUE)
@@ -75,26 +87,46 @@ async function generateMirrorWithNewArchitecture(
 
       const mentorAngle = await selectMentorAngle(structure);
 
+      if (occupationTimer) {
+        clearTimeout(occupationTimer);
+        occupationTimer = null;
+      }
+
       console.log(`[AXIOM_EXECUTOR][ETAPE2] Angle mentor sélectionné pour ${blockType}:`, mentorAngle.substring(0, 80) + '...');
       
       inputForRenderer = mentorAngle;
+
+      // UX FAST — révélation anticipée : 1️⃣ Lecture implicite AVANT l'appel rendu 4o
+      if (onChunk && isReveliomFormat) {
+        const earlyPrefix = '1️⃣ Lecture implicite\n\n' + transposeToSecondPerson(mentorAngle) + '\n\n2️⃣ Déduction personnalisée\n\n';
+        onChunk(earlyPrefix);
+      }
+
+      // ÉTAPE 3 — RENDU MENTOR INCARNÉ (prefix déjà envoyé si streaming)
+      console.log(`[AXIOM_EXECUTOR][ETAPE3] Rendu mentor incarné pour ${blockType}...`);
+      const mentorText = await renderMentorStyle(inputForRenderer, blockType, onChunk, { prefixAlreadySent: !!onChunk });
+      console.log(`[AXIOM_EXECUTOR][ETAPE3] Texte mentor généré pour ${blockType}`);
+      return mentorText;
     } else {
       // Synthèse finale et matching : utiliser l'hypothèse centrale complète (pas de perte d'info)
       console.log(`[AXIOM_EXECUTOR][ETAPE2] Pas d'angle pour ${blockType} - utilisation hypothèse centrale complète`);
       
+      if (occupationTimer) {
+        clearTimeout(occupationTimer);
+        occupationTimer = null;
+      }
+
       inputForRenderer = structure.hypothese_centrale;
     }
 
-    // ÉTAPE 3 — RENDU MENTOR INCARNÉ
+    // ÉTAPE 3 — RENDU MENTOR INCARNÉ (synthèse / matching, pas de préfixe REVELIOM)
     console.log(`[AXIOM_EXECUTOR][ETAPE3] Rendu mentor incarné pour ${blockType}...`);
-
     const mentorText = await renderMentorStyle(inputForRenderer, blockType, onChunk);
-
     console.log(`[AXIOM_EXECUTOR][ETAPE3] Texte mentor généré pour ${blockType}`);
-
     return mentorText;
 
   } catch (error) {
+    if (occupationTimer) clearTimeout(occupationTimer);
     console.error(`[AXIOM_EXECUTOR][ERROR] Erreur nouvelle architecture pour ${blockType}:`, error);
     throw new Error(`Failed to generate mirror with new architecture: ${error}`);
   }
@@ -1078,6 +1110,8 @@ export interface ExecuteAxiomInput {
   userMessage: string | null;
   event?: string;
   onChunk?: (s: string) => void;
+  /** UX FAST : envoi de texte statique (ACK, occupation) sans l'ajouter au contenu final */
+  onUx?: (s: string) => void;
 }
 
 // ============================================
@@ -1163,7 +1197,7 @@ function logTransition(
 export async function executeAxiom(
   input: ExecuteAxiomInput,
 ): Promise<ExecuteAxiomResult> {
-  const { candidate: inputCandidate, userMessage, event, onChunk } = input;
+  const { candidate: inputCandidate, userMessage, event, onChunk, onUx } = input;
   let candidate = inputCandidate;
 
   // PRIORITÉ A3 : INIT ÉTAT avec dérivation depuis conversationHistory (source de vérité n°1)
@@ -1737,7 +1771,7 @@ Toute sortie hors règles = invalide.`;
           .filter(a => a.length > 0);
         
         // Générer synthèse avec nouvelle architecture
-        const generatedSynthesis = await generateMirrorWithNewArchitecture(allUserAnswers, 'synthesis', undefined, onChunk);
+        const generatedSynthesis = await generateMirrorWithNewArchitecture(allUserAnswers, 'synthesis', undefined, onChunk, onUx);
         
         candidateStore.setFinalProfileText(candidate.candidateId, generatedSynthesis);
         aiText = generatedSynthesis;
@@ -1964,7 +1998,7 @@ Toute sortie hors règles = invalide.`;
           // Fallback : utiliser texte original
         } else {
           // Générer miroir avec nouvelle architecture
-          const generatedMirror = await generateMirrorWithNewArchitecture(userAnswersInBlock, blockType, undefined, onChunk);
+          const generatedMirror = await generateMirrorWithNewArchitecture(userAnswersInBlock, blockType, undefined, onChunk, onUx);
           
           // Valider format REVELIOM
           const validation = validateMirrorREVELIOM(generatedMirror);
@@ -2061,7 +2095,7 @@ Toute sortie hors règles = invalide.`;
               .filter(a => a.length > 0);
             
             // Générer synthèse avec nouvelle architecture
-            const generatedSynthesis = await generateMirrorWithNewArchitecture(allUserAnswers, 'synthesis', undefined, onChunk);
+            const generatedSynthesis = await generateMirrorWithNewArchitecture(allUserAnswers, 'synthesis', undefined, onChunk, onUx);
             
             candidateStore.setFinalProfileText(candidate.candidateId, generatedSynthesis);
             aiText = generatedSynthesis;
@@ -2096,7 +2130,7 @@ Toute sortie hors règles = invalide.`;
               .filter(a => a.length > 0);
             
             // Générer synthèse avec nouvelle architecture
-            const generatedSynthesis = await generateMirrorWithNewArchitecture(allUserAnswers, 'synthesis', undefined, onChunk);
+            const generatedSynthesis = await generateMirrorWithNewArchitecture(allUserAnswers, 'synthesis', undefined, onChunk, onUx);
             
             candidateStore.setFinalProfileText(candidate.candidateId, generatedSynthesis);
             aiText = generatedSynthesis;
@@ -2270,7 +2304,7 @@ Toute sortie hors règles = invalide.`;
         : undefined;
       
       // Générer matching avec nouvelle architecture
-      const generatedMatching = await generateMirrorWithNewArchitecture(allUserAnswers, 'matching', additionalContext, onChunk);
+      const generatedMatching = await generateMirrorWithNewArchitecture(allUserAnswers, 'matching', additionalContext, onChunk, onUx);
       
       aiText = generatedMatching;
       console.log(`[AXIOM_EXECUTOR] Matching généré avec succès (nouvelle architecture)`);
@@ -2340,12 +2374,14 @@ export async function executeWithAutoContinue(
   userMessage: string | null = null,
   event: string | null = null,
   onChunk?: (s: string) => void,
+  onUx?: (s: string) => void,
 ): Promise<ExecuteAxiomResult> {
   let result = await executeAxiom({
     candidate,
     userMessage: userMessage,
     event: event || undefined,
     onChunk,
+    onUx,
   });
 
   // 🔁 AUTO-ENCHAÎNEMENT FSM STRICT
@@ -2366,6 +2402,7 @@ export async function executeWithAutoContinue(
       userMessage: null,
       event: undefined,
       onChunk,
+      onUx,
     });
   }
 

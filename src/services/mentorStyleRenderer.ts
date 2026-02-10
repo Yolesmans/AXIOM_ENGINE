@@ -21,8 +21,9 @@ const VALIDATION_OUVERTE = 'Dis-moi si ça te parle, ou s\'il y a une nuance imp
  * Transposition 3ᵉ → 2ᵉ personne pour le rendu utilisateur (REVELIOM).
  * Purement stylistique, déterministe, sans impact sémantique.
  * L'angle reste en 3ᵉ personne en interne ; le texte affiché est toujours en "tu".
+ * Exporté pour révélation anticipée (UX FAST) côté executor/orchestrator.
  */
-function transposeToSecondPerson(text: string): string {
+export function transposeToSecondPerson(text: string): string {
   let out = text;
   // Ordre : expressions longues d'abord pour éviter sous-remplacements
   out = out.replace(/\bcette personne\b/gi, 'tu');
@@ -61,17 +62,20 @@ function transposeToSecondPerson(text: string): string {
  * 
  * @param mentorAngle Angle mentor unique sélectionné par l'étape 2
  * @param blockType Type de bloc (détermine le format de sortie)
+ * @param onChunk Callback optionnel pour streaming token par token
+ * @param options prefixAlreadySent: si true (UX FAST), ne pas renvoyer le préfixe 1️⃣+angle+2️⃣ (déjà émis en révélation anticipée)
  * @returns Texte mentor incarné (format adapté)
  */
 export async function renderMentorStyle(
   mentorAngle: string,
   blockType: BlockType,
-  onChunk?: (s: string) => void
+  onChunk?: (s: string) => void,
+  options?: { prefixAlreadySent?: boolean }
 ): Promise<string> {
   const isReveliomFormat = REVELIOM_BLOCK_TYPES.includes(blockType);
 
   if (isReveliomFormat) {
-    return renderReveliomWithRawAngle(mentorAngle, blockType, onChunk);
+    return renderReveliomWithRawAngle(mentorAngle, blockType, onChunk, options?.prefixAlreadySent);
   }
 
   // Autres formats (block2b, synthesis, matching) : flux inchangé
@@ -266,11 +270,13 @@ Produis UNIQUEMENT cette phrase (forme "Ce moteur tient tant que … — lorsque
 /**
  * Rendu REVELIOM avec Lecture implicite = angle brut (sans reformulation).
  * Le LLM ne produit que la section 2 (Déduction personnalisée).
+ * Si prefixAlreadySent (UX FAST), on n'émet pas le préfixe (déjà envoyé en révélation anticipée).
  */
 async function renderReveliomWithRawAngle(
   mentorAngle: string,
   blockType: BlockType,
-  onChunk?: (s: string) => void
+  onChunk?: (s: string) => void,
+  prefixAlreadySent?: boolean
 ): Promise<string> {
   const positionalContext = buildPositionalContext(blockType);
   let retries = 0;
@@ -281,11 +287,12 @@ async function renderReveliomWithRawAngle(
       let deduction: string;
 
       if (onChunk) {
-        const prefixRaw = '1️⃣ Lecture implicite\n\n' + mentorAngle + '\n\n2️⃣ Déduction personnalisée\n\n';
-        const prefixDisplay = '1️⃣ Lecture implicite\n\n' + transposeToSecondPerson(mentorAngle) + '\n\n2️⃣ Déduction personnalisée\n\n';
         const suffix = '\n\n3️⃣ Validation ouverte\n\n' + VALIDATION_OUVERTE;
 
-        onChunk(prefixDisplay);
+        if (!prefixAlreadySent) {
+          const prefixDisplay = '1️⃣ Lecture implicite\n\n' + transposeToSecondPerson(mentorAngle) + '\n\n2️⃣ Déduction personnalisée\n\n';
+          onChunk(prefixDisplay);
+        }
 
         const { fullText: deductionStreamed } = await callOpenAIStream(
           {
