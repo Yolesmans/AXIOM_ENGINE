@@ -121,7 +121,7 @@ function isMirrorValidation(input) {
     return input.trim().length > 0;
 }
 export class BlockOrchestrator {
-    async handleMessage(candidate, userMessage, event) {
+    async handleMessage(candidate, userMessage, event, onChunk) {
         // Déterminer le bloc en cours
         const currentBlock = candidate.session.currentBlock || 1;
         const currentStep = candidate.session.ui?.step || '';
@@ -133,10 +133,10 @@ export class BlockOrchestrator {
             const answeredCount = Object.keys(answers).length;
             // Si BLOC 2A terminé (3 réponses) → passer à BLOC 2B
             if (answeredCount >= 3) {
-                return this.handleBlock2B(candidate, userMessage, event);
+                return this.handleBlock2B(candidate, userMessage, event, onChunk);
             }
             // Sinon → continuer BLOC 2A
-            return this.handleBlock2A(candidate, userMessage, event);
+            return this.handleBlock2A(candidate, userMessage, event, onChunk);
         }
         // BLOC 1 (logique existante)
         const blockNumber = 1;
@@ -261,7 +261,7 @@ export class BlockOrchestrator {
                 console.log('[ORCHESTRATOR] generate mirror bloc 1 (API)');
                 console.log('[LOT1] Mirror generated — awaiting validation');
                 candidateStore.markBlockComplete(currentCandidate.candidateId, blockNumber);
-                const mirror = await this.generateMirrorForBlock1(currentCandidate);
+                const mirror = await this.generateMirrorForBlock1(currentCandidate, onChunk);
                 // Enregistrer le miroir dans conversationHistory
                 candidateStore.appendAssistantMessage(currentCandidate.candidateId, mirror, {
                     block: blockNumber,
@@ -377,7 +377,7 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
      * - Suppression validations heuristiques complexes (validateInterpretiveAnalysis)
      * - Validation simple : structure JSON + marqueurs expérientiels
      */
-    async generateMirrorForBlock1(candidate) {
+    async generateMirrorForBlock1(candidate, onChunk) {
         // Construire le contexte des réponses depuis conversationHistory (source robuste)
         const conversationHistory = candidate.conversationHistory || [];
         const block1UserMessages = conversationHistory
@@ -414,7 +414,7 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
             // ÉTAPE 3 — RENDU MENTOR INCARNÉ
             // ============================================
             console.log('[BLOC1][ETAPE3] Rendu mentor incarné...');
-            const mentorText = await renderMentorStyle(mentorAngle, 'block1');
+            const mentorText = await renderMentorStyle(mentorAngle, 'block1', onChunk);
             console.log('[BLOC1][ETAPE3] Texte mentor généré');
             // ============================================
             // VALIDATION FINALE (FORMAT REVELIOM)
@@ -441,7 +441,7 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
     // ============================================
     // BLOC 2A — Gestion séquentielle adaptative
     // ============================================
-    async handleBlock2A(candidate, userMessage, event) {
+    async handleBlock2A(candidate, userMessage, event, onChunk) {
         const blockNumber = 2;
         const candidateId = candidate.candidateId;
         // Recharger candidate pour avoir l'état à jour
@@ -542,7 +542,7 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
             if (updatedAnsweredCount === 3) {
                 console.log('[ORCHESTRATOR] BLOC 2A terminé → transition automatique vers BLOC 2B');
                 // Transition automatique vers BLOC 2B (comme BLOC 1 → BLOC 2A après validation miroir)
-                return this.handleBlock2B(currentCandidate, null, null);
+                return this.handleBlock2B(currentCandidate, null, null, onChunk);
             }
         }
         // Cas 3 : Pas de message utilisateur → Retourner la dernière question si disponible
@@ -556,7 +556,7 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
             };
         }
         // Par défaut, générer la première question
-        return this.handleBlock2A(currentCandidate, null, null);
+        return this.handleBlock2A(currentCandidate, null, null, onChunk);
     }
     async generateQuestion2A1(candidate, retryCount = 0) {
         const messages = buildConversationHistory(candidate);
@@ -720,7 +720,7 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
     // ============================================
     // BLOC 2B — CŒUR PROJECTIF AXIOM/REVELIOM
     // ============================================
-    async handleBlock2B(candidate, userMessage, event) {
+    async handleBlock2B(candidate, userMessage, event, onChunk) {
         const blockNumber = 2;
         const candidateId = candidate.candidateId;
         // Recharger candidate pour avoir l'état à jour
@@ -853,7 +853,7 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
                 console.log('[ORCHESTRATOR] Generating BLOC 2B final mirror (API)');
                 console.log('[LOT1] Mirror generated — awaiting validation');
                 candidateStore.markBlockComplete(candidateId, blockNumber);
-                const mirror = await this.generateMirror2B(currentCandidate, works, coreWorkAnswer);
+                const mirror = await this.generateMirror2B(currentCandidate, works, coreWorkAnswer, onChunk);
                 // Enregistrer le miroir dans conversationHistory
                 candidateStore.appendAssistantMessage(candidateId, mirror, {
                     block: blockNumber,
@@ -1446,7 +1446,7 @@ Format de sortie OBLIGATOIRE :
      * - Suppression validations heuristiques complexes (validateInterpretiveAnalysis, validateInterpretiveDepth)
      * - Validation simple : structure JSON + marqueurs expérientiels
      */
-    async generateMirror2B(candidate, works, coreWork) {
+    async generateMirror2B(candidate, works, coreWork, onChunk) {
         // Construire le contexte des réponses depuis conversationHistory (source robuste)
         const conversationHistory = candidate.conversationHistory || [];
         const block2UserMessages = conversationHistory
@@ -1485,7 +1485,7 @@ Format de sortie OBLIGATOIRE :
             console.log('[BLOC2B][ETAPE2] Angle mentor sélectionné:', mentorAngle.substring(0, 80) + '...');
             // ÉTAPE 3 — RENDU MENTOR INCARNÉ
             console.log('[BLOC2B][ETAPE3] Rendu mentor incarné...');
-            const mentorText = await renderMentorStyle(mentorAngle, 'block2b');
+            const mentorText = await renderMentorStyle(mentorAngle, 'block2b', onChunk);
             console.log('[BLOC2B][ETAPE3] Texte mentor généré');
             // VALIDATION FINALE (FORMAT SYNTHÈSE 2B)
             const validation = validateSynthesis2B(mentorText);

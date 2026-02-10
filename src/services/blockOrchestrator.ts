@@ -1,6 +1,6 @@
 import type { AxiomCandidate } from '../types/candidate.js';
 import { candidateStore } from '../store/sessionStore.js';
-import { callOpenAI } from './openaiClient.js';
+import { callOpenAI, callOpenAIStream } from './openaiClient.js';
 import { BLOC_01, BLOC_02, BLOC_03, executeAxiom } from '../engine/axiomExecutor.js';
 // getFullAxiomPrompt n'est pas exporté, on doit le reconstruire
 import { PROMPT_AXIOM_ENGINE, PROMPT_AXIOM_PROFIL } from '../engine/prompts.js';
@@ -159,6 +159,7 @@ export class BlockOrchestrator {
     candidate: AxiomCandidate,
     userMessage: string | null,
     event: string | null,
+    onChunk?: (s: string) => void,
   ): Promise<OrchestratorResult> {
     // Déterminer le bloc en cours
     const currentBlock = candidate.session.currentBlock || 1;
@@ -173,11 +174,11 @@ export class BlockOrchestrator {
       
       // Si BLOC 2A terminé (3 réponses) → passer à BLOC 2B
       if (answeredCount >= 3) {
-        return this.handleBlock2B(candidate, userMessage, event);
+        return this.handleBlock2B(candidate, userMessage, event, onChunk);
       }
       
       // Sinon → continuer BLOC 2A
-      return this.handleBlock2A(candidate, userMessage, event);
+      return this.handleBlock2A(candidate, userMessage, event, onChunk);
     }
     
     // BLOC 1 (logique existante)
@@ -329,7 +330,7 @@ export class BlockOrchestrator {
         console.log('[ORCHESTRATOR] generate mirror bloc 1 (API)');
         console.log('[LOT1] Mirror generated — awaiting validation');
         candidateStore.markBlockComplete(currentCandidate.candidateId, blockNumber);
-        const mirror = await this.generateMirrorForBlock1(currentCandidate);
+        const mirror = await this.generateMirrorForBlock1(currentCandidate, onChunk);
         
         // Enregistrer le miroir dans conversationHistory
         candidateStore.appendAssistantMessage(currentCandidate.candidateId, mirror, {
@@ -465,7 +466,7 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
    * - Suppression validations heuristiques complexes (validateInterpretiveAnalysis)
    * - Validation simple : structure JSON + marqueurs expérientiels
    */
-  private async generateMirrorForBlock1(candidate: AxiomCandidate): Promise<string> {
+  private async generateMirrorForBlock1(candidate: AxiomCandidate, onChunk?: (s: string) => void): Promise<string> {
     // Construire le contexte des réponses depuis conversationHistory (source robuste)
     const conversationHistory = candidate.conversationHistory || [];
     const block1UserMessages = conversationHistory
@@ -512,7 +513,7 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
       // ============================================
       console.log('[BLOC1][ETAPE3] Rendu mentor incarné...');
       
-          const mentorText = await renderMentorStyle(mentorAngle, 'block1');
+          const mentorText = await renderMentorStyle(mentorAngle, 'block1', onChunk);
       
       console.log('[BLOC1][ETAPE3] Texte mentor généré');
 
@@ -547,6 +548,7 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
     candidate: AxiomCandidate,
     userMessage: string | null,
     event: string | null,
+    onChunk?: (s: string) => void,
   ): Promise<OrchestratorResult> {
     const blockNumber = 2;
     const candidateId = candidate.candidateId;
@@ -666,7 +668,7 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
       if (updatedAnsweredCount === 3) {
         console.log('[ORCHESTRATOR] BLOC 2A terminé → transition automatique vers BLOC 2B');
         // Transition automatique vers BLOC 2B (comme BLOC 1 → BLOC 2A après validation miroir)
-        return this.handleBlock2B(currentCandidate, null, null);
+        return this.handleBlock2B(currentCandidate, null, null, onChunk);
       }
 
     }
@@ -683,7 +685,7 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
     }
 
     // Par défaut, générer la première question
-    return this.handleBlock2A(currentCandidate, null, null);
+    return this.handleBlock2A(currentCandidate, null, null, onChunk);
   }
 
   private async generateQuestion2A1(candidate: AxiomCandidate, retryCount: number = 0): Promise<string> {
@@ -884,6 +886,7 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
     candidate: AxiomCandidate,
     userMessage: string | null,
     event: string | null,
+    onChunk?: (s: string) => void,
   ): Promise<OrchestratorResult> {
     const blockNumber = 2;
     const candidateId = candidate.candidateId;
@@ -1048,7 +1051,7 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
         console.log('[LOT1] Mirror generated — awaiting validation');
         candidateStore.markBlockComplete(candidateId, blockNumber);
         
-        const mirror = await this.generateMirror2B(currentCandidate, works, coreWorkAnswer);
+        const mirror = await this.generateMirror2B(currentCandidate, works, coreWorkAnswer, onChunk);
         
         // Enregistrer le miroir dans conversationHistory
         candidateStore.appendAssistantMessage(candidateId, mirror, {
@@ -1704,7 +1707,8 @@ Format de sortie OBLIGATOIRE :
   private async generateMirror2B(
     candidate: AxiomCandidate,
     works: string[],
-    coreWork: string
+    coreWork: string,
+    onChunk?: (s: string) => void,
   ): Promise<string> {
     // Construire le contexte des réponses depuis conversationHistory (source robuste)
     const conversationHistory = candidate.conversationHistory || [];
@@ -1756,7 +1760,7 @@ Format de sortie OBLIGATOIRE :
       // ÉTAPE 3 — RENDU MENTOR INCARNÉ
       console.log('[BLOC2B][ETAPE3] Rendu mentor incarné...');
 
-      const mentorText = await renderMentorStyle(mentorAngle, 'block2b');
+      const mentorText = await renderMentorStyle(mentorAngle, 'block2b', onChunk);
 
       console.log('[BLOC2B][ETAPE3] Texte mentor généré');
 

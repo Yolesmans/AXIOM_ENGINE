@@ -1,4 +1,4 @@
-import { callOpenAI } from '../services/openaiClient.js';
+import { callOpenAI, callOpenAIStream } from '../services/openaiClient.js';
 import { candidateStore } from '../store/sessionStore.js';
 import { validateMirrorREVELIOM } from '../services/validateMirrorReveliom.js';
 import { parseMirrorSections } from '../services/parseMirrorSections.js';
@@ -26,7 +26,7 @@ function extractPreambuleFromPrompt(prompt) {
  * - Suppression validations heuristiques complexes
  * - Validation simple : structure JSON + format REVELIOM
  */
-async function generateMirrorWithNewArchitecture(userAnswers, blockType, additionalContext) {
+async function generateMirrorWithNewArchitecture(userAnswers, blockType, additionalContext, onChunk) {
     // Déterminer si ce blockType doit utiliser l'étape ANGLE (miroirs fin de bloc uniquement)
     const mirrorBlockTypes = ['block1', 'block2b', 'block3', 'block4', 'block5', 'block6', 'block7', 'block8', 'block9'];
     const usesAngle = mirrorBlockTypes.includes(blockType);
@@ -61,7 +61,7 @@ async function generateMirrorWithNewArchitecture(userAnswers, blockType, additio
         }
         // ÉTAPE 3 — RENDU MENTOR INCARNÉ
         console.log(`[AXIOM_EXECUTOR][ETAPE3] Rendu mentor incarné pour ${blockType}...`);
-        const mentorText = await renderMentorStyle(inputForRenderer, blockType);
+        const mentorText = await renderMentorStyle(inputForRenderer, blockType, onChunk);
         console.log(`[AXIOM_EXECUTOR][ETAPE3] Texte mentor généré pour ${blockType}`);
         return mentorText;
     }
@@ -1068,7 +1068,7 @@ function logTransition(sessionId, stateIn, stateOut, inputType) {
 // EXÉCUTEUR PRINCIPAL (FSM STRICTE)
 // ============================================
 export async function executeAxiom(input) {
-    const { candidate: inputCandidate, userMessage, event } = input;
+    const { candidate: inputCandidate, userMessage, event, onChunk } = input;
     let candidate = inputCandidate;
     // PRIORITÉ A3 : INIT ÉTAT avec dérivation depuis conversationHistory (source de vérité n°1)
     // Synchronisation automatique FSM ← Historique
@@ -1261,8 +1261,38 @@ export async function executeAxiom(input) {
         const messages = buildConversationHistory(candidate);
         try {
             const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
-            const completion = await callOpenAI({
-                messages: [
+            const preambuleMessages = [
+                { role: 'system', content: FULL_AXIOM_PROMPT },
+                {
+                    role: 'system',
+                    content: `RÈGLE ABSOLUE AXIOM :
+Tu es en état STEP_03_PREAMBULE.
+Tu dois afficher LE PRÉAMBULE MÉTIER COMPLET tel que défini dans le prompt.
+Tu NE POSES PAS de question.
+Tu affiches uniquement le préambule, mot pour mot selon les instructions.
+AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
+                },
+                ...messages,
+            ];
+            if (onChunk) {
+                const { fullText } = await callOpenAIStream({ messages: preambuleMessages }, onChunk);
+                if (fullText.trim())
+                    aiText = fullText.trim();
+            }
+            else {
+                const completion = await callOpenAI({ messages: preambuleMessages });
+                if (typeof completion === 'string' && completion.trim())
+                    aiText = completion.trim();
+            }
+        }
+        catch (e) {
+            console.error('[AXIOM_EXECUTION_ERROR]', e);
+        }
+        // Si échec → réessayer une fois
+        if (!aiText) {
+            try {
+                const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
+                const preambuleRetryMessages = [
                     { role: 'system', content: FULL_AXIOM_PROMPT },
                     {
                         role: 'system',
@@ -1274,36 +1304,16 @@ Tu affiches uniquement le préambule, mot pour mot selon les instructions.
 AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
                     },
                     ...messages,
-                ],
-            });
-            if (typeof completion === 'string' && completion.trim()) {
-                aiText = completion.trim();
-            }
-        }
-        catch (e) {
-            console.error('[AXIOM_EXECUTION_ERROR]', e);
-        }
-        // Si échec → réessayer une fois
-        if (!aiText) {
-            try {
-                const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
-                const completion = await callOpenAI({
-                    messages: [
-                        { role: 'system', content: FULL_AXIOM_PROMPT },
-                        {
-                            role: 'system',
-                            content: `RÈGLE ABSOLUE AXIOM :
-Tu es en état STEP_03_PREAMBULE.
-Tu dois afficher LE PRÉAMBULE MÉTIER COMPLET tel que défini dans le prompt.
-Tu NE POSES PAS de question.
-Tu affiches uniquement le préambule, mot pour mot selon les instructions.
-AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
-                        },
-                        ...messages,
-                    ],
-                });
-                if (typeof completion === 'string' && completion.trim()) {
-                    aiText = completion.trim();
+                ];
+                if (onChunk) {
+                    const { fullText } = await callOpenAIStream({ messages: preambuleRetryMessages }, onChunk);
+                    if (fullText.trim())
+                        aiText = fullText.trim();
+                }
+                else {
+                    const completion = await callOpenAI({ messages: preambuleRetryMessages });
+                    if (typeof completion === 'string' && completion.trim())
+                        aiText = completion.trim();
                 }
             }
             catch (e) {
@@ -1398,14 +1408,7 @@ AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
             const blocNumber = 1;
             const messages = buildConversationHistory(updatedCandidate);
             let aiText = null;
-            try {
-                const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
-                const completion = await callOpenAI({
-                    messages: [
-                        { role: 'system', content: FULL_AXIOM_PROMPT },
-                        {
-                            role: 'system',
-                            content: `RÈGLE ABSOLUE AXIOM :
+            const bloc01SystemContent = `RÈGLE ABSOLUE AXIOM :
 Le moteur AXIOM n'interprète pas les prompts. Il les exécute STRICTEMENT.
 Tu es en état BLOC_01 (BLOC ${blocNumber}).
 Tu exécutes STRICTEMENT le protocole AXIOM pour ce bloc.
@@ -1413,13 +1416,23 @@ Tu produis UNIQUEMENT le texte autorisé à cette étape.
 INTERDICTIONS : improviser, commenter le système, reformuler le prompt, revenir en arrière.
 Si tu dois poser une question, pose-la. Si tu dois afficher un miroir, affiche-le.
 AUCUNE sortie générique type "On continue", "D'accord", etc.
-Toute sortie hors règles = invalide.`,
-                        },
-                        ...messages,
-                    ],
-                });
-                if (typeof completion === 'string' && completion.trim()) {
-                    aiText = completion.trim();
+Toute sortie hors règles = invalide.`;
+            try {
+                const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
+                const bloc01Messages = [
+                    { role: 'system', content: FULL_AXIOM_PROMPT },
+                    { role: 'system', content: bloc01SystemContent },
+                    ...messages,
+                ];
+                if (onChunk) {
+                    const { fullText } = await callOpenAIStream({ messages: bloc01Messages }, onChunk);
+                    if (fullText.trim())
+                        aiText = fullText.trim();
+                }
+                else {
+                    const completion = await callOpenAI({ messages: bloc01Messages });
+                    if (typeof completion === 'string' && completion.trim())
+                        aiText = completion.trim();
                 }
             }
             catch (e) {
@@ -1429,26 +1442,20 @@ Toute sortie hors règles = invalide.`,
             if (!aiText) {
                 try {
                     const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
-                    const completion = await callOpenAI({
-                        messages: [
-                            { role: 'system', content: FULL_AXIOM_PROMPT },
-                            {
-                                role: 'system',
-                                content: `RÈGLE ABSOLUE AXIOM :
-Le moteur AXIOM n'interprète pas les prompts. Il les exécute STRICTEMENT.
-Tu es en état BLOC_01 (BLOC ${blocNumber}).
-Tu exécutes STRICTEMENT le protocole AXIOM pour ce bloc.
-Tu produis UNIQUEMENT le texte autorisé à cette étape.
-INTERDICTIONS : improviser, commenter le système, reformuler le prompt, revenir en arrière.
-Si tu dois poser une question, pose-la. Si tu dois afficher un miroir, affiche-le.
-AUCUNE sortie générique type "On continue", "D'accord", etc.
-Toute sortie hors règles = invalide.`,
-                            },
-                            ...messages,
-                        ],
-                    });
-                    if (typeof completion === 'string' && completion.trim()) {
-                        aiText = completion.trim();
+                    const bloc01RetryMessages = [
+                        { role: 'system', content: FULL_AXIOM_PROMPT },
+                        { role: 'system', content: bloc01SystemContent },
+                        ...messages,
+                    ];
+                    if (onChunk) {
+                        const { fullText } = await callOpenAIStream({ messages: bloc01RetryMessages }, onChunk);
+                        if (fullText.trim())
+                            aiText = fullText.trim();
+                    }
+                    else {
+                        const completion = await callOpenAI({ messages: bloc01RetryMessages });
+                        if (typeof completion === 'string' && completion.trim())
+                            aiText = completion.trim();
                     }
                 }
                 catch (e) {
@@ -1580,7 +1587,7 @@ Toute sortie hors règles = invalide.`,
                     .map(m => m.content.trim())
                     .filter(a => a.length > 0);
                 // Générer synthèse avec nouvelle architecture
-                const generatedSynthesis = await generateMirrorWithNewArchitecture(allUserAnswers, 'synthesis');
+                const generatedSynthesis = await generateMirrorWithNewArchitecture(allUserAnswers, 'synthesis', undefined, onChunk);
                 candidateStore.setFinalProfileText(candidate.candidateId, generatedSynthesis);
                 aiText = generatedSynthesis;
                 console.log(`[AXIOM_EXECUTOR] Synthèse finale BLOC 10 générée avec nouvelle architecture (direct)`);
@@ -1594,13 +1601,8 @@ Toute sortie hors règles = invalide.`,
         if (!aiText) {
             try {
                 const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
-                const completion = await callOpenAI({
-                    messages: [
-                        { role: 'system', content: FULL_AXIOM_PROMPT },
-                        {
-                            role: 'system',
-                            content: shouldForceMirror
-                                ? `🎯 POSTURE MENTALE
+                const blocSystemContent = shouldForceMirror
+                    ? `🎯 POSTURE MENTALE
 
 Tu es un mentor qui observe ce qui n'est pas dit.
 Tu ne répètes pas ce qu'on te dit, tu révèles ce qui se cache derrière.
@@ -1674,7 +1676,7 @@ Après avoir produit le miroir (3 sections strictes), tu DOIS annoncer explicite
 Cette annonce doit être SÉPARÉE du miroir par un saut de ligne.
 Le miroir reste STRICTEMENT dans son format (20/25 mots, 3 sections).
 L'annonce est un texte additionnel, clair et explicite.`
-                                : `RÈGLE ABSOLUE AXIOM :
+                    : `RÈGLE ABSOLUE AXIOM :
 Le moteur AXIOM n'interprète pas les prompts. Il les exécute STRICTEMENT.
 Tu es en état ${currentState} (BLOC ${blocNumber}).
 Tu exécutes STRICTEMENT le protocole AXIOM pour ce bloc.
@@ -1682,13 +1684,21 @@ Tu produis UNIQUEMENT le texte autorisé à cette étape.
 INTERDICTIONS : improviser, commenter le système, reformuler le prompt, revenir en arrière.
 Si tu dois poser une question, pose-la. Si tu dois afficher un miroir, affiche-le.
 AUCUNE sortie générique type "On continue", "D'accord", etc.
-Toute sortie hors règles = invalide.`,
-                        },
-                        ...messages,
-                    ],
-                });
-                if (typeof completion === 'string' && completion.trim()) {
-                    aiText = completion.trim();
+Toute sortie hors règles = invalide.`;
+                const blocMessages = [
+                    { role: 'system', content: FULL_AXIOM_PROMPT },
+                    { role: 'system', content: blocSystemContent },
+                    ...messages,
+                ];
+                if (onChunk) {
+                    const { fullText } = await callOpenAIStream({ messages: blocMessages }, onChunk);
+                    if (fullText.trim())
+                        aiText = fullText.trim();
+                }
+                else {
+                    const completion = await callOpenAI({ messages: blocMessages });
+                    if (typeof completion === 'string' && completion.trim())
+                        aiText = completion.trim();
                 }
             }
             catch (e) {
@@ -1699,13 +1709,8 @@ Toute sortie hors règles = invalide.`,
         if (!aiText && !shouldForceSynthesis) {
             try {
                 const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
-                const completion = await callOpenAI({
-                    messages: [
-                        { role: 'system', content: FULL_AXIOM_PROMPT },
-                        {
-                            role: 'system',
-                            content: blocNumber >= 3 && blocNumber <= 9
-                                ? `RÈGLE ABSOLUE AXIOM — RETRY MIROIR BLOC ${blocNumber} (FORMAT STRICT OBLIGATOIRE)
+                const retrySystemContent = blocNumber >= 3 && blocNumber <= 9
+                    ? `RÈGLE ABSOLUE AXIOM — RETRY MIROIR BLOC ${blocNumber} (FORMAT STRICT OBLIGATOIRE)
 
 ⚠️ ERREURS DÉTECTÉES : Miroir non conforme
 
@@ -1718,7 +1723,7 @@ Réécris en conformité stricte REVELIOM :
 - Pas de texte additionnel
 
 Format strict : 3 sections séparées, pas de narration continue.`
-                                : `RÈGLE ABSOLUE AXIOM :
+                    : `RÈGLE ABSOLUE AXIOM :
 Le moteur AXIOM n'interprète pas les prompts. Il les exécute STRICTEMENT.
 Tu es en état ${currentState} (BLOC ${blocNumber}).
 Tu exécutes STRICTEMENT le protocole AXIOM pour ce bloc.
@@ -1726,13 +1731,21 @@ Tu produis UNIQUEMENT le texte autorisé à cette étape.
 INTERDICTIONS : improviser, commenter le système, reformuler le prompt, revenir en arrière.
 Si tu dois poser une question, pose-la. Si tu dois afficher un miroir, affiche-le.
 AUCUNE sortie générique type "On continue", "D'accord", etc.
-Toute sortie hors règles = invalide.`,
-                        },
-                        ...messages,
-                    ],
-                });
-                if (typeof completion === 'string' && completion.trim()) {
-                    aiText = completion.trim();
+Toute sortie hors règles = invalide.`;
+                const retryMessages = [
+                    { role: 'system', content: FULL_AXIOM_PROMPT },
+                    { role: 'system', content: retrySystemContent },
+                    ...messages,
+                ];
+                if (onChunk) {
+                    const { fullText } = await callOpenAIStream({ messages: retryMessages }, onChunk);
+                    if (fullText.trim())
+                        aiText = fullText.trim();
+                }
+                else {
+                    const completion = await callOpenAI({ messages: retryMessages });
+                    if (typeof completion === 'string' && completion.trim())
+                        aiText = completion.trim();
                 }
             }
             catch (e) {
@@ -1796,7 +1809,7 @@ Toute sortie hors règles = invalide.`,
                 }
                 else {
                     // Générer miroir avec nouvelle architecture
-                    const generatedMirror = await generateMirrorWithNewArchitecture(userAnswersInBlock, blockType);
+                    const generatedMirror = await generateMirrorWithNewArchitecture(userAnswersInBlock, blockType, undefined, onChunk);
                     // Valider format REVELIOM
                     const validation = validateMirrorREVELIOM(generatedMirror);
                     if (validation.valid) {
@@ -1886,7 +1899,7 @@ Toute sortie hors règles = invalide.`,
                             .map(m => m.content.trim())
                             .filter(a => a.length > 0);
                         // Générer synthèse avec nouvelle architecture
-                        const generatedSynthesis = await generateMirrorWithNewArchitecture(allUserAnswers, 'synthesis');
+                        const generatedSynthesis = await generateMirrorWithNewArchitecture(allUserAnswers, 'synthesis', undefined, onChunk);
                         candidateStore.setFinalProfileText(candidate.candidateId, generatedSynthesis);
                         aiText = generatedSynthesis;
                         console.log(`[AXIOM_EXECUTOR] Synthèse finale BLOC 10 générée avec succès (nouvelle architecture)`);
@@ -1924,7 +1937,7 @@ Toute sortie hors règles = invalide.`,
                             .map(m => m.content.trim())
                             .filter(a => a.length > 0);
                         // Générer synthèse avec nouvelle architecture
-                        const generatedSynthesis = await generateMirrorWithNewArchitecture(allUserAnswers, 'synthesis');
+                        const generatedSynthesis = await generateMirrorWithNewArchitecture(allUserAnswers, 'synthesis', undefined, onChunk);
                         candidateStore.setFinalProfileText(candidate.candidateId, generatedSynthesis);
                         aiText = generatedSynthesis;
                         console.log(`[AXIOM_EXECUTOR] Synthèse finale BLOC 10 générée avec succès (nouvelle architecture)`);
@@ -2079,7 +2092,7 @@ Toute sortie hors règles = invalide.`,
                 ? `SYNTHÈSE FINALE AXIOM:\n${candidate.finalProfileText}`
                 : undefined;
             // Générer matching avec nouvelle architecture
-            const generatedMatching = await generateMirrorWithNewArchitecture(allUserAnswers, 'matching', additionalContext);
+            const generatedMatching = await generateMirrorWithNewArchitecture(allUserAnswers, 'matching', additionalContext, onChunk);
             aiText = generatedMatching;
             console.log(`[AXIOM_EXECUTOR] Matching généré avec succès (nouvelle architecture)`);
         }
@@ -2137,11 +2150,12 @@ Toute sortie hors règles = invalide.`,
 // ============================================
 // AUTO-ENCHAÎNEMENT FSM STRICT
 // ============================================
-export async function executeWithAutoContinue(candidate, userMessage = null, event = null) {
+export async function executeWithAutoContinue(candidate, userMessage = null, event = null, onChunk) {
     let result = await executeAxiom({
         candidate,
         userMessage: userMessage,
         event: event || undefined,
+        onChunk,
     });
     // 🔁 AUTO-ENCHAÎNEMENT FSM STRICT
     // Tant que l'état est non interactif ET demande à continuer
@@ -2157,6 +2171,7 @@ export async function executeWithAutoContinue(candidate, userMessage = null, eve
             candidate: updatedCandidate,
             userMessage: null,
             event: undefined,
+            onChunk,
         });
     }
     return result; // result est toujours défini car executeAxiom retourne toujours une valeur

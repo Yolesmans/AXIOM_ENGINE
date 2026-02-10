@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { callOpenAIStream } from './openaiClient.js';
 import { validateMentorStyle } from './validateMentorStyle.js';
 if (!process.env.OPENAI_API_KEY) {
     throw new Error('OPENAI_API_KEY is required but not found in environment variables');
@@ -55,24 +56,17 @@ function transposeToSecondPerson(text) {
  * @param blockType Type de bloc (détermine le format de sortie)
  * @returns Texte mentor incarné (format adapté)
  */
-export async function renderMentorStyle(mentorAngle, blockType) {
+export async function renderMentorStyle(mentorAngle, blockType, onChunk) {
     const isReveliomFormat = REVELIOM_BLOCK_TYPES.includes(blockType);
     if (isReveliomFormat) {
-        return renderReveliomWithRawAngle(mentorAngle, blockType);
+        return renderReveliomWithRawAngle(mentorAngle, blockType, onChunk);
     }
     // Autres formats (block2b, synthesis, matching) : flux inchangé
     const formatInstructions = getFormatInstructions(blockType);
     const positionalContext = buildPositionalContext(blockType);
     let retries = 0;
     const maxRetries = 1;
-    while (retries <= maxRetries) {
-        try {
-            const response = await client.chat.completions.create({
-                model: 'gpt-4o',
-                messages: [
-                    {
-                        role: 'system',
-                        content: `${positionalContext}Tu es un mentor humain qui reformule une analyse structurée en langage vécu et incarné.
+    const systemContent = `${positionalContext}Tu es un mentor humain qui reformule une analyse structurée en langage vécu et incarné.
 
 MISSION : Transformer cette structure logique en texte mentor qui provoque "ok… je n'avais pas formulé ça comme ça".
 
@@ -138,17 +132,32 @@ ${formatInstructions}
 Angle mentor à incarner :
 ${mentorAngle}
 
-Incarnes cet angle en style mentor incarné. Tu n'as pas à expliquer, tu dois incarner.`
-                    }
-                ],
-                temperature: 0.8,
-                max_tokens: blockType === 'synthesis' || blockType === 'matching' ? 800 : 200,
-            });
-            const content = response.choices[0]?.message?.content;
-            if (!content) {
-                throw new Error('No response content from OpenAI');
+Incarnes cet angle en style mentor incarné. Tu n'as pas à expliquer, tu dois incarner.`;
+    while (retries <= maxRetries) {
+        try {
+            let mentorText;
+            if (onChunk) {
+                const { fullText } = await callOpenAIStream({
+                    messages: [{ role: 'system', content: systemContent }],
+                    model: 'gpt-4o',
+                    temperature: 0.8,
+                    max_tokens: blockType === 'synthesis' || blockType === 'matching' ? 800 : 200,
+                }, onChunk);
+                mentorText = fullText;
             }
-            const mentorText = content.trim();
+            else {
+                const response = await client.chat.completions.create({
+                    model: 'gpt-4o',
+                    messages: [{ role: 'system', content: systemContent }],
+                    temperature: 0.8,
+                    max_tokens: blockType === 'synthesis' || blockType === 'matching' ? 800 : 200,
+                });
+                const content = response.choices[0]?.message?.content;
+                if (!content) {
+                    throw new Error('No response content from OpenAI');
+                }
+                mentorText = content.trim();
+            }
             // Validation basique : le texte reformulé ne doit pas être vide
             if (!mentorText || mentorText.length < 10) {
                 console.warn(`[MENTOR_STYLE_RENDERER] Texte reformulé trop court (retry ${retries})`);
@@ -189,22 +198,7 @@ Incarnes cet angle en style mentor incarné. Tu n'as pas à expliquer, tu dois i
     }
     throw new Error('Failed to render mentor style after retries');
 }
-/**
- * Rendu REVELIOM avec Lecture implicite = angle brut (sans reformulation).
- * Le LLM ne produit que la section 2 (Déduction personnalisée).
- */
-async function renderReveliomWithRawAngle(mentorAngle, blockType) {
-    const positionalContext = buildPositionalContext(blockType);
-    let retries = 0;
-    const maxRetries = 1;
-    while (retries <= maxRetries) {
-        try {
-            const response = await client.chat.completions.create({
-                model: 'gpt-4o',
-                messages: [
-                    {
-                        role: 'system',
-                        content: `${positionalContext}Tu es un mentor. Tu reçois un ANGLE déjà formulé (lecture en creux : "Ce n'est probablement pas X, mais Y.").
+const REVELIOM_DEDUCTION_SYSTEM = (positionalContext, mentorAngle) => `${positionalContext}Tu es un mentor. Tu reçois un ANGLE déjà formulé (lecture en creux : "Ce n'est probablement pas X, mais Y.").
 
 ⚠️ RÈGLE STRICTE — SECTIONS
 
@@ -240,21 +234,51 @@ Exemple CANONIQUE :
 Angle (déjà utilisé en Lecture implicite — ne pas recopier) :
 ${mentorAngle}
 
-Produis UNIQUEMENT cette phrase (forme "Ce moteur tient tant que … — lorsque … , …"), sans numéro ni titre.`
-                    },
-                    {
-                        role: 'user',
-                        content: 'Déduction personnalisée (une phrase, max 25 mots) :'
-                    }
-                ],
-                temperature: 0.8,
-                max_tokens: 120,
-            });
-            const content = response.choices[0]?.message?.content;
-            if (!content) {
-                throw new Error('No response content from OpenAI');
+Produis UNIQUEMENT cette phrase (forme "Ce moteur tient tant que … — lorsque … , …"), sans numéro ni titre.`;
+/**
+ * Rendu REVELIOM avec Lecture implicite = angle brut (sans reformulation).
+ * Le LLM ne produit que la section 2 (Déduction personnalisée).
+ */
+async function renderReveliomWithRawAngle(mentorAngle, blockType, onChunk) {
+    const positionalContext = buildPositionalContext(blockType);
+    let retries = 0;
+    const maxRetries = 1;
+    while (retries <= maxRetries) {
+        try {
+            let deduction;
+            if (onChunk) {
+                const prefixRaw = '1️⃣ Lecture implicite\n\n' + mentorAngle + '\n\n2️⃣ Déduction personnalisée\n\n';
+                const prefixDisplay = '1️⃣ Lecture implicite\n\n' + transposeToSecondPerson(mentorAngle) + '\n\n2️⃣ Déduction personnalisée\n\n';
+                const suffix = '\n\n3️⃣ Validation ouverte\n\n' + VALIDATION_OUVERTE;
+                onChunk(prefixDisplay);
+                const { fullText: deductionStreamed } = await callOpenAIStream({
+                    messages: [
+                        { role: 'system', content: REVELIOM_DEDUCTION_SYSTEM(positionalContext, mentorAngle) },
+                        { role: 'user', content: 'Déduction personnalisée (une phrase, max 25 mots) :' },
+                    ],
+                    model: 'gpt-4o',
+                    temperature: 0.8,
+                    max_tokens: 120,
+                }, onChunk);
+                deduction = deductionStreamed.trim();
+                onChunk(suffix);
             }
-            const deduction = content.trim();
+            else {
+                const response = await client.chat.completions.create({
+                    model: 'gpt-4o',
+                    messages: [
+                        { role: 'system', content: REVELIOM_DEDUCTION_SYSTEM(positionalContext, mentorAngle) },
+                        { role: 'user', content: 'Déduction personnalisée (une phrase, max 25 mots) :' },
+                    ],
+                    temperature: 0.8,
+                    max_tokens: 120,
+                });
+                const content = response.choices[0]?.message?.content;
+                if (!content) {
+                    throw new Error('No response content from OpenAI');
+                }
+                deduction = content.trim();
+            }
             if (!deduction || deduction.length < 10) {
                 console.warn(`[MENTOR_STYLE_RENDERER] Déduction trop courte (retry ${retries})`);
                 if (retries < maxRetries) {
