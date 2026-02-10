@@ -24,71 +24,73 @@ const THINKING_PHRASES = [
   "La formulation finale est préparée avec soin pour que chaque élément trouve sa place sans surinterprétation ni simplification excessive."
 ];
 
-let thinkingIntervalId = null;
-let thinkingCurrentPhraseIndex = 0;
-let thinkingWords = [];
-let thinkingWordIndex = 0;
+let lastPhraseIndex = -1;
+let typingInterval = null;
+let thinkingLoopActive = false;
 let hasReceivedFirstToken = false;
+
+function getNextThinkingPhrase() {
+  let index;
+  do {
+    index = Math.floor(Math.random() * THINKING_PHRASES.length);
+  } while (index === lastPhraseIndex);
+  lastPhraseIndex = index;
+  return THINKING_PHRASES[index];
+}
+
+function typeSentence(sentence, onComplete) {
+  const el = document.getElementById('thinking-text');
+  if (!el) return;
+  el.textContent = '';
+  let i = 0;
+
+  typingInterval = setInterval(() => {
+    if (hasReceivedFirstToken) return;
+    el.textContent += sentence[i];
+    i++;
+
+    if (i >= sentence.length) {
+      clearInterval(typingInterval);
+      typingInterval = null;
+      onComplete && onComplete();
+    }
+  }, 35);
+}
 
 function startThinkingLoop() {
   const typingIndicator = document.getElementById('typing-indicator');
   const thinkingTextSpan = document.getElementById('thinking-text');
   if (!typingIndicator || !thinkingTextSpan) return;
 
-  // Réinitialiser état
-  if (thinkingIntervalId !== null) {
-    clearInterval(thinkingIntervalId);
-    thinkingIntervalId = null;
-  }
-  thinkingCurrentPhraseIndex = 0;
-  thinkingWords = [];
-  thinkingWordIndex = 0;
-  thinkingTextSpan.textContent = '';
-
-  // Préparer la première phrase
-  const phrase = THINKING_PHRASES[thinkingCurrentPhraseIndex];
-  thinkingWords = phrase.split(' ').filter(w => w && w.length > 0);
-  thinkingWordIndex = 0;
-
+  if (thinkingLoopActive) return;
+  thinkingLoopActive = true;
   typingIndicator.classList.remove('hidden');
 
-  // Révélation fluide par groupe de mots (~10–15s par phrase)
-  thinkingIntervalId = setInterval(() => {
-    // Si le streaming réel a commencé, on arrête immédiatement
-    if (hasReceivedFirstToken) {
-      stopThinkingLoop();
-      return;
-    }
+  const loop = () => {
+    if (!thinkingLoopActive || hasReceivedFirstToken) return;
 
-    if (!thinkingWords.length) {
-      return;
-    }
+    const phrase = getNextThinkingPhrase();
+    typeSentence(phrase, () => {
+      if (!hasReceivedFirstToken) {
+        setTimeout(loop, 800);
+      }
+    });
+  };
 
-    if (thinkingWordIndex < thinkingWords.length) {
-      const nextChunk = thinkingWords.slice(0, thinkingWordIndex + 2).join(' ');
-      thinkingTextSpan.textContent = nextChunk;
-      thinkingWordIndex += 2;
-    } else {
-      // Phrase terminée et toujours pas de token SSE → passer à la suivante
-      thinkingCurrentPhraseIndex = (thinkingCurrentPhraseIndex + 1) % THINKING_PHRASES.length;
-      const nextPhrase = THINKING_PHRASES[thinkingCurrentPhraseIndex];
-      thinkingWords = nextPhrase.split(' ').filter(w => w && w.length > 0);
-      thinkingWordIndex = 0;
-      thinkingTextSpan.textContent = '';
-    }
-  }, 800); // rythme naturel (≈ 0,8s par chunk de 2 mots)
+  loop();
 }
 
 function stopThinkingLoop() {
-  const typingIndicator = document.getElementById('typing-indicator');
-  const thinkingTextSpan = document.getElementById('thinking-text');
-  if (thinkingIntervalId !== null) {
-    clearInterval(thinkingIntervalId);
-    thinkingIntervalId = null;
+  if (typingInterval !== null) {
+    clearInterval(typingInterval);
+    typingInterval = null;
   }
+  thinkingLoopActive = false;
+  const thinkingTextSpan = document.getElementById('thinking-text');
   if (thinkingTextSpan) {
     thinkingTextSpan.textContent = '';
   }
+  const typingIndicator = document.getElementById('typing-indicator');
   if (typingIndicator) {
     typingIndicator.classList.add('hidden');
   }
