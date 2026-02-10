@@ -23,6 +23,12 @@ function getFullAxiomPrompt(): string {
   return `${PROMPT_AXIOM_ENGINE}\n\n${PROMPT_AXIOM_PROFIL}`;
 }
 
+/** Question 2A.1 statique (0 token, pas d'appel LLM, pas de validation/retry) — modèle BLOC 1 */
+const STATIC_QUESTION_2A1 =
+  `Tu préfères qu'on parle de séries ou de films ?
+A. Série
+B. Film`;
+
 // Helper pour construire l'historique conversationnel (copié depuis axiomExecutor)
 const MAX_CONV_MESSAGES = 40;
 
@@ -593,11 +599,11 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
     const answers = answerMap?.answers || {};
     const answeredCount = Object.keys(answers).length;
 
-    // Cas 1 : Aucune réponse encore → Générer question 2A.1 (Médium)
+    // Cas 1 : Aucune réponse encore → Question 2A.1 statique (0 token, pas d'API)
     if (answeredCount === 0) {
-      console.log('[ORCHESTRATOR] generate question 2A.1 - Médium (API)');
-      const question = await this.generateQuestion2A1(currentCandidate);
-      
+      const question = STATIC_QUESTION_2A1;
+      console.log('[ORCHESTRATOR] question 2A.1 - Médium (statique, no API)');
+
       // Enregistrer la question dans conversationHistory
       candidateStore.appendAssistantMessage(candidateId, question, {
         block: blockNumber,
