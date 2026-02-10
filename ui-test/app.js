@@ -10,6 +10,90 @@ let showStartButton = false;
 let isInitializing = false;
 let hasActiveQuestion = false; // Verrou UI séquentiel : empêche l'affichage de plusieurs questions simultanément
 
+// Phrases UX d'attente (processus, neutres, sans promesse)
+const THINKING_PHRASES = [
+  "Les réponses sont actuellement croisées afin d’identifier les constantes, les nuances et les points de tension qui structurent le fonctionnement professionnel global.",
+  "Les éléments exprimés sont mis en relation pour comprendre ce qui fait sens ensemble, ce qui se renforce et ce qui mérite d’être clarifié avant d’aller plus loin.",
+  "Une lecture transversale est en cours afin de dégager les logiques dominantes, les moteurs implicites et les équilibres qui émergent à travers les choix effectués.",
+  "Les informations recueillies sont organisées pour transformer des réponses isolées en une vision cohérente et exploitable du profil professionnel.",
+  "L’analyse se poursuit afin d’éviter toute interprétation hâtive et de respecter la complexité réelle des éléments exprimés jusqu’ici.",
+  "Les données sont consolidées pour s’assurer que les conclusions reposent sur des liens solides plutôt que sur des impressions superficielles.",
+  "Les réponses sont mises en perspective pour vérifier leur cohérence interne et identifier les axes qui se dégagent de manière récurrente.",
+  "Une attention particulière est portée aux détails afin de ne pas lisser les spécificités et de préserver ce qui rend le profil singulier.",
+  "Le contenu est en cours de structuration afin d’être restitué de manière claire, lisible et fidèle à ce qui a été exprimé.",
+  "La formulation finale est préparée avec soin pour que chaque élément trouve sa place sans surinterprétation ni simplification excessive."
+];
+
+let thinkingIntervalId = null;
+let thinkingCurrentPhraseIndex = 0;
+let thinkingWords = [];
+let thinkingWordIndex = 0;
+let hasReceivedFirstToken = false;
+
+function startThinkingLoop() {
+  const typingIndicator = document.getElementById('typing-indicator');
+  const thinkingTextSpan = document.getElementById('thinking-text');
+  if (!typingIndicator || !thinkingTextSpan) return;
+
+  // Réinitialiser état
+  if (thinkingIntervalId !== null) {
+    clearInterval(thinkingIntervalId);
+    thinkingIntervalId = null;
+  }
+  thinkingCurrentPhraseIndex = 0;
+  thinkingWords = [];
+  thinkingWordIndex = 0;
+  thinkingTextSpan.textContent = '';
+
+  // Préparer la première phrase
+  const phrase = THINKING_PHRASES[thinkingCurrentPhraseIndex];
+  thinkingWords = phrase.split(' ').filter(w => w && w.length > 0);
+  thinkingWordIndex = 0;
+
+  typingIndicator.classList.remove('hidden');
+
+  // Révélation fluide par groupe de mots (~10–15s par phrase)
+  thinkingIntervalId = setInterval(() => {
+    // Si le streaming réel a commencé, on arrête immédiatement
+    if (hasReceivedFirstToken) {
+      stopThinkingLoop();
+      return;
+    }
+
+    if (!thinkingWords.length) {
+      return;
+    }
+
+    if (thinkingWordIndex < thinkingWords.length) {
+      const nextChunk = thinkingWords.slice(0, thinkingWordIndex + 2).join(' ');
+      thinkingTextSpan.textContent = nextChunk;
+      thinkingWordIndex += 2;
+    } else {
+      // Phrase terminée et toujours pas de token SSE → passer à la suivante
+      thinkingCurrentPhraseIndex = (thinkingCurrentPhraseIndex + 1) % THINKING_PHRASES.length;
+      const nextPhrase = THINKING_PHRASES[thinkingCurrentPhraseIndex];
+      thinkingWords = nextPhrase.split(' ').filter(w => w && w.length > 0);
+      thinkingWordIndex = 0;
+      thinkingTextSpan.textContent = '';
+    }
+  }, 800); // rythme naturel (≈ 0,8s par chunk de 2 mots)
+}
+
+function stopThinkingLoop() {
+  const typingIndicator = document.getElementById('typing-indicator');
+  const thinkingTextSpan = document.getElementById('thinking-text');
+  if (thinkingIntervalId !== null) {
+    clearInterval(thinkingIntervalId);
+    thinkingIntervalId = null;
+  }
+  if (thinkingTextSpan) {
+    thinkingTextSpan.textContent = '';
+  }
+  if (typingIndicator) {
+    typingIndicator.classList.add('hidden');
+  }
+}
+
 // Fonction pour obtenir la clé localStorage
 function getStorageKey() {
   return `axiom_sessionId_${tenantId}_${posteId}`;
@@ -171,6 +255,8 @@ async function callAxiom(message, event = null) {
   if (typingIndicator) {
     typingIndicator.classList.remove('hidden');
   }
+  hasReceivedFirstToken = false;
+  startThinkingLoop();
 
   // Masquer le bouton MVP s'il est visible
   const startButtonContainer = document.getElementById('mvp-start-button-container');
@@ -226,6 +312,13 @@ async function callAxiom(message, event = null) {
       response,
       (chunk) => {
         if (!chunk) return;
+
+        // Premier token SSE réel → arrêter immédiatement la boucle UX et masquer le placeholder
+        if (!hasReceivedFirstToken) {
+          hasReceivedFirstToken = true;
+          stopThinkingLoop();
+        }
+
         fullText += chunk;
         // Affichage progressif en respectant le contrat « une seule question »
         const firstQuestion = extractFirstQuestion(fullText);
@@ -253,10 +346,8 @@ async function callAxiom(message, event = null) {
 
     const data = finalData;
 
-    // Masquer l'indicateur de réflexion
-    if (typingIndicator) {
-      typingIndicator.classList.add('hidden');
-    }
+    // Masquer l'indicateur de réflexion (si encore visible)
+    stopThinkingLoop();
 
     // Verrouiller sessionId : adopter immédiatement si fourni
     if (data.sessionId && typeof data.sessionId === 'string' && data.sessionId.trim() !== '') {
@@ -315,9 +406,7 @@ async function callAxiom(message, event = null) {
 
     return data;
   } catch (error) {
-    if (typingIndicator) {
-      typingIndicator.classList.add('hidden');
-    }
+    stopThinkingLoop();
     console.error('Erreur:', error);
     // En cas d'erreur API, relâcher le verrou pour permettre une nouvelle tentative
     hasActiveQuestion = false;
