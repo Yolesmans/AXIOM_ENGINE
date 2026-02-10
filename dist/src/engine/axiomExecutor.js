@@ -6,6 +6,7 @@ import { getFullAxiomPrompt } from './prompts.js';
 import { generateInterpretiveStructure } from '../services/interpretiveStructureGenerator.js';
 import { selectMentorAngle } from '../services/mentorAngleSelector.js';
 import { renderMentorStyle, transposeToSecondPerson } from '../services/mentorStyleRenderer.js';
+import { getStaticQuestion, EXPECTED_ANSWERS_FOR_MIRROR } from './staticQuestions.js';
 function extractPreambuleFromPrompt(prompt) {
     const match = prompt.match(/PRÉAMBULE MÉTIER[^]*?(?=🔒|🟢|$)/i);
     if (match && match[0]) {
@@ -1434,10 +1435,27 @@ AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
             if (!updatedCandidate) {
                 throw new Error('Candidate not found after update');
             }
-            // Appeler OpenAI EXACTEMENT comme dans la section "BLOCS 1 à 10" avec userMessage = null
+            // Première question BLOC 1 : catalogue statique (0 token), retour immédiat sans LLM
+            const q0 = getStaticQuestion(1, 0);
+            if (q0) {
+                candidateStore.updateUIState(updatedCandidate.candidateId, {
+                    step: BLOC_01,
+                    lastQuestion: q0,
+                    tutoiement: uiNonNull.tutoiement || undefined,
+                    identityDone: true,
+                });
+                logTransition(updatedCandidate.candidateId, stateIn, BLOC_01, 'event');
+                return {
+                    response: q0,
+                    step: BLOC_01,
+                    lastQuestion: q0,
+                    expectsAnswer: true,
+                    autoContinue: false,
+                };
+            }
             const blocNumber = 1;
-            const messages = buildConversationHistory(updatedCandidate);
             let aiText = null;
+            const messages = buildConversationHistory(updatedCandidate);
             const bloc01SystemContent = `RÈGLE ABSOLUE AXIOM :
 Le moteur AXIOM n'interprète pas les prompts. Il les exécute STRICTEMENT.
 Tu es en état BLOC_01 (BLOC ${blocNumber}).
@@ -1468,42 +1486,15 @@ Toute sortie hors règles = invalide.`;
             catch (e) {
                 console.error('[AXIOM_EXECUTION_ERROR]', e);
             }
-            // Si échec → réessayer une fois
-            if (!aiText) {
-                try {
-                    const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
-                    const bloc01RetryMessages = [
-                        { role: 'system', content: FULL_AXIOM_PROMPT },
-                        { role: 'system', content: bloc01SystemContent },
-                        ...messages,
-                    ];
-                    if (onChunk) {
-                        const { fullText } = await callOpenAIStream({ messages: bloc01RetryMessages }, onChunk);
-                        if (fullText.trim())
-                            aiText = fullText.trim();
-                    }
-                    else {
-                        const completion = await callOpenAI({ messages: bloc01RetryMessages });
-                        if (typeof completion === 'string' && completion.trim())
-                            aiText = completion.trim();
-                    }
-                }
-                catch (e) {
-                    console.error('[AXIOM_EXECUTION_ERROR_RETRY]', e);
-                }
-            }
-            // Si toujours vide → utiliser lastQuestion
             if (!aiText) {
                 aiText = updatedCandidate.session.ui?.lastQuestion || '';
             }
-            // Si toujours vide → erreur critique
             if (!aiText) {
                 console.error('[AXIOM_CRITICAL_ERROR]', { sessionId: updatedCandidate.candidateId, state: BLOC_01 });
                 throw new Error('Failed to generate BLOC 1 question');
             }
             const expectsAnswer = aiText.trim().endsWith('?');
             const lastQuestion = expectsAnswer ? aiText : null;
-            // Mettre à jour lastQuestion dans l'UI state
             candidateStore.updateUIState(updatedCandidate.candidateId, {
                 step: BLOC_01,
                 lastQuestion,
@@ -1511,7 +1502,6 @@ Toute sortie hors règles = invalide.`;
                 identityDone: true,
             });
             logTransition(updatedCandidate.candidateId, stateIn, BLOC_01, 'event');
-            // Retourner la première question du BLOC 1
             return {
                 response: aiText,
                 step: BLOC_01,
@@ -1575,16 +1565,21 @@ Toute sortie hors règles = invalide.`;
     // ============================================
     function areAllQuestionsAnswered(candidate, blocNumber) {
         const conversationHistory = candidate.conversationHistory || [];
-        // Compter les questions posées (assistant avec kind: 'question' dans ce bloc)
-        const questionsInBlock = conversationHistory.filter(m => m.role === 'assistant' && m.block === blocNumber && m.kind === 'question');
-        // Compter les réponses utilisateur (user dans ce bloc, exclure mirror_validation)
+        // Réponses utilisateur dans ce bloc (exclure mirror_validation)
         const answersInBlock = conversationHistory.filter(m => m.role === 'user' && m.block === blocNumber && m.kind !== 'mirror_validation');
-        // Si au moins une question posée et nombre de réponses >= nombre de questions
-        // (on accepte >= car l'utilisateur peut avoir répondu plusieurs fois)
-        if (questionsInBlock.length > 0) {
-            return answersInBlock.length >= questionsInBlock.length;
+        // Blocs 1 et 3-9 : seuil fixe pour déclencher le miroir (aligné sur le catalogue statique)
+        if (blocNumber === 1 || (blocNumber >= 3 && blocNumber <= 9)) {
+            const expected = EXPECTED_ANSWERS_FOR_MIRROR[blocNumber] ?? 0;
+            return answersInBlock.length >= expected;
         }
-        // Si aucune question posée, on ne peut pas être en fin de bloc
+        // Bloc 10 : au moins une question posée et autant de réponses
+        if (blocNumber === 10) {
+            const questionsInBlock = conversationHistory.filter(m => m.role === 'assistant' && m.block === blocNumber && m.kind === 'question');
+            if (questionsInBlock.length > 0) {
+                return answersInBlock.length >= questionsInBlock.length;
+            }
+            return false;
+        }
         return false;
     }
     // ============================================
@@ -1599,13 +1594,26 @@ Toute sortie hors règles = invalide.`;
         if (userMessage) {
             messages.push({ role: 'user', content: userMessage });
         }
-        // VÉRIFICATION SYSTÈME : Toutes les questions sont-elles répondues ? (BLOCS 3-10)
-        const allQuestionsAnswered = blocNumber >= 3 && blocNumber <= 10
+        // VÉRIFICATION SYSTÈME : Toutes les questions sont-elles répondues ? (BLOCS 1, 3-10)
+        const allQuestionsAnswered = (blocNumber === 1 || (blocNumber >= 3 && blocNumber <= 10))
             ? areAllQuestionsAnswered(candidate, blocNumber)
             : false;
         let aiText = null;
-        // DÉCISION : Forcer prompt miroir si toutes questions répondues (BLOCS 3-9)
-        const shouldForceMirror = blocNumber >= 3 && blocNumber <= 9 && allQuestionsAnswered;
+        // DÉCISION : Forcer prompt miroir si toutes questions répondues (BLOCS 1 et 3-9, pas 2A/2B)
+        const shouldForceMirror = (blocNumber === 1 || (blocNumber >= 3 && blocNumber <= 9)) && allQuestionsAnswered;
+        const answersInBlockForLog = (candidate.conversationHistory || []).filter(m => m.role === 'user' && m.block === blocNumber && m.kind !== 'mirror_validation').length;
+        if (blocNumber >= 1 && blocNumber <= 9) {
+            console.log('[AXIOM][STATE]', {
+                step: currentState,
+                blocNumber,
+                answersInBlock: answersInBlockForLog,
+                expected: EXPECTED_ANSWERS_FOR_MIRROR[blocNumber],
+                allQuestionsAnswered,
+                shouldForceMirror,
+                hasUserMessage: !!userMessage,
+                event: event ?? null,
+            });
+        }
         // DÉCISION : Synthèse finale BLOC 10 → utiliser nouvelle architecture directement
         const shouldForceSynthesis = blocNumber === 10 && allQuestionsAnswered;
         // Si synthèse finale → utiliser nouvelle architecture directement
@@ -1627,7 +1635,16 @@ Toute sortie hors règles = invalide.`;
                 // Fallback : continuer avec logique normale (ne pas générer via OpenAI)
             }
         }
-        // Si pas de synthèse générée → génération normale (questions ou miroirs BLOCS 3-9)
+        // Questions statiques BLOC 1 et 3-9 : 0 token, réponse instantanée (pas d'appel LLM)
+        if (!aiText && blocNumber >= 1 && blocNumber <= 9 && blocNumber !== 2 && !shouldForceMirror) {
+            const conversationHistoryForBlock = candidate.conversationHistory || [];
+            const answersInBlockForQuestion = conversationHistoryForBlock.filter(m => m.role === 'user' && m.block === blocNumber && m.kind !== 'mirror_validation');
+            const nextQuestion = getStaticQuestion(blocNumber, answersInBlockForQuestion.length);
+            if (nextQuestion) {
+                aiText = nextQuestion;
+            }
+        }
+        // Si pas de synthèse générée et pas de question statique → appel LLM (miroir ou fallback)
         if (!aiText) {
             try {
                 const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
@@ -1801,7 +1818,7 @@ Toute sortie hors règles = invalide.`;
         // SÉPARATION ANNONCE DE TRANSITION AVANT VALIDATION/PARSING (BLOCS 3-9)
         let transitionAnnouncement = null;
         let cleanMirrorText = aiText || '';
-        if (aiText && blocNumber >= 3 && blocNumber <= 9) {
+        if (aiText && blocNumber >= 1 && blocNumber <= 9) {
             const separated = separateTransitionAnnouncement(aiText, blocNumber);
             cleanMirrorText = separated.mirror;
             transitionAnnouncement = separated.announcement;
@@ -1812,8 +1829,8 @@ Toute sortie hors règles = invalide.`;
         // Validation REVELIOM pour miroirs (blocs 3-9 uniquement) — sur texte nettoyé
         let expectsAnswer = cleanMirrorText ? cleanMirrorText.trim().endsWith('?') : false;
         let isMirror = false;
-        if (cleanMirrorText && blocNumber >= 3 && blocNumber <= 9 && !expectsAnswer) {
-            // C'est un miroir → utiliser nouvelle architecture séparée
+        if (cleanMirrorText && blocNumber >= 1 && blocNumber <= 9 && !expectsAnswer) {
+            // C'est un miroir → utiliser nouvelle architecture séparée (blocs 1 et 3-9)
             isMirror = true;
             try {
                 // Construire le contexte des réponses depuis conversationHistory
@@ -1824,6 +1841,7 @@ Toute sortie hors règles = invalide.`;
                     .filter(a => a.length > 0);
                 // Mapper le numéro de bloc au type BlockType
                 const blockTypeMap = {
+                    1: 'block1',
                     3: 'block3',
                     4: 'block4',
                     5: 'block5',
@@ -1876,7 +1894,7 @@ Toute sortie hors règles = invalide.`;
             const lastAssistantMessage = [...conversationHistory]
                 .reverse()
                 .find(m => m.role === 'assistant' && m.kind === 'mirror' && m.block === blocNumber);
-            const isMirrorValidation = blocNumber >= 3 && blocNumber <= 9 &&
+            const isMirrorValidation = blocNumber >= 1 && blocNumber <= 9 &&
                 currentState.startsWith('BLOC_') &&
                 lastAssistantMessage !== undefined;
             if (isMirrorValidation) {
@@ -1908,7 +1926,7 @@ Toute sortie hors règles = invalide.`;
             const lastAssistantMessage = [...conversationHistory]
                 .reverse()
                 .find(m => m.role === 'assistant' && m.kind === 'mirror' && m.block === blocNumber);
-            if (lastAssistantMessage && blocNumber >= 3 && blocNumber <= 9 && currentState.startsWith('BLOC_')) {
+            if (lastAssistantMessage && blocNumber >= 1 && blocNumber <= 9 && currentState.startsWith('BLOC_')) {
                 // Validation miroir reçue → passer au bloc suivant
                 if (blocNumber < 10) {
                     nextState = blocStates[blocNumber];
@@ -2054,7 +2072,7 @@ Toute sortie hors règles = invalide.`;
         // IMPORTANT : Parser uniquement le miroir nettoyé (sans annonce)
         let progressiveDisplay = false;
         let mirrorSections = undefined;
-        if (cleanMirrorText && !expectsAnswer && blocNumber >= 3 && blocNumber <= 9 && isMirror) {
+        if (cleanMirrorText && !expectsAnswer && blocNumber >= 1 && blocNumber <= 9 && isMirror) {
             const sections = parseMirrorSections(cleanMirrorText);
             if (sections.length === 3) {
                 progressiveDisplay = true;
