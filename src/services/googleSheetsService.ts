@@ -30,7 +30,7 @@ export function getAxiomLink(tenantId: string, posteId: string): string {
   return `${base}/start?tenant=${tenantId}&poste=${posteId}`;
 }
 
-export function candidateToLiveTrackingRow(candidate: AxiomCandidate): LiveTrackingRow & { verdict?: string } {
+export function candidateToLiveTrackingRow(candidate: AxiomCandidate): LiveTrackingRow & { verdict?: string; recommendationAxiom?: string } {
   const state: LiveTrackingRow['state'] = candidate.session.completedAt
     ? 'completed'
     : candidate.session.state;
@@ -47,6 +47,7 @@ export function candidateToLiveTrackingRow(candidate: AxiomCandidate): LiveTrack
     startedAt: candidate.session.startedAt.toISOString(),
     lastActivityAt: candidate.session.lastActivityAt.toISOString(),
     verdict: candidate.matchingResult?.verdict ?? '',
+    recommendationAxiom: candidate.matchingResult?.fullText ?? '',
   };
 }
 
@@ -431,7 +432,7 @@ class GoogleSheetsLiveTrackingService {
 
       const statusAxiom = this.getStatusAxiomLabel(row.state);
       const blocAtteint = row.currentBlock?.toString() || '';
-      const verdict = (row as any).verdict ?? '';
+      const recommendationAxiom = (row as { recommendationAxiom?: string }).recommendationAxiom ?? '';
 
       const values = [
         [
@@ -441,7 +442,7 @@ class GoogleSheetsLiveTrackingService {
           row.email,
           statusAxiom,
           blocAtteint,
-          verdict,
+          recommendationAxiom,
           row.lastActivityAt.split('T')[0] + ' ' + row.lastActivityAt.split('T')[1]?.split('.')[0] || '',
           '',
         ],
@@ -487,7 +488,7 @@ class GoogleSheetsLiveTrackingService {
 
       const statusAxiom = this.getStatusAxiomLabel(row.state);
       const blocAtteint = row.currentBlock?.toString() || '';
-      const verdict = (row as any).verdict ?? '';
+      const recommendationAxiom = (row as { recommendationAxiom?: string }).recommendationAxiom ?? '';
 
       const values = [
         [
@@ -497,7 +498,7 @@ class GoogleSheetsLiveTrackingService {
           row.email,
           statusAxiom,
           blocAtteint,
-          verdict,
+          recommendationAxiom,
           row.lastActivityAt.split('T')[0] + ' ' + row.lastActivityAt.split('T')[1]?.split('.')[0] || '',
           '',
         ],

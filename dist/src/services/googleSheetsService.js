@@ -42,6 +42,7 @@ export function candidateToLiveTrackingRow(candidate) {
         startedAt: candidate.session.startedAt.toISOString(),
         lastActivityAt: candidate.session.lastActivityAt.toISOString(),
         verdict: candidate.matchingResult?.verdict ?? '',
+        recommendationAxiom: candidate.matchingResult?.fullText ?? '',
     };
 }
 class GoogleSheetsLiveTrackingService {
@@ -389,7 +390,7 @@ class GoogleSheetsLiveTrackingService {
             await this.ensureSheetExists(spreadsheetId, post.label, tenantId, posteId);
             const statusAxiom = this.getStatusAxiomLabel(row.state);
             const blocAtteint = row.currentBlock?.toString() || '';
-            const verdict = row.verdict ?? '';
+            const recommendationAxiom = row.recommendationAxiom ?? '';
             const values = [
                 [
                     row.startedAt.split('T')[0],
@@ -398,7 +399,7 @@ class GoogleSheetsLiveTrackingService {
                     row.email,
                     statusAxiom,
                     blocAtteint,
-                    verdict,
+                    recommendationAxiom,
                     row.lastActivityAt.split('T')[0] + ' ' + row.lastActivityAt.split('T')[1]?.split('.')[0] || '',
                     '',
                 ],
@@ -441,7 +442,7 @@ class GoogleSheetsLiveTrackingService {
             await this.ensureSheetExists(spreadsheetId, post.label, tenantId, posteId);
             const statusAxiom = this.getStatusAxiomLabel(row.state);
             const blocAtteint = row.currentBlock?.toString() || '';
-            const verdict = row.verdict ?? '';
+            const recommendationAxiom = row.recommendationAxiom ?? '';
             const values = [
                 [
                     row.startedAt.split('T')[0],
@@ -450,7 +451,7 @@ class GoogleSheetsLiveTrackingService {
                     row.email,
                     statusAxiom,
                     blocAtteint,
-                    verdict,
+                    recommendationAxiom,
                     row.lastActivityAt.split('T')[0] + ' ' + row.lastActivityAt.split('T')[1]?.split('.')[0] || '',
                     '',
                 ],
