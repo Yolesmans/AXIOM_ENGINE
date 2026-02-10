@@ -71,6 +71,10 @@ export function validateMentorStyle(content: string): MentorStyleValidationResul
     /chaque fois que tu/i,
   ];
 
+  // Section 1 (Lecture implicite) en format "Ce n'est probablement pas X, mais Y." = lecture en creux brute → pas d'exigence de marqueur expérientiel
+  const isSection1LectureEnCreux = (content: string) =>
+    /Ce n'est probablement pas .+ mais .+/s.test(content) || /probablement pas .+ mais .+/s.test(content);
+
   // Vérifier chaque section
   sections.forEach((section, sectionIndex) => {
     const sectionContent = section.content;
@@ -86,6 +90,8 @@ export function validateMentorStyle(content: string): MentorStyleValidationResul
       return;
     }
 
+    const exemptExperiential = section.index === 1 && isSection1LectureEnCreux(sectionContent);
+
     // Vérifier chaque phrase
     let sectionHasDeclarative = false;
     let sectionHasExperiential = false;
@@ -98,7 +104,7 @@ export function validateMentorStyle(content: string): MentorStyleValidationResul
         errors.push(`Section ${section.index === 0 ? 'texte' : section.index}, phrase ${sentenceIndex + 1} : contient un pattern déclaratif interdit ("${sentence.substring(0, 50)}...")`);
       }
 
-      // Vérifier présence marqueurs expérientiels
+      // Vérifier présence marqueurs expérientiels (sauf section 1 si lecture en creux)
       const hasExperientialMarker = experientialMarkers.some(pattern => pattern.test(sentence));
       if (hasExperientialMarker) {
         sectionHasExperiential = true;
@@ -110,7 +116,9 @@ export function validateMentorStyle(content: string): MentorStyleValidationResul
       hasDeclarative = true;
     }
 
-    if (!sectionHasExperiential && sentences.length > 0) {
+    if (exemptExperiential) {
+      hasExperiential = true; // Section 1 lecture en creux : pas d'exigence "quand tu"
+    } else if (!sectionHasExperiential && sentences.length > 0) {
       errors.push(`Section ${section.index === 0 ? 'texte' : section.index} : aucune phrase ne contient de marqueur expérientiel ("quand tu...", "dès que tu...", etc.)`);
     } else if (sectionHasExperiential) {
       hasExperiential = true;

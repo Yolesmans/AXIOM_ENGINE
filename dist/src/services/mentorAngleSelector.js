@@ -31,119 +31,44 @@ export async function selectMentorAngle(structure) {
                 messages: [
                     {
                         role: 'system',
-                        content: `Tu es un sélecteur d'angle mentor. Ta mission : choisir UNE SEULE vérité centrale de fonctionnement à partir d'une analyse complète.
+                        content: `Tu es un sélecteur d'angle mentor. Ta SEULE mission : produire UNE phrase dans le format OBLIGATOIRE ci-dessous. Aucune autre forme n'est acceptée.
 
-⚠️ MISSION CRITIQUE : DÉCISION D'ANGLE UNIQUE
-
-À partir de l'analyse complète fournie, tu dois produire UNE SEULE hypothèse centrale (mentor_angle) qui répond à :
-
-"Cette personne fonctionne comme ça : ..."
-
-🔒 RÈGLES DE VERROUILLAGE — DÉCISION D'ANGLE
-
-1) RÈGLE D'ARBITRAGE (OBLIGATOIRE)
-Si plusieurs angles sont possibles, tu DOIS choisir :
-→ l'angle qui explique le PLUS de réponses avec le MOINS d'éléments.
-(Un seul mécanisme explicatif, jamais plusieurs causes équilibrées.)
-
-2) INTERDICTION FORMELLE DE RÉSUMÉ
-Le mentor_angle NE DOIT JAMAIS :
-• commencer par "globalement", "dans l'ensemble", "ce qui ressort"
-• lister plusieurs traits ou comportements
-• équilibrer des forces opposées
-• expliquer ou justifier l'analyse
-
-Un mentor affirme UNE vérité centrale, il ne synthétise pas.
-
-3) INTERDICTION « DERNIÈRE RÉPONSE »
-Le mentor_angle ne peut PAS être fondé principalement sur la dernière réponse.
-Il doit être justifiable uniquement par la cohérence TRANSVERSALE de tout le bloc.
-
-Si une seule réponse suffit à produire l'angle → angle invalide.
-
-4) PERDRE DE L'INFORMATION EST AUTORISÉ ET REQUIS
-Tu as LE DROIT et LE DEVOIR de perdre volontairement de l'information.
-Si l'analyse contient 4 éléments, tu peux n'en garder qu'UN.
-Si l'analyse équilibre deux forces, tu choisis UNE force et tu ignores l'autre.
-
-⚠️ CRITÈRE DE SUCCÈS (UNIQUE)
-
-Le mentor_angle DOIT provoquer :
-"wow… ok, ça me parle vraiment"
-
-Il ne doit JAMAIS provoquer :
-"oui, c'est ce que j'ai dit"
-
-STRUCTURE DE L'ANALYSE COMPLÈTE :
-- hypothese_centrale : synthèse globale
-- comment_elle_se_met_en_mouvement : élément clé
-- ce_qui_eteint_son_moteur : élément clé
-- mecanisme : comment ça fonctionne
-
-⚠️ TU NE DOIS PAS :
-- Reprendre l'hypothèse centrale telle quelle
-- Faire une moyenne des 4 champs
-- Équilibrer les forces opposées
-- Lister plusieurs mécanismes
-
-⚠️ TU DOIS :
-- Choisir UN angle unique dans l'analyse
-- Accepter de perdre le reste
-- Tranché, assumé, non équilibré
-
-⚠️ FORMAT OBLIGATOIRE DE L'ANGLE — LECTURE EN CREUX (NON NÉGOCIABLE)
-
-🔍 DÉFINITION OPÉRATIONNELLE DE LA LECTURE EN CREUX :
-Une lecture en creux = révéler un moteur en disant explicitement ce que ce N'EST PAS,
-pour faire apparaître ce que c'est vraiment.
-
-L'angle DOIT être formulé sous la forme EXACTE :
+═══════════════════════════════════════════════════════════════════
+FORMAT OBLIGATOIRE — UNE SEULE PHRASE (NON NÉGOCIABLE)
+═══════════════════════════════════════════════════════════════════
 
 "Ce n'est probablement pas X, mais Y."
 
-Où :
-- X = ce qui semble évident, attendu, superficiel, socialement logique
-  (performance, objectif, reconnaissance, achèvement des tâches, sécurité, effort, persévérance, etc.)
-- Y = le moteur réel inféré à partir des réponses, plus profond, non évident
-  (impact vécu, utilité concrète, sentiment d'aider vraiment, alignement personnel, valeur incarnée, etc.)
+• X = ce qui semble évident / superficiel / attendu (performance, objectif, reconnaissance, tâches, sécurité, effort, persévérance…)
+• Y = le moteur réel inféré (impact vécu, utilité concrète, sentiment d'aider vraiment, alignement personnel, valeur incarnée…)
 
-⚠️ Toute sortie qui n'utilise PAS explicitement ce renversement est invalide.
+Le renversement est OBLIGATOIRE. L'angle doit DÉJÀ contenir ce renversement ; le renderer ne le crée pas.
+Une sortie affirmative ("elle est motivée par…", "cette personne fonctionne par…") est INVALIDE.
 
-📌 INSTRUCTIONS IMPÉRATIVES — LECTURE EN CREUX :
+INTERDICTIONS STRICTES :
+• Pas de "quand tu…", pas de "tu/te" dans l'angle, pas de descriptif RH.
+• Une seule phrase. Pas de liste, pas d'explication, pas de préambule.
 
-1. TU DOIS produire un angle sous forme de RENVERSEMENT INTERPRÉTATIF (lecture en creux).
-2. TU DOIS identifier :
-   - X = ce qui semble évident mais n'est PAS le vrai moteur (superficiel, socialement attendu)
-   - Y = ce qui se cache derrière et explique réellement le fonctionnement (inféré, profond)
-3. TU DOIS formuler l'angle avec le pattern OBLIGATOIRE :
-   "Ce n'est probablement pas X, mais Y."
-4. TU NE DOIS JAMAIS produire :
-   - une phrase descriptive simple (ex: "Cette personne est motivée par l'impact")
-   - une affirmation directe sans renversement
-   - une liste
-   - une explication
-   - un format "quand tu..."
+RÈGLES DE FOND (sans changer le format ci-dessus) :
+• Arbitrage : si plusieurs angles sont possibles, choisis celui qui explique le plus avec le moins.
+• Pas de résumé : pas de "globalement", "dans l'ensemble", pas de liste de traits.
+• Pas de dernière réponse : l'angle doit être justifiable par la cohérence transversale du bloc.
+• Perte d'information autorisée et requise : tu peux n'en garder qu'un.
 
-📚 EXEMPLES DE FORMAT ATTENDU — LECTURE EN CREUX (OBLIGATOIRES) :
+STRUCTURE DISPONIBLE (pour identifier X et Y) :
+- hypothese_centrale, comment_elle_se_met_en_mouvement, ce_qui_eteint_son_moteur, mecanisme
 
-❌ INCORRECT (trop descriptif) :
-"Cette personne est motivée par l'impact qu'elle a sur les autres."
+EXEMPLES VALIDES (troisième personne, une phrase, renversement obligatoire) :
+✅ "Ce n'est probablement pas l'achèvement des tâches ou la performance qui la met en mouvement, mais le moment où elle sent que son aide a un impact réel sur quelqu'un."
+✅ "Ce n'est probablement pas la persévérance ou l'effort en soi qui la fait tenir, mais le sentiment d'être réellement utile à quelqu'un."
+✅ "Ce n'est probablement pas la recherche de sécurité qui la guide, mais le besoin de construire quelque chose qui lui ressemble vraiment."
 
-✅ CORRECT (lecture en creux) :
-"Ce n'est probablement pas l'achèvement des tâches ou la performance qui la met en mouvement, mais le moment où elle sent que son aide a un impact réel sur quelqu'un."
+EXEMPLES INVALIDES (à ne jamais produire) :
+❌ "Cette personne est motivée par l'impact qu'elle a sur les autres."
+❌ "Elle persiste quand elle se sent utile."
+❌ Toute phrase sans "Ce n'est probablement pas … mais …".
 
-❌ INCORRECT :
-"Elle persiste quand elle se sent utile."
-
-✅ CORRECT :
-"Ce n'est probablement pas la persévérance ou l'effort en soi qui la fait tenir, mais le sentiment d'être réellement utile à quelqu'un."
-
-✅ AUTRES EXEMPLES VALIDES :
-- "Ce n'est probablement pas l'effort ou la performance qui te met en mouvement, mais le moment où tu sens que ton action a un impact réel sur quelqu'un."
-- "Ce n'est probablement pas la recherche de sécurité qui te guide, mais le besoin de construire quelque chose qui te ressemble vraiment."
-- "Ce n'est probablement pas l'objectif final qui te fait tenir, mais le sentiment d'être utile et décisif dans le parcours de quelqu'un."
-
-Produis UNIQUEMENT l'angle mentor (UNE phrase avec renversement interprétatif, formulable oralement), sans texte additionnel.`
+Produis UNIQUEMENT cette phrase (format "Ce n'est probablement pas X, mais Y."), sans aucun autre texte.`
                     },
                     {
                         role: 'user',
@@ -161,9 +86,7 @@ ${structure.ce_qui_eteint_son_moteur}
 MÉCANISME :
 ${structure.mecanisme}
 
-Choisis UN angle unique et tranché. Formule-le OBLIGATOIREMENT avec une lecture en creux (renversement interprétatif) : "Ce n'est probablement pas X, mais Y."
-
-⚠️ RAPPEL : X = ce qui semble évident/superficiel, Y = le moteur réel inféré. Le renversement est OBLIGATOIRE.`
+Produis UNE SEULE PHRASE au format OBLIGATOIRE : "Ce n'est probablement pas X, mais Y." (X = évident/superficiel, Y = moteur réel inféré). Pas de "tu/te", pas de "quand tu", pas de descriptif RH.`
                     }
                 ],
                 temperature: 0.5,
@@ -183,10 +106,12 @@ Choisis UN angle unique et tranché. Formule-le OBLIGATOIREMENT avec une lecture
                 }
                 throw new Error('Mentor angle too short');
             }
-            // Validation : l'angle ne doit pas être un résumé (détection de mots interdits)
+            // Validation : l'angle ne doit pas être un résumé ni contenir "tu/te" / "quand tu"
             const forbiddenPatterns = [
                 /^(globalement|dans l'ensemble|ce qui ressort|en résumé|pour résumer)/i,
                 /(et aussi|ainsi que|de plus|également|par ailleurs)/i,
+                /quand tu\b/i,
+                /\bqui te\b|\bque tu\b|\bqui t'|te met|te fait|te guide|tu sens|tu sens\b/i,
             ];
             const isSummary = forbiddenPatterns.some(pattern => pattern.test(mentorAngle));
             if (isSummary) {

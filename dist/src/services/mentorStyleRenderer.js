@@ -6,6 +6,10 @@ if (!process.env.OPENAI_API_KEY) {
 const client = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
 });
+/** Blocs qui utilisent le format REVELIOM (1️⃣ Lecture implicite, 2️⃣ Déduction, 3️⃣ Validation) */
+const REVELIOM_BLOCK_TYPES = ['block1', 'block3', 'block4', 'block5', 'block6', 'block7', 'block8', 'block9'];
+/** Phrase fixe section 3 — inchangée */
+const VALIDATION_OUVERTE = 'Dis-moi si ça te parle, ou s\'il y a une nuance importante que je n\'ai pas vue.';
 /**
  * Rend un angle mentor en texte mentor incarné pour TOUS les blocs
  *
@@ -23,9 +27,12 @@ const client = new OpenAI({
  * @returns Texte mentor incarné (format adapté)
  */
 export async function renderMentorStyle(mentorAngle, blockType) {
-    // Adapter le format selon le type de bloc
+    const isReveliomFormat = REVELIOM_BLOCK_TYPES.includes(blockType);
+    if (isReveliomFormat) {
+        return renderReveliomWithRawAngle(mentorAngle, blockType);
+    }
+    // Autres formats (block2b, synthesis, matching) : flux inchangé
     const formatInstructions = getFormatInstructions(blockType);
-    // Construire le contexte mental positionnel (uniquement pour miroirs fin de bloc 1-9)
     const positionalContext = buildPositionalContext(blockType);
     let retries = 0;
     const maxRetries = 1;
@@ -151,6 +158,101 @@ Incarnes cet angle en style mentor incarné. Tu n'as pas à expliquer, tu dois i
         }
     }
     throw new Error('Failed to render mentor style after retries');
+}
+/**
+ * Rendu REVELIOM avec Lecture implicite = angle brut (sans reformulation).
+ * Le LLM ne produit que la section 2 (Déduction personnalisée).
+ */
+async function renderReveliomWithRawAngle(mentorAngle, blockType) {
+    const positionalContext = buildPositionalContext(blockType);
+    let retries = 0;
+    const maxRetries = 1;
+    while (retries <= maxRetries) {
+        try {
+            const response = await client.chat.completions.create({
+                model: 'gpt-4o',
+                messages: [
+                    {
+                        role: 'system',
+                        content: `${positionalContext}Tu es un mentor. Tu reçois un ANGLE déjà formulé (lecture en creux : "Ce n'est probablement pas X, mais Y.").
+
+⚠️ RÈGLE STRICTE — SECTIONS
+
+• La section "1️⃣ Lecture implicite" est DÉJÀ RÉDIGÉE : c'est l'angle tel quel. Tu ne la rédiges PAS. Tu ne la reformules PAS.
+• Tu dois produire UNIQUEMENT la section "2️⃣ Déduction personnalisée" : UNE phrase, maximum 25 mots.
+• La section "3️⃣ Validation ouverte" est fixe, tu ne la produis pas.
+
+⚠️ CE QUE TU PRODUIS
+
+UNE SEULE PHRASE pour la Déduction personnalisée :
+- Explicative : déduire les conditions concrètes d'engagement/désengagement à partir de l'angle.
+- Langage vécu, "tu" autorisé ici (ex. "C'est pour cette raison que ton engagement dépend moins du cadre que du sentiment de contribuer concrètement...").
+- Pas de "1️⃣", pas de "2️⃣", pas de préambule. Juste la phrase.
+
+INTERDICTIONS pour ta phrase :
+- Pas de reformulation de l'angle (l'angle est déjà en section 1 tel quel).
+- Pas de "Quand elle...", "Dès qu'elle..." en début de phrase pour répéter l'angle — la déduction peut utiliser "quand tu" pour l'implication concrète.
+
+Angle (déjà utilisé tel quel en Lecture implicite — ne pas recopier) :
+${mentorAngle}
+
+Produis UNIQUEMENT la phrase de Déduction personnalisée (max 25 mots), sans numéro de section ni titre.`
+                    },
+                    {
+                        role: 'user',
+                        content: 'Déduction personnalisée (une phrase, max 25 mots) :'
+                    }
+                ],
+                temperature: 0.8,
+                max_tokens: 120,
+            });
+            const content = response.choices[0]?.message?.content;
+            if (!content) {
+                throw new Error('No response content from OpenAI');
+            }
+            const deduction = content.trim();
+            if (!deduction || deduction.length < 10) {
+                console.warn(`[MENTOR_STYLE_RENDERER] Déduction trop courte (retry ${retries})`);
+                if (retries < maxRetries) {
+                    retries++;
+                    continue;
+                }
+            }
+            const mentorText = [
+                '1️⃣ Lecture implicite',
+                '',
+                mentorAngle,
+                '',
+                '2️⃣ Déduction personnalisée',
+                '',
+                deduction,
+                '',
+                '3️⃣ Validation ouverte',
+                '',
+                VALIDATION_OUVERTE,
+            ].join('\n');
+            const validation = validateMentorStyle(mentorText);
+            if (validation.valid) {
+                console.log(`[MENTOR_STYLE_RENDERER] Texte REVELIOM (angle brut section 1) validé (type: ${blockType})`);
+                return mentorText;
+            }
+            if (retries < maxRetries) {
+                console.warn(`[MENTOR_STYLE_RENDERER] Validation échouée (retry ${retries})`, validation.errors);
+                retries++;
+                continue;
+            }
+            console.warn(`[MENTOR_STYLE_RENDERER] Validation échouée après retries, utilisation texte assemblé`, validation.errors);
+            return mentorText;
+        }
+        catch (error) {
+            if (retries < maxRetries) {
+                retries++;
+                continue;
+            }
+            throw error;
+        }
+    }
+    throw new Error('Failed to render REVELIOM after retries');
 }
 /**
  * Rend un angle mentor en texte mentor incarné pour le BLOC 1
