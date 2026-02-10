@@ -88,11 +88,62 @@ STRUCTURE DE L'ANALYSE COMPLÈTE :
 
 ⚠️ TU DOIS :
 - Choisir UN angle unique dans l'analyse
-- Le formuler comme "Cette personne fonctionne comme ça : ..."
 - Accepter de perdre le reste
 - Tranché, assumé, non équilibré
 
-Produis UNIQUEMENT l'angle mentor (UNE phrase, formulable oralement), sans texte additionnel.`
+⚠️ FORMAT OBLIGATOIRE DE L'ANGLE — LECTURE EN CREUX (NON NÉGOCIABLE)
+
+🔍 DÉFINITION OPÉRATIONNELLE DE LA LECTURE EN CREUX :
+Une lecture en creux = révéler un moteur en disant explicitement ce que ce N'EST PAS,
+pour faire apparaître ce que c'est vraiment.
+
+L'angle DOIT être formulé sous la forme EXACTE :
+
+"Ce n'est probablement pas X, mais Y."
+
+Où :
+- X = ce qui semble évident, attendu, superficiel, socialement logique
+  (performance, objectif, reconnaissance, achèvement des tâches, sécurité, effort, persévérance, etc.)
+- Y = le moteur réel inféré à partir des réponses, plus profond, non évident
+  (impact vécu, utilité concrète, sentiment d'aider vraiment, alignement personnel, valeur incarnée, etc.)
+
+⚠️ Toute sortie qui n'utilise PAS explicitement ce renversement est invalide.
+
+📌 INSTRUCTIONS IMPÉRATIVES — LECTURE EN CREUX :
+
+1. TU DOIS produire un angle sous forme de RENVERSEMENT INTERPRÉTATIF (lecture en creux).
+2. TU DOIS identifier :
+   - X = ce qui semble évident mais n'est PAS le vrai moteur (superficiel, socialement attendu)
+   - Y = ce qui se cache derrière et explique réellement le fonctionnement (inféré, profond)
+3. TU DOIS formuler l'angle avec le pattern OBLIGATOIRE :
+   "Ce n'est probablement pas X, mais Y."
+4. TU NE DOIS JAMAIS produire :
+   - une phrase descriptive simple (ex: "Cette personne est motivée par l'impact")
+   - une affirmation directe sans renversement
+   - une liste
+   - une explication
+   - un format "quand tu..."
+
+📚 EXEMPLES DE FORMAT ATTENDU — LECTURE EN CREUX (OBLIGATOIRES) :
+
+❌ INCORRECT (trop descriptif) :
+"Cette personne est motivée par l'impact qu'elle a sur les autres."
+
+✅ CORRECT (lecture en creux) :
+"Ce n'est probablement pas l'achèvement des tâches ou la performance qui la met en mouvement, mais le moment où elle sent que son aide a un impact réel sur quelqu'un."
+
+❌ INCORRECT :
+"Elle persiste quand elle se sent utile."
+
+✅ CORRECT :
+"Ce n'est probablement pas la persévérance ou l'effort en soi qui la fait tenir, mais le sentiment d'être réellement utile à quelqu'un."
+
+✅ AUTRES EXEMPLES VALIDES :
+- "Ce n'est probablement pas l'effort ou la performance qui te met en mouvement, mais le moment où tu sens que ton action a un impact réel sur quelqu'un."
+- "Ce n'est probablement pas la recherche de sécurité qui te guide, mais le besoin de construire quelque chose qui te ressemble vraiment."
+- "Ce n'est probablement pas l'objectif final qui te fait tenir, mais le sentiment d'être utile et décisif dans le parcours de quelqu'un."
+
+Produis UNIQUEMENT l'angle mentor (UNE phrase avec renversement interprétatif, formulable oralement), sans texte additionnel.`
                     },
                     {
                         role: 'user',
@@ -110,7 +161,9 @@ ${structure.ce_qui_eteint_son_moteur}
 MÉCANISME :
 ${structure.mecanisme}
 
-Choisis UN angle unique et tranché. Formule-le comme "Cette personne fonctionne comme ça : ..."`
+Choisis UN angle unique et tranché. Formule-le OBLIGATOIREMENT avec une lecture en creux (renversement interprétatif) : "Ce n'est probablement pas X, mais Y."
+
+⚠️ RAPPEL : X = ce qui semble évident/superficiel, Y = le moteur réel inféré. Le renversement est OBLIGATOIRE.`
                     }
                 ],
                 temperature: 0.5,
@@ -144,6 +197,17 @@ Choisis UN angle unique et tranché. Formule-le comme "Cette personne fonctionne
                 }
                 // Fail-soft : servir quand même
                 console.warn(`[MENTOR_ANGLE_SELECTOR] Angle servi malgré détection résumé`);
+            }
+            // Validation : l'angle DOIT contenir un renversement interprétatif
+            const hasReversal = /(probablement pas|n'est probablement pas).*mais/i.test(mentorAngle);
+            if (!hasReversal) {
+                console.warn(`[MENTOR_ANGLE_SELECTOR] Angle sans renversement interprétatif (retry ${retries})`);
+                if (retries < maxRetries) {
+                    retries++;
+                    continue;
+                }
+                // Fail-soft : servir quand même mais log warning
+                console.warn(`[MENTOR_ANGLE_SELECTOR] Angle servi sans renversement interprétatif (non conforme format requis)`);
             }
             console.log(`[MENTOR_ANGLE_SELECTOR] Angle mentor sélectionné avec succès`);
             return mentorAngle;

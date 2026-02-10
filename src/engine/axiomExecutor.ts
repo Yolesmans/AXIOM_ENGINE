@@ -43,7 +43,15 @@ async function generateMirrorWithNewArchitecture(
   blockType: BlockType,
   additionalContext?: string
 ): Promise<string> {
-  console.log(`[AXIOM_EXECUTOR][NEW_ARCHITECTURE] Génération miroir en 3 étapes (interprétation + angle + rendu) pour ${blockType}`);
+  // Déterminer si ce blockType doit utiliser l'étape ANGLE (miroirs fin de bloc uniquement)
+  const mirrorBlockTypes: BlockType[] = ['block1', 'block2b', 'block3', 'block4', 'block5', 'block6', 'block7', 'block8', 'block9'];
+  const usesAngle = mirrorBlockTypes.includes(blockType);
+  
+  if (usesAngle) {
+    console.log(`[AXIOM_EXECUTOR][NEW_ARCHITECTURE] Génération miroir en 3 étapes (interprétation + angle + rendu) pour ${blockType}`);
+  } else {
+    console.log(`[AXIOM_EXECUTOR][NEW_ARCHITECTURE] Génération en 2 étapes (interprétation + rendu) pour ${blockType} - PAS d'angle (synthèse complète)`);
+  }
   console.log(`[AXIOM_EXECUTOR] Réponses utilisateur:`, userAnswers.length);
 
   try {
@@ -57,17 +65,29 @@ async function generateMirrorWithNewArchitecture(
       mecanisme: structure.mecanisme.substring(0, 50) + '...',
     });
 
-    // ÉTAPE 2 — DÉCISION D'ANGLE (OBLIGATOIRE)
-    console.log(`[AXIOM_EXECUTOR][ETAPE2] Sélection angle mentor pour ${blockType}...`);
+    // ÉTAPE 2 — DÉCISION D'ANGLE (UNIQUEMENT pour miroirs fin de bloc)
+    let inputForRenderer: string;
+    
+    if (usesAngle) {
+      // Miroirs fin de bloc : utiliser l'angle mentor (perte volontaire d'info)
+      console.log(`[AXIOM_EXECUTOR][ETAPE2] Sélection angle mentor pour ${blockType}...`);
 
-    const mentorAngle = await selectMentorAngle(structure);
+      const mentorAngle = await selectMentorAngle(structure);
 
-    console.log(`[AXIOM_EXECUTOR][ETAPE2] Angle mentor sélectionné pour ${blockType}:`, mentorAngle.substring(0, 80) + '...');
+      console.log(`[AXIOM_EXECUTOR][ETAPE2] Angle mentor sélectionné pour ${blockType}:`, mentorAngle.substring(0, 80) + '...');
+      
+      inputForRenderer = mentorAngle;
+    } else {
+      // Synthèse finale et matching : utiliser l'hypothèse centrale complète (pas de perte d'info)
+      console.log(`[AXIOM_EXECUTOR][ETAPE2] Pas d'angle pour ${blockType} - utilisation hypothèse centrale complète`);
+      
+      inputForRenderer = structure.hypothese_centrale;
+    }
 
     // ÉTAPE 3 — RENDU MENTOR INCARNÉ
     console.log(`[AXIOM_EXECUTOR][ETAPE3] Rendu mentor incarné pour ${blockType}...`);
 
-    const mentorText = await renderMentorStyle(mentorAngle, blockType);
+    const mentorText = await renderMentorStyle(inputForRenderer, blockType);
 
     console.log(`[AXIOM_EXECUTOR][ETAPE3] Texte mentor généré pour ${blockType}`);
 
