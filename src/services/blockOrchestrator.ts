@@ -29,6 +29,19 @@ const STATIC_QUESTION_2A1 =
 A. Série
 B. Film`;
 
+/**
+ * Normalise la réponse 2A.1 (Médium) en valeur canonique.
+ * Tolérant : A/a/A./Série/série → SERIE ; B/b/B./Film/film → FILM.
+ * Retourne null si la réponse n'est pas reconnue.
+ */
+function normalize2A1Response(raw: string): 'SERIE' | 'FILM' | null {
+  if (!raw || typeof raw !== 'string') return null;
+  const s = raw.trim().toLowerCase();
+  if (s === 'a' || s === 'a.' || s === 'série' || s === 'serie' || s.startsWith('a.') || s.startsWith('a ')) return 'SERIE';
+  if (s === 'b' || s === 'b.' || s === 'film' || s.startsWith('b.') || s.startsWith('b ')) return 'FILM';
+  return null;
+}
+
 // Helper pour construire l'historique conversationnel (copié depuis axiomExecutor)
 const MAX_CONV_MESSAGES = 40;
 
@@ -628,9 +641,25 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
 
     // Cas 2 : Réponse utilisateur reçue
     if (userMessage) {
-      // Stocker la réponse
       const questionIndex = answeredCount; // Index de la question qui vient d'être posée
-      candidateStore.storeAnswerForBlock(candidateId, blockNumber, questionIndex, userMessage);
+
+      // Réponse à la question 2A.1 : normalisation tolérante (A/B/Série/Film et variantes)
+      if (questionIndex === 0) {
+        const canonical = normalize2A1Response(userMessage);
+        if (canonical === null) {
+          // Réponse non reconnue → redemander 2A.1 sans stocker (évite boucle sur réponse invalide)
+          return {
+            response: normalizeSingleResponse(STATIC_QUESTION_2A1),
+            step: BLOC_02,
+            expectsAnswer: true,
+            autoContinue: false,
+          };
+        }
+        const valueToStore = canonical === 'SERIE' ? 'Série' : 'Film';
+        candidateStore.storeAnswerForBlock(candidateId, blockNumber, questionIndex, valueToStore);
+      } else {
+        candidateStore.storeAnswerForBlock(candidateId, blockNumber, questionIndex, userMessage);
+      }
 
       // Recharger candidate après stockage
       currentCandidate = candidateStore.get(candidateId);
