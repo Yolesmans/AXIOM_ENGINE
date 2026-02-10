@@ -674,6 +674,11 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
       const updatedAnswers = updatedAnswerMap?.answers || {};
       const updatedAnsweredCount = Object.keys(updatedAnswers).length;
 
+      // Log de corrélation (diagnostic désync front/back) — après storeAnswer 2A.1
+      if (updatedAnsweredCount === 1 && blockNumber === 2) {
+        console.log('[DEBUG] block=2A answeredCount=1 next=2A.2');
+      }
+
       // Si 1 réponse → Générer question 2A.2 (adaptée)
       if (updatedAnsweredCount === 1) {
         console.log('[ORCHESTRATOR] generate question 2A.2 - Préférences adaptées (API)');

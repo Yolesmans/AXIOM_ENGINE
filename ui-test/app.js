@@ -368,11 +368,25 @@ async function callAxiom(message, event = null) {
       localStorage.setItem(getStorageKey(), sessionId);
     }
 
-    // S'il n'y a pas eu de tokens (cas non-stream) mais une response, afficher comme avant
-    if (!fullText && data.response) {
-      const responseText = data.response.trim();
-      const firstQuestion = extractFirstQuestion(responseText);
-      addMessage('assistant', firstQuestion);
+    // Log de corrélation (diagnostic désync front/back)
+    console.log('[UI] done', {
+      step: data.step,
+      currentBlock: data.currentBlock,
+      responsePreview: (data.response || '').trim().slice(0, 80),
+      hasStreamedText: !!fullText,
+      source: 'done.response',
+    });
+
+    // Source de vérité unique en fin de tour : done.response (évite stream résiduel)
+    if (data.response && data.response.trim()) {
+      const finalContent = extractFirstQuestion(data.response.trim());
+      if (streamMessageDiv && streamTextP) {
+        streamTextP.textContent = finalContent;
+        const messagesContainer = document.getElementById('messages');
+        if (messagesContainer) messagesContainer.scrollTop = messagesContainer.scrollHeight;
+      } else {
+        addMessage('assistant', finalContent);
+      }
     }
 
     // Détection fin préambule → affichage bouton MVP
