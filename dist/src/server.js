@@ -783,6 +783,26 @@ app.post("/axiom", async (req, res) => {
         // Utiliser la fonction unique de mapping
         const responseState = mapStepToState(result.step);
         const responseStep = result.step;
+        if (result.step === DONE_MATCHING && typeof result.response === "string" && result.response.trim()) {
+            if (!candidate) {
+                throw new Error("Invariant violation: candidate is undefined at DONE_MATCHING");
+            }
+            const fullText = result.response.trim();
+            const lines = fullText.split("\n").map(l => l.trim()).filter(Boolean);
+            const verdict = (lines[0] ?? "").slice(0, 80);
+            const summary = lines.slice(0, 3).join(" ").slice(0, 240);
+            candidateStore.setMatchingResult(candidate.candidateId, {
+                verdict,
+                summary,
+                fullText,
+                createdAt: new Date().toISOString(),
+            });
+            // IMPORTANT: recharger candidate depuis le store pour que candidateToLiveTrackingRow voie matchingResult
+            candidate = candidateStore.get(candidate.candidateId) || (await candidateStore.getAsync(candidate.candidateId));
+        }
+        if (!candidate) {
+            throw new Error("Invariant violation: candidate is undefined at DONE_MATCHING");
+        }
         // Mise à jour Google Sheet (sauf si on est en identity)
         if (responseState !== "identity" && candidate.identity.completedAt) {
             try {
@@ -1436,6 +1456,26 @@ app.post("/axiom/stream", async (req, res) => {
         }
         const responseState = mapStepToState(result.step);
         const responseStep = result.step;
+        if (result.step === DONE_MATCHING && typeof result.response === "string" && result.response.trim()) {
+            if (!candidate) {
+                throw new Error("Invariant violation: candidate is undefined at DONE_MATCHING");
+            }
+            const fullText = result.response.trim();
+            const lines = fullText.split("\n").map(l => l.trim()).filter(Boolean);
+            const verdict = (lines[0] ?? "").slice(0, 80);
+            const summary = lines.slice(0, 3).join(" ").slice(0, 240);
+            candidateStore.setMatchingResult(candidate.candidateId, {
+                verdict,
+                summary,
+                fullText,
+                createdAt: new Date().toISOString(),
+            });
+            // IMPORTANT: recharger candidate depuis le store pour que candidateToLiveTrackingRow voie matchingResult
+            candidate = candidateStore.get(candidate.candidateId) || (await candidateStore.getAsync(candidate.candidateId));
+        }
+        if (!candidate) {
+            throw new Error("Invariant violation: candidate is undefined at DONE_MATCHING");
+        }
         if (responseState !== "identity" && candidate.identity.completedAt) {
             try {
                 const trackingRow = candidateToLiveTrackingRow(candidate);
