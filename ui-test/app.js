@@ -127,27 +127,31 @@ function addMessage(role, text, isProgressiveMirror = false) {
     }
   }
 
-  // LOT 1 : Protection anti-doublon - ne pas afficher le même message deux fois
+  // LOT 1 : Protection anti-doublon — comparer au dernier message ASSISTANT (pas au dernier nœud).
+  // Sinon, après addMessage('user', …), lastElementChild est la bulle user → le doublon assistant n'est pas détecté → double rendu.
   if (role === 'assistant') {
-    const lastMessage = messagesContainer.lastElementChild;
-    if (lastMessage && lastMessage.classList.contains('message-reveliom')) {
-      const lastText = lastMessage.querySelector('p')?.textContent || '';
-      const textTrimmed = (text || '').trim();
-      
-      // Vérifier si le dernier message assistant est identique au nouveau
-      if (lastText === textTrimmed) {
-        console.warn('[FRONTEND] [LOT1] Duplicate message detected, skipping');
-        return; // Skip duplicate
+    const textTrimmed = (text || '').trim();
+    let lastAssistant = null;
+    for (let i = messagesContainer.children.length - 1; i >= 0; i--) {
+      const el = messagesContainer.children[i];
+      if (el.classList.contains('message-reveliom')) {
+        lastAssistant = el;
+        break;
       }
-      
-      // Anti-spam UI : ne pas empiler des cartes tone identiques
+    }
+    if (lastAssistant) {
+      const lastText = (lastAssistant.querySelector('p')?.textContent || '').trim();
+      if (lastText === textTrimmed) {
+        console.warn('[FRONTEND] [LOT1] Duplicate assistant message detected (idempotent display), skipping');
+        return;
+      }
       const toneQuestion = 'Bienvenue dans AXIOM.\n' +
         'On va découvrir qui tu es vraiment — pas ce qu\'il y a sur ton CV.\n' +
         'Promis : je ne te juge pas. Je veux juste comprendre comment tu fonctionnes.\n\n' +
         'On commence tranquille.\n' +
         'Dis-moi : tu préfères qu\'on se tutoie ou qu\'on se vouvoie pour cette discussion ?';
       if (lastText === toneQuestion && textTrimmed === toneQuestion) {
-        return; // Skip duplicate
+        return;
       }
     }
   }
