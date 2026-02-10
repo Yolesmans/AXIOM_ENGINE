@@ -9,6 +9,7 @@ let isWaiting = false;
 let showStartButton = false;
 let isInitializing = false;
 let hasActiveQuestion = false; // Verrou UI séquentiel : empêche l'affichage de plusieurs questions simultanément
+let sendCounter = 0; // Compteur d'envoi pour id unique (diagnostic double requête)
 
 // Phrases UX d'attente (processus, neutres, sans promesse)
 const THINKING_PHRASES = [
@@ -257,7 +258,13 @@ async function readSSEStream(response, onToken, onDone, onError) {
 
 // Fonction pour appeler l'API /axiom en mode streaming SSE
 async function callAxiom(message, event = null) {
+  sendCounter += 1;
+  const sendId = `${Date.now()}-${sendCounter}`;
+  const messagePreview = message != null ? String(message).trim().slice(0, 40) : (event ? `event=${event}` : '');
+  console.log('[SEND]', sendId, { messagePreview, event: event || null });
+
   if (isWaiting || !sessionId) {
+    console.warn('[SEND]', sendId, 'ignoré (isWaiting ou !sessionId)');
     return;
   }
 
@@ -368,26 +375,26 @@ async function callAxiom(message, event = null) {
       localStorage.setItem(getStorageKey(), sessionId);
     }
 
-    // Log de corrélation (diagnostic désync front/back)
+    // Règle unique : ce que le serveur renvoie dans done.response = ce que l'utilisateur voit (aucune exception)
+    const finalContent = (data.response && data.response.trim())
+      ? extractFirstQuestion(data.response.trim())
+      : '';
+    if (streamMessageDiv && streamTextP) {
+      streamTextP.textContent = finalContent;
+      const messagesContainer = document.getElementById('messages');
+      if (messagesContainer) messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    } else if (finalContent) {
+      addMessage('assistant', finalContent);
+    }
+
+    // Instrumentation (preuve) : corrélation sendId ↔ done
     console.log('[UI] done', {
+      sendId,
       step: data.step,
       currentBlock: data.currentBlock,
       responsePreview: (data.response || '').trim().slice(0, 80),
-      hasStreamedText: !!fullText,
-      source: 'done.response',
+      displayedSource: 'done.response',
     });
-
-    // Source de vérité unique en fin de tour : done.response (évite stream résiduel)
-    if (data.response && data.response.trim()) {
-      const finalContent = extractFirstQuestion(data.response.trim());
-      if (streamMessageDiv && streamTextP) {
-        streamTextP.textContent = finalContent;
-        const messagesContainer = document.getElementById('messages');
-        if (messagesContainer) messagesContainer.scrollTop = messagesContainer.scrollHeight;
-      } else {
-        addMessage('assistant', finalContent);
-      }
-    }
 
     // Détection fin préambule → affichage bouton MVP
     if (data.step === 'STEP_03_BLOC1') {
@@ -760,44 +767,47 @@ window.addEventListener('DOMContentLoaded', async () => {
       }
     }
 
-    // Initialiser le gestionnaire de formulaire de chat
+    // Un seul point d'envoi : submit du formulaire (Enter ou clic Envoyer). Verrou strict = 1 submit → 1 requête.
     const userInput = document.getElementById('user-input');
+    let submitInProgress = false;
     if (chatForm && userInput) {
       chatForm.addEventListener('submit', async (e) => {
         e.preventDefault();
-        
+        e.stopPropagation();
+
+        const submitButton = chatForm.querySelector('button[type="submit"]');
+        if (submitInProgress) {
+          console.warn('[SEND] submit ignoré (double soumission)');
+          return;
+        }
+        submitInProgress = true;
+        if (submitButton) submitButton.disabled = true;
+
         const message = userInput.value.trim();
-        
         if (!message || isWaiting || !sessionId) {
+          submitInProgress = false;
+          if (submitButton) submitButton.disabled = false;
           return;
         }
 
-        // Désactiver le verrou UI séquentiel : l'utilisateur a répondu
         hasActiveQuestion = false;
-
-        // Afficher le message de l'utilisateur
         addMessage('user', message);
         userInput.value = '';
-
-        // Désactiver l'input
         userInput.disabled = true;
 
         try {
           const data = await callAxiom(message);
-
-          // Réafficher l'input seulement si on attend une réponse et pas de bouton MVP
-          if (data.expectsAnswer === true && !showStartButton) {
+          if (data && data.expectsAnswer === true && !showStartButton) {
             userInput.disabled = false;
-          } else if (showStartButton) {
-            // Masquer le champ de saisie si le bouton MVP doit être affiché
-            if (chatForm) {
-              chatForm.style.display = 'none';
-            }
+          } else if (data && showStartButton) {
+            if (chatForm) chatForm.style.display = 'none';
           }
         } catch (error) {
           console.error('Erreur:', error);
-          // Réactiver l'input en cas d'erreur
           userInput.disabled = false;
+        } finally {
+          submitInProgress = false;
+          if (submitButton) submitButton.disabled = false;
         }
       });
     }
