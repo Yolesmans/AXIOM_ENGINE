@@ -11,6 +11,35 @@ const REVELIOM_BLOCK_TYPES = ['block1', 'block3', 'block4', 'block5', 'block6', 
 /** Phrase fixe section 3 — inchangée */
 const VALIDATION_OUVERTE = 'Dis-moi si ça te parle, ou s\'il y a une nuance importante que je n\'ai pas vue.';
 /**
+ * Transposition 3ᵉ → 2ᵉ personne pour le rendu utilisateur (REVELIOM).
+ * Purement stylistique, déterministe, sans impact sémantique.
+ * L'angle reste en 3ᵉ personne en interne ; le texte affiché est toujours en "tu".
+ */
+function transposeToSecondPerson(text) {
+    let out = text;
+    // Ordre : expressions longues d'abord pour éviter sous-remplacements
+    out = out.replace(/\bcette personne\b/gi, 'tu');
+    out = out.replace(/\bla personne\b/gi, 'tu');
+    out = out.replace(/\bqu'elle\b/gi, 'que tu');
+    out = out.replace(/\bqui la met\b/gi, 'qui te met');
+    out = out.replace(/\bqui la fait\b/gi, 'qui te fait');
+    out = out.replace(/\bqui la guide\b/gi, 'qui te guide');
+    out = out.replace(/\bqui la motive\b/gi, 'qui te motive');
+    out = out.replace(/\bqui la tient\b/gi, 'qui te tient');
+    out = out.replace(/\bqui la pousse\b/gi, 'qui te pousse');
+    out = out.replace(/\bla motive\b/gi, 'te motive');
+    out = out.replace(/\bla met\b/gi, 'te met');
+    out = out.replace(/\bla fait\b/gi, 'te fait');
+    out = out.replace(/\bla guide\b/gi, 'te guide');
+    out = out.replace(/\bla tient\b/gi, 'te tient');
+    out = out.replace(/\belle\b/g, 'tu');
+    out = out.replace(/\bson\b/g, 'ton');
+    out = out.replace(/\bsa\b/g, 'ta');
+    out = out.replace(/\bses\b/g, 'tes');
+    out = out.replace(/\blui\b/g, 'toi');
+    return out;
+}
+/**
  * Rend un angle mentor en texte mentor incarné pour TOUS les blocs
  *
  * ÉTAPE 3 — RENDU MENTOR INCARNÉ
@@ -131,9 +160,10 @@ Incarnes cet angle en style mentor incarné. Tu n'as pas à expliquer, tu dois i
             }
             // VALIDATION STYLE : Vérifier que le style mentor est respecté
             const validation = validateMentorStyle(mentorText);
+            const rendered = transposeToSecondPerson(mentorText);
             if (validation.valid) {
                 console.log(`[MENTOR_STYLE_RENDERER] Texte mentor validé (retry ${retries}, type: ${blockType})`);
-                return mentorText;
+                return rendered;
             }
             // Validation échouée → retry si possible
             if (retries < maxRetries) {
@@ -143,7 +173,7 @@ Incarnes cet angle en style mentor incarné. Tu n'as pas à expliquer, tu dois i
             }
             // Dernier retry échoué → log d'erreur mais servir quand même (fail-soft)
             console.error(`[MENTOR_STYLE_RENDERER] Validation style échouée après ${maxRetries} retries (type: ${blockType}), utilisation texte généré`, validation.errors);
-            return mentorText;
+            return rendered;
         }
         catch (error) {
             // Erreur API → retry si possible
@@ -232,9 +262,10 @@ Produis UNIQUEMENT la phrase de Déduction personnalisée (max 25 mots), sans nu
                 VALIDATION_OUVERTE,
             ].join('\n');
             const validation = validateMentorStyle(mentorText);
+            const rendered = transposeToSecondPerson(mentorText);
             if (validation.valid) {
                 console.log(`[MENTOR_STYLE_RENDERER] Texte REVELIOM (angle brut section 1) validé (type: ${blockType})`);
-                return mentorText;
+                return rendered;
             }
             if (retries < maxRetries) {
                 console.warn(`[MENTOR_STYLE_RENDERER] Validation échouée (retry ${retries})`, validation.errors);
@@ -242,7 +273,7 @@ Produis UNIQUEMENT la phrase de Déduction personnalisée (max 25 mots), sans nu
                 continue;
             }
             console.warn(`[MENTOR_STYLE_RENDERER] Validation échouée après retries, utilisation texte assemblé`, validation.errors);
-            return mentorText;
+            return rendered;
         }
         catch (error) {
             if (retries < maxRetries) {
