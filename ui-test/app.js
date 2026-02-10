@@ -97,7 +97,68 @@ function extractFirstQuestion(text) {
   return text.trim();
 }
 
-// Fonction pour appeler l'API /axiom
+// Fonction pour parser un flux SSE (text/event-stream)
+async function readSSEStream(response, onToken, onDone, onError) {
+  if (!response.body) {
+    throw new Error('Streaming non supporté par ce navigateur');
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+
+    let sepIndex;
+    while ((sepIndex = buffer.indexOf('\n\n')) !== -1) {
+      const rawEvent = buffer.slice(0, sepIndex);
+      buffer = buffer.slice(sepIndex + 2);
+
+      const lines = rawEvent.split('\n').map(l => l.trim()).filter(Boolean);
+      if (lines.length === 0) continue;
+
+      let eventName = 'message';
+      let dataStr = '';
+
+      for (const line of lines) {
+        if (line.startsWith('event:')) {
+          eventName = line.slice(6).trim();
+        } else if (line.startsWith('data:')) {
+          const payload = line.slice(5).trim();
+          // Autoriser plusieurs lignes data: en concaténant
+          dataStr += payload;
+        }
+      }
+
+      if (!dataStr) continue;
+
+      let parsed;
+      try {
+        parsed = JSON.parse(dataStr);
+      } catch (e) {
+        console.error('[FRONTEND][SSE] JSON parse error:', e, dataStr);
+        continue;
+      }
+
+      if (eventName === 'error' || parsed.type === 'error') {
+        if (onError) onError(parsed);
+        continue;
+      }
+
+      if (parsed.type === 'token') {
+        if (onToken) onToken(parsed.content || '');
+      } else if (parsed.type === 'done' || eventName === 'done') {
+        if (onDone) onDone(parsed);
+      }
+    }
+  }
+}
+
+// Fonction pour appeler l'API /axiom en mode streaming SSE
 async function callAxiom(message, event = null) {
   if (isWaiting || !sessionId) {
     return;
@@ -134,13 +195,63 @@ async function callAxiom(message, event = null) {
       'x-session-id': sessionId || '',
     };
 
-    const response = await fetch(`${API_BASE_URL}/axiom`, {
+    const response = await fetch(`${API_BASE_URL}/axiom/stream`, {
       method: 'POST',
       headers: headers,
       body: JSON.stringify(body),
     });
 
-    const data = await response.json();
+    let fullText = '';
+    let finalData = null;
+
+    // Élément de message streaming (une seule bulle, texte mis à jour au fil des tokens)
+    let streamMessageDiv = null;
+    let streamTextP = null;
+
+    function ensureStreamMessageElement() {
+      if (streamMessageDiv) return;
+      const messagesContainer = document.getElementById('messages');
+      if (!messagesContainer) return;
+
+      streamMessageDiv = document.createElement('div');
+      streamMessageDiv.className = 'message-bubble message-reveliom';
+      streamTextP = document.createElement('p');
+      streamTextP.textContent = '';
+      streamMessageDiv.appendChild(streamTextP);
+      messagesContainer.appendChild(streamMessageDiv);
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+
+    await readSSEStream(
+      response,
+      (chunk) => {
+        if (!chunk) return;
+        fullText += chunk;
+        // Affichage progressif en respectant le contrat « une seule question »
+        const firstQuestion = extractFirstQuestion(fullText);
+        ensureStreamMessageElement();
+        if (streamTextP) {
+          streamTextP.textContent = firstQuestion;
+          const messagesContainer = document.getElementById('messages');
+          if (messagesContainer) {
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+          }
+        }
+      },
+      (donePayload) => {
+        finalData = donePayload;
+      },
+      (errPayload) => {
+        console.error('[FRONTEND][SSE] error event:', errPayload);
+      }
+    );
+
+    // Si aucun event done reçu, erreur
+    if (!finalData) {
+      throw new Error('Flux SSE terminé sans event done');
+    }
+
+    const data = finalData;
 
     // Masquer l'indicateur de réflexion
     if (typingIndicator) {
@@ -153,33 +264,11 @@ async function callAxiom(message, event = null) {
       localStorage.setItem(getStorageKey(), sessionId);
     }
 
-    // Afficher la réponse (toujours présente)
-    // LOT 1 : Afficher UNIQUEMENT la question/miroir courant, jamais plusieurs questions
-    if (data.response) {
-      // Affichage progressif des miroirs REVELIOM
-      if (data.progressiveDisplay === true && Array.isArray(data.mirrorSections) && data.mirrorSections.length === 3) {
-        // LOT 1 : Miroir seul, aucune question suivante dans le même message
-        // Les miroirs progressifs NE verrouillent JAMAIS (isProgressiveMirror = true)
-        // Afficher section 1️⃣
-        addMessage('assistant', data.mirrorSections[0], true);
-        
-        // Attendre 900ms puis afficher section 2️⃣
-        setTimeout(() => {
-          addMessage('assistant', data.mirrorSections[1], true);
-          
-          // Attendre 900ms puis afficher section 3️⃣
-          setTimeout(() => {
-            addMessage('assistant', data.mirrorSections[2], true);
-            // LOT 1 : Pas de question suivante affichée ici - le backend retourne uniquement le miroir
-          }, 900);
-        }, 900);
-      } else {
-        // Affichage normal (pas de découpage progressif)
-        // SAFEGUARD : Extraire uniquement la première question pour garantir séquentialité stricte
-        const responseText = data.response.trim();
-        const firstQuestion = extractFirstQuestion(responseText);
-        addMessage('assistant', firstQuestion);
-      }
+    // S'il n'y a pas eu de tokens (cas non-stream) mais une response, afficher comme avant
+    if (!fullText && data.response) {
+      const responseText = data.response.trim();
+      const firstQuestion = extractFirstQuestion(responseText);
+      addMessage('assistant', firstQuestion);
     }
 
     // Détection fin préambule → affichage bouton MVP
