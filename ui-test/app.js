@@ -25,7 +25,7 @@ const THINKING_PHRASES = [
 ];
 
 let lastPhraseIndex = -1;
-let typingInterval = null;
+let typingTimeoutId = null;
 let thinkingLoopActive = false;
 let hasReceivedFirstToken = false;
 
@@ -44,17 +44,28 @@ function typeSentence(sentence, onComplete) {
   el.textContent = '';
   let i = 0;
 
-  typingInterval = setInterval(() => {
+  function typeNextChar() {
     if (hasReceivedFirstToken) return;
+    if (i >= sentence.length) {
+      onComplete && onComplete();
+      return;
+    }
+
     el.textContent += sentence[i];
     i++;
 
-    if (i >= sentence.length) {
-      clearInterval(typingInterval);
-      typingInterval = null;
-      onComplete && onComplete();
+    // Vitesse humaine : variable + respiration
+    let delay = 55 + Math.random() * 45; // 55–100 ms
+
+    // Micro-pause naturelle après ponctuation
+    if (/[.,;:!?]/.test(sentence[i - 1])) {
+      delay += 200 + Math.random() * 200; // respiration
     }
-  }, 35);
+
+    typingTimeoutId = setTimeout(typeNextChar, delay);
+  }
+
+  typeNextChar();
 }
 
 function startThinkingLoop() {
@@ -81,9 +92,9 @@ function startThinkingLoop() {
 }
 
 function stopThinkingLoop() {
-  if (typingInterval !== null) {
-    clearInterval(typingInterval);
-    typingInterval = null;
+  if (typingTimeoutId !== null) {
+    clearTimeout(typingTimeoutId);
+    typingTimeoutId = null;
   }
   thinkingLoopActive = false;
   const thinkingTextSpan = document.getElementById('thinking-text');
