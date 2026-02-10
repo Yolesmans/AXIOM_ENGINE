@@ -233,25 +233,36 @@ async function renderReveliomWithRawAngle(mentorAngle: string, blockType: BlockT
 
 ⚠️ RÈGLE STRICTE — SECTIONS
 
-• La section "1️⃣ Lecture implicite" est DÉJÀ RÉDIGÉE : c'est l'angle tel quel. Tu ne la rédiges PAS. Tu ne la reformules PAS.
-• Tu dois produire UNIQUEMENT la section "2️⃣ Déduction personnalisée" : UNE phrase, maximum 25 mots.
+• La section "1️⃣ Lecture implicite" est DÉJÀ RÉDIGÉE : c'est l'angle tel quel. Tu ne la rédiges PAS.
+• Tu produis UNIQUEMENT la section "2️⃣ Déduction personnalisée". Une seule phrase.
 • La section "3️⃣ Validation ouverte" est fixe, tu ne la produis pas.
 
-⚠️ CE QUE TU PRODUIS
+═══════════════════════════════════════════════════════════════════
+FORMAT OBLIGATOIRE — DÉDUCTION PERSONNALISÉE (NON NÉGOCIABLE)
+═══════════════════════════════════════════════════════════════════
 
-UNE SEULE PHRASE pour la Déduction personnalisée :
-- Explicative : déduire les conditions concrètes d'engagement/désengagement à partir de l'angle.
-- Langage vécu, "tu" autorisé ici (ex. "C'est pour cette raison que ton engagement dépend moins du cadre que du sentiment de contribuer concrètement...").
-- Pas de "1️⃣", pas de "2️⃣", pas de préambule. Juste la phrase.
+Ta phrase DOIT suivre EXACTEMENT cette structure :
 
-INTERDICTIONS pour ta phrase :
-- Pas de reformulation de l'angle (l'angle est déjà en section 1 tel quel).
-- Pas de "Quand elle...", "Dès qu'elle..." en début de phrase pour répéter l'angle — la déduction peut utiliser "quand tu" pour l'implication concrète.
+« Ce moteur tient tant que … — lorsque … , … »
 
-Angle (déjà utilisé tel quel en Lecture implicite — ne pas recopier) :
+• Première partie (après "tant que") : condition concrète où le moteur est vivant — en "tu", langage vécu.
+• Tiret long " — " (obligatoire).
+• Deuxième partie (après "lorsque") : ce qui dilue ou éteint — conséquence sur ton engagement.
+
+Ton : causal, vivant, pas descriptif RH. Toujours en 2ᵉ personne (tu / te / ton).
+
+Exemple valide :
+« Ce moteur tient tant que tu sens que ton action change réellement quelque chose pour quelqu'un — lorsque ce lien se dilue, ton engagement perd de sa force. »
+
+❌ INTERDICTIONS ABSOLUES :
+- Ne PAS répéter ni reformuler l'angle (il est déjà en Lecture implicite).
+- Ne PAS lister des traits, ne PAS expliquer psychologiquement, ne PAS neutraliser.
+- Ne PAS produire de phrase qui ne suit pas la forme "Ce moteur tient tant que … — lorsque … , …".
+
+Angle (déjà utilisé en Lecture implicite — ne pas recopier) :
 ${mentorAngle}
 
-Produis UNIQUEMENT la phrase de Déduction personnalisée (max 25 mots), sans numéro de section ni titre.`
+Produis UNIQUEMENT cette phrase (forme "Ce moteur tient tant que … — lorsque … , …"), sans numéro ni titre.`
           },
           {
             role: 'user',
