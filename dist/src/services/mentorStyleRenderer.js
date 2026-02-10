@@ -224,15 +224,18 @@ Ta phrase DOIT suivre EXACTEMENT cette structure :
 • Tiret long " — " (obligatoire).
 • Deuxième partie (après "lorsque") : ce qui dilue ou éteint — conséquence sur ton engagement.
 
-Ton : causal, vivant, pas descriptif RH. Toujours en 2ᵉ personne (tu / te / ton).
+Ton : mentor, causal, incarné, vécu. Jamais psychologisant, jamais RH, jamais abstrait. Toujours en 2ᵉ personne (tu / te / ton).
 
-Exemple valide :
+Exemple CANONIQUE :
 « Ce moteur tient tant que tu sens que ton action change réellement quelque chose pour quelqu'un — lorsque ce lien se dilue, ton engagement perd de sa force. »
 
 ❌ INTERDICTIONS ABSOLUES :
 - Ne PAS répéter ni reformuler l'angle (il est déjà en Lecture implicite).
 - Ne PAS lister des traits, ne PAS expliquer psychologiquement, ne PAS neutraliser.
 - Ne PAS produire de phrase qui ne suit pas la forme "Ce moteur tient tant que … — lorsque … , …".
+- Ne PAS employer "quand tu" en début de déduction.
+- Ne PAS employer "il est possible que", "tu sembles", "on voit que".
+- Ne PAS employer de concepts mous : motivation générale, personnalité, équilibre, etc.
 
 Angle (déjà utilisé en Lecture implicite — ne pas recopier) :
 ${mentorAngle}
@@ -414,19 +417,21 @@ function getFormatInstructions(blockType) {
 - Conserver EXACTEMENT le format (sections 1️⃣ 2️⃣ 3️⃣)
 - Conserver EXACTEMENT les limites de mots (20/25 mots)`;
         case 'block2b':
-            // Format synthèse BLOC 2B (4-6 lignes)
-            return `⚠️ FORMAT STRICT OBLIGATOIRE — SYNTHÈSE BLOC 2B
+            // Format synthèse BLOC 2B (4-6 lignes) — même doctrine stylistique que miroirs REVELIOM
+            return `⚠️ FORMAT STRICT OBLIGATOIRE — SYNTHÈSE BLOC 2B (MIROIR)
 
-- 4 à 6 lignes maximum
-- Synthèse continue, dense, incarnée, structurante
-- Basée UNIQUEMENT sur : l'angle mentor
-- Incarnes l'angle en langage vécu et expérientiel
-- Tu n'as PAS à justifier l'angle, tu dois l'incarner
-- DOIT croiser motifs + personnages + traits (si disponibles dans le contexte)
-- DOIT faire ressortir : rapport au pouvoir, rapport à la pression, rapport aux relations, posture face à la responsabilité
-- DOIT inclure 1 point de vigilance réaliste, formulé sans jugement
-- PAS de format REVELIOM (1️⃣ 2️⃣ 3️⃣)
-- PAS de validation ouverte`;
+- 4 à 6 lignes maximum. Synthèse continue, dense, INCARNÉE.
+- Basée UNIQUEMENT sur l'angle mentor. Révélation d'un moteur réel, pas un résumé.
+- Ton : mentor, causal, vécu. 2ᵉ personne UNIQUEMENT (tu / te / ton).
+- Croiser motifs + personnages + traits si contexte dispo. Faire ressortir : rapport au pouvoir, à la pression, aux relations, posture face à la responsabilité.
+- 1 point de vigilance réaliste, sans jugement.
+- PAS de format 1️⃣ 2️⃣ 3️⃣. PAS de validation ouverte.
+
+❌ INTERDICTIONS (doctrine REVELIOM) :
+- Jamais descriptif RH, jamais bilan générique, jamais psychologisant.
+- Pas de "elle", "la personne", "cette personne" — tout en "tu".
+- Pas de "il est possible que", "tu sembles", "on voit que". Pas de concepts mous (motivation générale, personnalité, équilibre).
+- Le rendu doit provoquer "ok… je ne l'avais pas formulé comme ça", PAS "oui c'est ce que j'ai dit".`;
         case 'synthesis':
             // Format synthèse finale (structure libre mais dense)
             return `⚠️ FORMAT STRICT OBLIGATOIRE — SYNTHÈSE FINALE
