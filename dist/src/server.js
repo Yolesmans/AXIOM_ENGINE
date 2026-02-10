@@ -896,8 +896,6 @@ app.post("/axiom/stream", async (req, res) => {
             res.end();
             return;
         }
-        // UX FAST — ACK immédiat (T=0) : l'utilisateur voit du texte en < 300 ms
-        onUx('🧠 Je prends le temps de relier ce que tu viens d\'exprimer.\n\n');
         // ROUTE SSE : même logique métier que /axiom, mais avec onChunk branché
         // 1) CAS IDENTITÉ VIA MESSAGE (Prénom/Nom/Email)
         const messageText = userMessage || "";
