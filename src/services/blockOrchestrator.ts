@@ -1041,16 +1041,8 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
       // PREMIUM : un seul mode — motif + personnages (6 questions) avec meta ; pas de génération globale traits
       if (normalizedWorks && normalizedWorks.length >= 1) {
         console.log('[ORCHESTRATOR] Generating BLOC 2B premium (motif + personnages only)');
-        const questions = await this.generateMotifAndPersonnagesQuestions2B(currentCandidate, works, coreWorkAnswer);
-        const meta: Block2BQuestionMeta[] = [
-          { workIndex: 0, slot: 'motif' },
-          { workIndex: 0, slot: 'personnages' },
-          { workIndex: 1, slot: 'motif' },
-          { workIndex: 1, slot: 'personnages' },
-          { workIndex: 2, slot: 'motif' },
-          { workIndex: 2, slot: 'personnages' },
-        ];
-        candidateStore.setQuestionsForBlock(candidateId, blockNumber, questions.slice(0, 6), meta);
+        const { questions, meta } = await this.generateMotifAndPersonnagesQuestions2B(currentCandidate, works, coreWorkAnswer);
+        candidateStore.setQuestionsForBlock(candidateId, blockNumber, questions.slice(0, 6), meta.slice(0, 6));
         return this.serveNextQuestion2B(candidateId, blockNumber);
       }
       // LEGACY : queue sans meta (ancien flux)
@@ -1093,9 +1085,15 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
 
       const meta = finalQueue.meta;
       const isPersonnagesAnswer = meta && meta[questionIndex]?.slot === 'personnages';
+      const looksLikeChoiceAE = /^[A-Ea-e]\s*[\.\)]?\s*$/.test((userMessage || '').trim());
 
-      // PREMIUM : après réponse "personnages" → normalisation LLM + génération traits par personnage + insertion
-      if (isPersonnagesAnswer && meta && currentCandidate.session.normalizedWorks) {
+      // Garde dure : une réponse type A–E n'est jamais une réponse "personnages" → on ne normalise pas, on sert la suite
+      if (looksLikeChoiceAE && isPersonnagesAnswer) {
+        console.warn('[ORCHESTRATOR] BLOC 2B: réponse A–E interprétée comme slot personnages (meta mismatch) — pas de normalisation, on sert la suite');
+      }
+
+      // PREMIUM : après réponse "personnages" (et pas choix A–E) → normalisation LLM + génération traits par personnage + insertion
+      if (isPersonnagesAnswer && !looksLikeChoiceAE && meta && currentCandidate.session.normalizedWorks) {
         const workIndex = meta[questionIndex].workIndex;
         const work = currentCandidate.session.normalizedWorks[workIndex]?.canonicalTitle ?? works[workIndex] ?? '';
         const normChars = await this.normalizeCharactersLLM(work, userMessage);
@@ -1309,46 +1307,102 @@ Si ambiguïté : {"needsClarification":true,"message":"Message court pour préci
     return { needsClarification: true, message: "Peux-tu me donner les noms des personnages (ex. : Harvey, Mike, Donna) ?" };
   }
 
-  /** BLOC 2B PREMIUM — Génère uniquement les 6 questions motif + personnages (2 par œuvre, ordre #3 #2 #1). */
+  /**
+   * BLOC 2B PREMIUM — Génère les 6 questions motif + personnages avec sortie structurée.
+   * Meta dérivée du JSON LLM → invariant meta[i] décrit exactement questions[i].
+   * Titres d'œuvre SANS crochets dans le prompt et en post-traitement.
+   */
   private async generateMotifAndPersonnagesQuestions2B(
     candidate: AxiomCandidate,
     works: string[],
     coreWork: string
-  ): Promise<string[]> {
+  ): Promise<{ questions: string[]; meta: Block2BQuestionMeta[] }> {
+    const w0 = works[0] || 'N/A';
+    const w1 = works[1] || 'N/A';
+    const w2 = works[2] || 'N/A';
     const messages = buildConversationHistoryForBlock2B(candidate);
     const completion = await callOpenAI({
       messages: [
         { role: 'system', content: getFullAxiomPrompt() },
         {
           role: 'system',
-          content: `BLOC 2B — Génère UNIQUEMENT 6 questions (motif + personnages pour chaque œuvre). Aucune question traits, aucun récap.
-Œuvres : #3 ${works[2] || 'N/A'}, #2 ${works[1] || 'N/A'}, #1 ${works[0] || 'N/A'}. Œuvre noyau : ${coreWork}
-Format de sortie OBLIGATOIRE, une question par bloc séparateur :
----QUESTION_SEPARATOR---
-Qu'est-ce qui t'attire le PLUS dans [${works[2] || 'N/A'}] ?
-(5 propositions A/B/C/D/E spécifiques à cette œuvre)
----QUESTION_SEPARATOR---
-Dans [${works[2] || 'N/A'}], quels sont les 1 à 3 personnages qui te parlent le plus ?
-(question ouverte)
----QUESTION_SEPARATOR---
-Qu'est-ce qui t'attire le PLUS dans [${works[1] || 'N/A'}] ?
-(5 propositions A/B/C/D/E)
----QUESTION_SEPARATOR---
-Dans [${works[1] || 'N/A'}], quels sont les 1 à 3 personnages qui te parlent le plus ?
----QUESTION_SEPARATOR---
-Qu'est-ce qui t'attire le PLUS dans [${works[0] || 'N/A'}] ?
-(5 propositions A/B/C/D/E)
----QUESTION_SEPARATOR---
-Dans [${works[0] || 'N/A'}], quels sont les 1 à 3 personnages qui te parlent le plus ?`,
+          content: `BLOC 2B — Génère UNIQUEMENT 6 questions (motif + personnages). Une entrée JSON par question.
+Œuvres (écris les titres SANS crochets dans les questions) : #1 ${w0}, #2 ${w1}, #3 ${w2}. Œuvre noyau : ${coreWork}
+
+RÈGLE : Dans le texte des questions, écris toujours le titre de l'œuvre SANS crochets (ex: "dans Suits" pas "dans [Suits]").
+
+Réponds UNIQUEMENT par un tableau JSON valide de 6 objets, dans cet ordre exact :
+[
+  {"slot":"motif","workIndex":0,"text":"Qu'est-ce qui t'attire le PLUS dans ${w0} ?\\n\\nA. ...\\nB. ...\\nC. ...\\nD. ...\\nE. ..."},
+  {"slot":"personnages","workIndex":0,"text":"Dans ${w0}, quels sont les 1 à 3 personnages qui te parlent le plus ?"},
+  {"slot":"motif","workIndex":1,"text":"Qu'est-ce qui t'attire le PLUS dans ${w1} ?\\n\\nA. ...\\nB. ...\\nC. ...\\nD. ...\\nE. ..."},
+  {"slot":"personnages","workIndex":1,"text":"Dans ${w1}, quels sont les 1 à 3 personnages qui te parlent le plus ?"},
+  {"slot":"motif","workIndex":2,"text":"Qu'est-ce qui t'attire le PLUS dans ${w2} ?\\n\\nA. ...\\nB. ...\\nC. ...\\nD. ...\\nE. ..."},
+  {"slot":"personnages","workIndex":2,"text":"Dans ${w2}, quels sont les 1 à 3 personnages qui te parlent le plus ?"}
+]
+Chaque "text" doit être la question complète (motif = question + 5 options A à E). workIndex 0 = première œuvre, 1 = deuxième, 2 = troisième. Pas de markdown, pas de texte autour du JSON.`,
         },
         ...messages,
       ],
     });
-    const questions = completion
+    const raw = completion.replace(/^```\w*\n?|\n?```$/g, '').trim();
+    try {
+      const parsed = JSON.parse(raw) as Array<{ slot?: string; workIndex?: number; text?: string }>;
+      if (Array.isArray(parsed) && parsed.length >= 6) {
+        const items = parsed.slice(0, 6);
+        const questions = items.map((item) => (item.text || '').trim()).filter((t) => t.length > 0);
+        const meta: Block2BQuestionMeta[] = items.map((item) => ({
+          workIndex: typeof item.workIndex === 'number' && item.workIndex >= 0 && item.workIndex <= 2 ? item.workIndex : 0,
+          slot: item.slot === 'personnages' ? 'personnages' : 'motif',
+        }));
+        if (questions.length === 6 && meta.length === 6) {
+          const questionsSansCrochets = this.stripWorkBracketsFromQuestions(questions, works);
+          return { questions: questionsSansCrochets, meta };
+        }
+      }
+    } catch {
+      /* fallback ci-dessous */
+    }
+    console.warn('[ORCHESTRATOR] BLOC 2B premium: fallback après échec parse JSON (ordre déduit du texte)');
+    const fallback = completion
       .split('---QUESTION_SEPARATOR---')
       .map((q) => q.trim())
-      .filter((q) => q.length > 0);
-    return questions.slice(0, 6).length === 6 ? questions.slice(0, 6) : questions;
+      .filter((q) => q.length > 0)
+      .slice(0, 6);
+    const fallbackMeta: Block2BQuestionMeta[] = [];
+    for (let i = 0; i < fallback.length; i++) {
+      const q = fallback[i];
+      const isMotif = /Qu'est-ce qui t'attire|attire le PLUS dans/i.test(q);
+      fallbackMeta.push({
+        workIndex: Math.floor(i / 2),
+        slot: isMotif ? 'motif' : 'personnages',
+      });
+    }
+    const questionsSansCrochets = this.stripWorkBracketsFromQuestions(fallback, works);
+    const meta = (fallbackMeta.length === questionsSansCrochets.length ? fallbackMeta : this.defaultMetaForSixQuestions()).slice(0, questionsSansCrochets.length);
+    return { questions: questionsSansCrochets, meta };
+  }
+
+  /** Enlève les crochets autour des titres d'œuvre dans le texte des questions (ex: [Suits] → Suits). */
+  private stripWorkBracketsFromQuestions(questions: string[], works: string[]): string[] {
+    return questions.map((q) => {
+      let out = q;
+      for (const w of works) {
+        if (w && w !== 'N/A') out = out.replace(new RegExp(`\\[${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\]`, 'g'), w);
+      }
+      return out;
+    });
+  }
+
+  private defaultMetaForSixQuestions(): Block2BQuestionMeta[] {
+    return [
+      { workIndex: 0, slot: 'motif' },
+      { workIndex: 0, slot: 'personnages' },
+      { workIndex: 1, slot: 'motif' },
+      { workIndex: 1, slot: 'personnages' },
+      { workIndex: 2, slot: 'motif' },
+      { workIndex: 2, slot: 'personnages' },
+    ];
   }
 
   /** BLOC 2B PREMIUM — Génère une question traits + 5 options pour un personnage (nom canonique déjà connu). */
