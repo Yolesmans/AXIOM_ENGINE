@@ -897,7 +897,7 @@ app.post("/axiom", async (req: Request, res: Response) => {
       const response = result.response || '';
       const finalResponse = response || "Une erreur technique est survenue. Recharge la page.";
 
-      return res.status(200).json({
+      const json: Record<string, unknown> = {
         sessionId: candidate.candidateId,
         currentBlock: candidate.session.currentBlock,
         state: responseState,
@@ -905,7 +905,10 @@ app.post("/axiom", async (req: Request, res: Response) => {
         step: responseStep,
         expectsAnswer: response ? result.expectsAnswer : false,
         autoContinue: result.autoContinue,
-      });
+      };
+      if (result.mirror != null) json.mirror = result.mirror;
+      if (result.nextQuestion != null) json.nextQuestion = result.nextQuestion;
+      return res.status(200).json(json);
     }
     
     // Enregistrer le message utilisateur dans conversationHistory AVANT d'appeler le moteur
@@ -1653,7 +1656,7 @@ app.post("/axiom/stream", async (req: Request, res: Response) => {
         const response = result.response || "";
         const finalResponse = streamedText || response || "Une erreur technique est survenue. Recharge la page.";
 
-        const payload = {
+        const payload: Record<string, unknown> = {
           sessionId: candidateBloc2.candidateId,
           currentBlock: candidateBloc2.session.currentBlock,
           state: responseState,
@@ -1662,6 +1665,8 @@ app.post("/axiom/stream", async (req: Request, res: Response) => {
           expectsAnswer: response ? result.expectsAnswer : false,
           autoContinue: result.autoContinue,
         };
+        if (result.mirror != null) payload.mirror = result.mirror;
+        if (result.nextQuestion != null) payload.nextQuestion = result.nextQuestion;
 
         writeEvent("done", {
           type: "done",

@@ -799,10 +799,12 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
             if (questionIndex < 0) {
                 return safeReturnMessage("Aucune question en cours. Recharge la page.", 'BLOC 2B questionIndex < 0');
             }
-            // Idempotence 2B : requête doublon (ex. double tap) → retourner la prochaine question sans muter
+            // Idempotence 2B : requête doublon (ex. double tap) → retourner la prochaine question sans muter (sauf en fin de 2B où on enchaîne miroir → bloc 3)
+            const queueLengthForIdem = currentQueue.questions.length;
             const block2B = candidateStore.getBlock2BAnswers(currentCandidate);
             const answersLength = block2B?.answers?.length ?? 0;
-            if (answersLength >= currentQuestionIndex) {
+            const atEndOf2B = currentQuestionIndex >= queueLengthForIdem;
+            if (!atEndOf2B && answersLength >= currentQuestionIndex) {
                 console.log('[ORCHESTRATOR] BLOC 2B idempotent: answers.length >= currentQuestionIndex', {
                     answersLength,
                     currentQuestionIndex,
@@ -877,71 +879,28 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
             const nextQuestionIndex = currentCandidate.session.blockStates?.['2B']?.currentQuestionIndex ?? currentQuestionIndex + 1;
             const queueLength = finalQueue.questions.length;
             if (nextQuestionIndex >= queueLength) {
-                // Vérifier si le miroir a déjà été généré (dernier message assistant est un miroir de BLOC 2B)
+                // Fin des questions 2B : miroir 2B puis enchaînement automatique vers bloc 3 (plus de validation utilisateur)
                 const conversationHistory = currentCandidate.conversationHistory || [];
                 const lastAssistantMessage = [...conversationHistory]
                     .reverse()
                     .find(m => m.role === 'assistant' && m.kind === 'mirror' && m.block === blockNumber);
                 if (lastAssistantMessage) {
-                    // Miroir présent → vérifier si c'est une validation ou juste l'affichage
-                    if (!userMessage || userMessage.trim().length === 0) {
-                        // Pas de message utilisateur → renvoyer le miroir et attendre validation
-                        const mirrorSections = parseMirrorSections(lastAssistantMessage.content);
-                        return {
-                            response: normalizeSingleResponse(lastAssistantMessage.content),
-                            step: BLOC_02,
-                            expectsAnswer: true,
-                            autoContinue: false,
-                            progressiveDisplay: mirrorSections.length === 3,
-                            mirrorSections: mirrorSections.length === 3 ? mirrorSections : undefined,
-                        };
-                    }
-                    // Message utilisateur présent → validation miroir BLOC 2B
-                    console.log('[ORCHESTRATOR] Validation miroir BLOC 2B reçue');
-                    console.log('[ORCHESTRATOR] [2B_VALIDATION] before', {
-                        sessionId: candidateId,
-                        status2B: currentCandidate.session.blockStates?.['2B']?.status,
-                        step: currentCandidate.session.ui?.step,
-                        currentBlock: currentCandidate.session.currentBlock,
-                        lastAssistantKind: lastAssistantMessage?.kind,
-                        lastAssistantBlock: lastAssistantMessage?.block,
-                    });
-                    candidateStore.appendMirrorValidation(candidateId, blockNumber, userMessage);
-                    await candidateStore.setBlock2BCompleted(candidateId);
-                    candidateStore.markBlockComplete(candidateId, 2);
-                    await candidateStore.persistAndFlush(candidateId);
-                    candidateStore.updateSession(candidateId, {
-                        state: "collecting",
-                        currentBlock: 3,
-                    });
-                    candidateStore.updateUIState(candidateId, {
-                        step: BLOC_03,
-                        lastQuestion: null,
-                        identityDone: true,
-                        mirrorValidated: true,
-                    });
-                    const afterCandidate = candidateStore.get(candidateId) ?? (await candidateStore.getAsync(candidateId));
-                    console.log('[ORCHESTRATOR] [2B_VALIDATION] after', {
-                        sessionId: candidateId,
-                        status2B: afterCandidate?.session.blockStates?.['2B']?.status,
-                        step: afterCandidate?.session.ui?.step,
-                        currentBlock: afterCandidate?.session.currentBlock,
-                    });
-                    // Recharger le candidate pour avoir l'état à jour
-                    let updatedCandidate = candidateStore.get(candidateId);
+                    // Miroir déjà généré (ex. requête doublon) → idempotent : renvoyer uniquement la première question bloc 3
+                    let updatedCandidate = candidateStore.get(candidateId) ?? (await candidateStore.getAsync(candidateId));
                     if (!updatedCandidate) {
-                        updatedCandidate = await candidateStore.getAsync(candidateId);
+                        throw new Error(`Candidate ${candidateId} not found`);
+                    }
+                    if (updatedCandidate.session.currentBlock !== 3) {
+                        await candidateStore.setBlock2BCompleted(candidateId);
+                        candidateStore.markBlockComplete(candidateId, 2);
+                        candidateStore.updateSession(candidateId, { state: 'collecting', currentBlock: 3 });
+                        candidateStore.updateUIState(candidateId, { step: BLOC_03, lastQuestion: null, identityDone: true });
+                        updatedCandidate = candidateStore.get(candidateId) ?? (await candidateStore.getAsync(candidateId));
                     }
                     if (!updatedCandidate) {
-                        throw new Error(`Candidate ${candidateId} not found after validation`);
+                        throw new Error(`Candidate ${candidateId} not found after advance`);
                     }
-                    // Appeler executeAxiom() pour générer la première question BLOC 3
-                    console.log('[ORCHESTRATOR] generate first question BLOC 3 after BLOC 2B mirror validation');
-                    const nextResult = await executeAxiom({
-                        candidate: updatedCandidate,
-                        userMessage: null,
-                        event: undefined,
-                    });
+                    const nextResult = await executeAxiom({ candidate: updatedCandidate, userMessage: null, event: undefined });
                     return {
                         response: normalizeSingleResponse(nextResult.response),
                         step: nextResult.step,
@@ -949,7 +908,7 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
                         autoContinue: false,
                     };
                 }
-                // Toutes les questions répondues → Générer miroir (sans question 3)
+                // Toutes les questions répondues → Générer miroir puis enchaînement auto bloc 3
                 const block2BAnswers = candidateStore.getBlock2BAnswers(currentCandidate);
                 const answersCount = block2BAnswers?.answers?.length ?? 0;
                 if (answersCount !== nextQuestionIndex) {
@@ -959,37 +918,47 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
                         queueLength,
                     });
                 }
-                console.log('[ORCHESTRATOR] Generating BLOC 2B final mirror (API)', {
+                console.log('[ORCHESTRATOR] Generating BLOC 2B final mirror then auto-advance to BLOC 3', {
                     nextQuestionIndex,
                     queueLength,
                     answersCount,
                 });
-                console.log('[LOT1] Mirror generated — awaiting validation (2B reste IN_PROGRESS jusqu\'à validation)');
                 const mirror = await this.generateMirror2B(currentCandidate, works, coreWorkAnswer, onChunk, onUx);
-                // Enregistrer le miroir dans conversationHistory
                 candidateStore.appendAssistantMessage(candidateId, mirror, {
                     block: blockNumber,
-                    step: BLOC_02, // Rester sur BLOC_02 jusqu'à validation
+                    step: BLOC_02,
                     kind: 'mirror',
                 });
-                // Mettre à jour UI state (currentBlock reste 2 jusqu'à validation)
-                // LOT1 — Activer le verrou de validation miroir
+                await candidateStore.setBlock2BCompleted(candidateId);
+                candidateStore.markBlockComplete(candidateId, 2);
+                await candidateStore.persistAndFlush(candidateId);
+                candidateStore.updateSession(candidateId, {
+                    state: 'collecting',
+                    currentBlock: 3,
+                });
                 candidateStore.updateUIState(candidateId, {
-                    step: BLOC_02, // Rester sur BLOC_02
+                    step: BLOC_03,
                     lastQuestion: null,
                     identityDone: true,
-                    mirrorValidated: false, // Verrou activé
                 });
-                // Parser le miroir en sections pour affichage progressif (si format REVELIOM)
-                const mirrorSections = parseMirrorSections(mirror);
-                // Retourner UNIQUEMENT le miroir avec expectsAnswer: true
+                let candidateForBloc3 = candidateStore.get(candidateId) ?? (await candidateStore.getAsync(candidateId));
+                if (!candidateForBloc3) {
+                    throw new Error(`Candidate ${candidateId} not found after 2B completion`);
+                }
+                const nextResult = await executeAxiom({
+                    candidate: candidateForBloc3,
+                    userMessage: null,
+                    event: undefined,
+                });
+                const nextQuestion = normalizeSingleResponse(nextResult.response || '');
+                const combinedResponse = `${mirror}\n\n${nextQuestion}`;
                 return {
-                    response: normalizeSingleResponse(mirror),
-                    step: BLOC_02, // Rester sur BLOC_02 jusqu'à validation
-                    expectsAnswer: true, // Forcer true pour validation
+                    response: combinedResponse,
+                    step: BLOC_03,
+                    expectsAnswer: nextResult.expectsAnswer,
                     autoContinue: false,
-                    progressiveDisplay: mirrorSections.length === 3,
-                    mirrorSections: mirrorSections.length === 3 ? mirrorSections : undefined,
+                    mirror,
+                    nextQuestion,
                 };
             }
             else {
