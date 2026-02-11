@@ -1,6 +1,10 @@
 // Configuration API
 const API_BASE_URL = "https://axiomengine-production.up.railway.app";
 
+// Build stamp UI (diagnostic prod)
+const FRONT_VERSION = "ui-test-2026-02-11a";
+const GIT_SHA_UI = typeof window !== "undefined" && window.__AXIOM_GIT_SHA__ ? window.__AXIOM_GIT_SHA__ : "—";
+
 // État de l'application
 let sessionId = null;
 let tenantId = null;
@@ -311,6 +315,12 @@ async function callAxiom(message, event = null) {
       body: JSON.stringify(body),
     });
 
+    const axiomBuildHeader = response.headers.get('X-AXIOM-BUILD') || '';
+    if (axiomBuildHeader) {
+      const backEl = document.getElementById('back-build');
+      if (backEl) backEl.textContent = axiomBuildHeader.slice(0, 12);
+    }
+
     let fullText = '';
     let finalData = null;
 
@@ -379,25 +389,28 @@ async function callAxiom(message, event = null) {
       localStorage.setItem(getStorageKey(), sessionId);
     }
 
-    // Règle unique : ce que le serveur renvoie dans done.response = ce que l'utilisateur voit (aucune exception)
-    const finalContent = (data.response && data.response.trim())
-      ? extractFirstQuestion(data.response.trim())
-      : '';
+    // Règle unique : ce que le serveur renvoie dans done.response = ce que l'utilisateur voit (transition + question en une seule réponse, pas d'extraction)
+    // Toujours créer un message assistant si finalContent non vide (même si aucun token n'a été streamé)
+    const finalContent = (data.response && data.response.trim()) ? data.response.trim() : '';
     if (streamMessageDiv && streamTextP) {
       streamTextP.textContent = finalContent;
       const messagesContainer = document.getElementById('messages');
       if (messagesContainer) messagesContainer.scrollTop = messagesContainer.scrollHeight;
-    } else if (finalContent) {
+    }
+    if (finalContent && !streamMessageDiv) {
       addMessage('assistant', finalContent);
     }
 
-    // Instrumentation (preuve) : corrélation sendId ↔ done
+    // Instrumentation (preuve) : corrélation sendId ↔ done + build
+    const axiomBuild = response.headers.get('X-AXIOM-BUILD') || '';
     console.log('[UI] done', {
       sendId,
       step: data.step,
       currentBlock: data.currentBlock,
+      responseLength: (data.response || '').length,
       responsePreview: (data.response || '').trim().slice(0, 80),
-      displayedSource: 'done.response',
+      sessionId: data.sessionId || sessionId,
+      X_AXIOM_BUILD: axiomBuild,
     });
 
     // Détection fin préambule → affichage bouton MVP
@@ -558,6 +571,11 @@ function displayFinishButton() {
 
 // Initialisation au chargement
 window.addEventListener('DOMContentLoaded', async () => {
+  // Build stamp footer (diagnostic prod)
+  const frontVersionEl = document.getElementById('front-version');
+  if (frontVersionEl) frontVersionEl.textContent = FRONT_VERSION;
+  console.log('[AXIOM] FRONT_VERSION=', FRONT_VERSION, 'GIT_SHA_UI=', GIT_SHA_UI);
+
   // Garde anti-double initialisation
   if (isInitializing) {
     return;

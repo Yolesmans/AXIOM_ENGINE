@@ -37,6 +37,15 @@ import { validateMirrorREVELIOM } from "./services/validateMirrorReveliom.js";
 
 console.log("BOOT SERVER START");
 
+// Build stamp pour diagnostic prod (Vercel injecte VERCEL_GIT_COMMIT_SHA)
+const AXIOM_BUILD_SHA = process.env.VERCEL_GIT_COMMIT_SHA || process.env.AXIOM_GIT_SHA || 'dev';
+const AXIOM_API_LABEL = 'axiom-engine';
+
+function setAxiomBuildHeaders(res: Response): void {
+  res.setHeader('X-AXIOM-BUILD', AXIOM_BUILD_SHA);
+  res.setHeader('X-AXIOM-API', AXIOM_API_LABEL);
+}
+
 // ============================================
 // HELPER : Dérivation d'état depuis l'historique
 // ============================================
@@ -317,6 +326,7 @@ app.get("/start", async (req: Request, res: Response) => {
 
 // POST /axiom
 app.post("/axiom", async (req: Request, res: Response) => {
+  setAxiomBuildHeaders(res);
   try {
     const parsed = AxiomBodySchema.safeParse(req.body);
     if (!parsed.success) {
@@ -970,6 +980,7 @@ app.post("/axiom/stream", async (req: Request, res: Response) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
+  setAxiomBuildHeaders(res);
   // Désactiver le buffering côté proxy (si supporté)
   try {
     res.setHeader('X-Accel-Buffering', 'no');
