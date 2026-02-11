@@ -65,6 +65,22 @@ function setAxiomBuildHeaders(res: Response): void {
   res.setHeader('X-AXIOM-API', AXIOM_API_LABEL);
 }
 
+/** Log état requête (multi-instance / diagnostic). instanceId = RAILWAY_REPLICA_ID ou INSTANCE_ID ou pid */
+function logRequestState(candidate: AxiomCandidate, label?: string): void {
+  const instanceId =
+    process.env.RAILWAY_REPLICA_ID ?? process.env.INSTANCE_ID ?? String(process.pid);
+  const blockStates = candidate.session.blockStates;
+  console.log('[AXIOM_REQ]', {
+    label: label ?? 'req',
+    sessionId: candidate.candidateId,
+    currentBlock: candidate.session.currentBlock,
+    step: candidate.session.ui?.step ?? null,
+    block2A_status: blockStates?.['2A']?.status ?? null,
+    block2B_status: blockStates?.['2B']?.status ?? null,
+    instanceId,
+  });
+}
+
 // ============================================
 // HELPER : Dérivation d'état depuis l'historique
 // ============================================
@@ -677,6 +693,8 @@ app.post("/axiom", async (req: Request, res: Response) => {
         });
       }
     }
+
+    logRequestState(candidate, 'axiom');
 
     // PARTIE 5 — Gérer les events techniques (boutons)
     if (event === "START_BLOC_1") {
@@ -1397,6 +1415,8 @@ app.post("/axiom/stream", async (req: Request, res: Response) => {
       }
     }
 
+    logRequestState(candidate, 'stream');
+
     // 4) EVENT START_BLOC_1 — déléguer à l'orchestrateur avec onChunk
     if (event === "START_BLOC_1") {
       const orchestrator = new BlockOrchestrator();
@@ -1575,6 +1595,8 @@ app.post("/axiom/stream", async (req: Request, res: Response) => {
           }
         }
 
+        logRequestState(candidateBloc2, 'stream_bloc2');
+
         const orchestrator = new BlockOrchestrator();
         let result: OrchestratorResult;
 
@@ -1639,7 +1661,6 @@ app.post("/axiom/stream", async (req: Request, res: Response) => {
           step: responseStep,
           expectsAnswer: response ? result.expectsAnswer : false,
           autoContinue: result.autoContinue,
-          ...(result.mirrorAwaitingValidation === true && { mirrorAwaitingValidation: true }),
         };
 
         writeEvent("done", {

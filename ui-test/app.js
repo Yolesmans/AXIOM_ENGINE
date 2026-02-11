@@ -413,33 +413,15 @@ async function callAxiom(message, event = null) {
       X_AXIOM_BUILD: axiomBuild,
     });
 
-    // Détection miroir 2B → masquer input, afficher bouton "Continuer" (transition 2B → 3)
-    const mirror2BAwaiting = isMirror2BAwaitingValidation(data);
-    if (mirror2BAwaiting) {
-      const chatForm = document.getElementById('chat-form');
-      if (chatForm) {
-        chatForm.style.display = 'none';
-      }
-      const userInput = document.getElementById('user-input');
-      if (userInput) {
-        userInput.disabled = true;
-      }
-      hideContinueAfterMirrorButton();
-      displayContinueAfterMirrorButton();
-    }
-
     // Détection fin préambule → affichage bouton MVP
     if (data.step === 'STEP_03_BLOC1') {
       showStartButton = true;
-      hideContinueAfterMirrorButton();
       displayStartButton();
     } else if (data.step === 'STEP_99_MATCH_READY' && data.expectsAnswer === false) {
       showStartButton = true;
-      hideContinueAfterMirrorButton();
       displayMatchingButton();
     } else if (data.step === 'DONE_MATCHING') {
       // État terminal : masquer tout sauf le bouton FIN
-      hideContinueAfterMirrorButton();
       const chatForm = document.getElementById('chat-form');
       if (chatForm) {
         chatForm.style.display = 'none';
@@ -455,10 +437,9 @@ async function callAxiom(message, event = null) {
       }
       // Afficher uniquement le bouton FIN
       displayFinishButton();
-    } else if (data.expectsAnswer === true && !mirror2BAwaiting) {
-      // Question active (pas miroir 2B) : réafficher le champ de saisie
+    } else if (data.expectsAnswer === true) {
+      // Question active : réafficher le champ de saisie
       hasActiveQuestion = true;
-      hideContinueAfterMirrorButton();
       const chatForm = document.getElementById('chat-form');
       if (chatForm) {
         chatForm.style.display = 'flex';
@@ -468,11 +449,7 @@ async function callAxiom(message, event = null) {
         userInput.disabled = false;
       }
     } else {
-      // expectsAnswer === false : pas de question active (miroir, bouton, etc.)
       hasActiveQuestion = false;
-      if (!mirror2BAwaiting) {
-        hideContinueAfterMirrorButton();
-      }
     }
 
     return data;
@@ -553,53 +530,6 @@ function displayMatchingButton() {
   }
 
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
-}
-
-// Détection miroir 2B : uniquement quand le backend renvoie mirrorAwaitingValidation (évite affichage sur 2A questions)
-function isMirror2BAwaitingValidation(data) {
-  return data.mirrorAwaitingValidation === true;
-}
-
-function displayContinueAfterMirrorButton() {
-  const messagesContainer = document.getElementById('messages');
-  if (!messagesContainer) return;
-
-  let container = document.getElementById('continue-after-mirror-container');
-  if (!container) {
-    container = document.createElement('div');
-    container.id = 'continue-after-mirror-container';
-    container.className = 'mvp-start-button';
-    messagesContainer.appendChild(container);
-  }
-
-  container.innerHTML = `
-    <button id="continueAfterMirror" type="button">Continuer</button>
-  `;
-  container.classList.remove('hidden');
-
-  const btn = document.getElementById('continueAfterMirror');
-  if (btn) {
-    btn.addEventListener('click', async () => {
-      btn.disabled = true;
-      try {
-        await callAxiom('OK');
-      } catch (err) {
-        console.error('Erreur:', err);
-        btn.disabled = false;
-        return;
-      }
-      hideContinueAfterMirrorButton();
-    });
-  }
-
-  messagesContainer.scrollTop = messagesContainer.scrollHeight;
-}
-
-function hideContinueAfterMirrorButton() {
-  const container = document.getElementById('continue-after-mirror-container');
-  if (container) {
-    container.remove();
-  }
 }
 
 // Fonction pour afficher le bouton FIN

@@ -967,7 +967,7 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
                 });
                 // Parser le miroir en sections pour affichage progressif (si format REVELIOM)
                 const mirrorSections = parseMirrorSections(mirror);
-                // Retourner UNIQUEMENT le miroir avec expectsAnswer: true + flag pour le bouton Continuer (front)
+                // Retourner UNIQUEMENT le miroir avec expectsAnswer: true
                 return {
                     response: normalizeSingleResponse(mirror),
                     step: BLOC_02, // Rester sur BLOC_02 jusqu'à validation
@@ -975,7 +975,6 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
                     autoContinue: false,
                     progressiveDisplay: mirrorSections.length === 3,
                     mirrorSections: mirrorSections.length === 3 ? mirrorSections : undefined,
-                    mirrorAwaitingValidation: true, // Bouton "Continuer" visible uniquement dans ce cas
                 };
             }
             else {
