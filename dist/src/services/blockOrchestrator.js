@@ -777,6 +777,7 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
                 console.log('[ORCHESTRATOR] Generating BLOC 2B premium (motif + personnages only)');
                 const { questions, meta } = await this.generateMotifAndPersonnagesQuestions2B(currentCandidate, works, coreWorkAnswer);
                 candidateStore.setQuestionsForBlock(candidateId, blockNumber, questions.slice(0, 6), meta.slice(0, 6));
+                await candidateStore.persistAndFlush(candidateId);
                 return await this.serveNextQuestion2B(candidateId, blockNumber);
             }
             // LEGACY : queue sans meta (ancien flux)
@@ -784,6 +785,7 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
             let questions = await this.generateQuestions2B(currentCandidate, works, coreWorkAnswer);
             const validatedQuestions = await this.validateAndRetryQuestions2B(questions, works, currentCandidate, coreWorkAnswer);
             candidateStore.setQuestionsForBlock(candidateId, blockNumber, validatedQuestions);
+            await candidateStore.persistAndFlush(candidateId);
             return await this.serveNextQuestion2B(candidateId, blockNumber);
         }
         // ÉTAPE 3 — RÉPONSE UTILISATEUR REÇUE (state machine : currentQuestionIndex, block2B.answers)
@@ -797,12 +799,22 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
             if (questionIndex < 0) {
                 return safeReturnMessage("Aucune question en cours. Recharge la page.", 'BLOC 2B questionIndex < 0');
             }
+            // Idempotence 2B : requête doublon (ex. double tap) → retourner la prochaine question sans muter
+            const block2B = candidateStore.getBlock2BAnswers(currentCandidate);
+            const answersLength = block2B?.answers?.length ?? 0;
+            if (answersLength >= currentQuestionIndex) {
+                console.log('[ORCHESTRATOR] BLOC 2B idempotent: answers.length >= currentQuestionIndex', {
+                    answersLength,
+                    currentQuestionIndex,
+                });
+                return await this.getNextQuestion2BContentOnly(candidateId, blockNumber);
+            }
             await candidateStore.appendBlock2BAnswer(candidateId, userMessage);
             currentCandidate = candidateStore.get(candidateId) ?? await candidateStore.getAsync(candidateId);
             if (!currentCandidate) {
                 throw new Error(`Candidate ${candidateId} not found after storing answer`);
             }
-            const finalQueue = currentCandidate.blockQueues?.[blockNumber];
+            let finalQueue = currentCandidate.blockQueues?.[blockNumber];
             if (!finalQueue) {
                 throw new Error(`Queue for block ${blockNumber} not found after reload`);
             }
@@ -851,10 +863,20 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
                     newMeta.push({ workIndex, slot: 'recap' });
                     const nextIndex = currentCandidate.session.blockStates?.['2B']?.currentQuestionIndex ?? currentQuestionIndex + 1;
                     candidateStore.insertQuestionsAt(candidateId, blockNumber, nextIndex, newQuestions, newMeta);
+                    // Stabilité : flush + reload pour que la condition miroir utilise la queue à jour (pas de queue stale)
+                    await candidateStore.persistAndFlush(candidateId);
+                    const reloaded = candidateStore.get(candidateId) ?? (await candidateStore.getAsync(candidateId));
+                    if (!reloaded) {
+                        throw new Error(`Candidate ${candidateId} not found after insertQuestionsAt`);
+                    }
+                    currentCandidate = reloaded;
+                    finalQueue = currentCandidate.blockQueues?.[blockNumber] ?? finalQueue;
                 }
             }
+            // Condition miroir déterministe : queue et index depuis l'état rechargé (post-insert si besoin)
             const nextQuestionIndex = currentCandidate.session.blockStates?.['2B']?.currentQuestionIndex ?? currentQuestionIndex + 1;
-            if (nextQuestionIndex >= finalQueue.questions.length) {
+            const queueLength = finalQueue.questions.length;
+            if (nextQuestionIndex >= queueLength) {
                 // Vérifier si le miroir a déjà été généré (dernier message assistant est un miroir de BLOC 2B)
                 const conversationHistory = currentCandidate.conversationHistory || [];
                 const lastAssistantMessage = [...conversationHistory]
@@ -911,7 +933,20 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
                     };
                 }
                 // Toutes les questions répondues → Générer miroir (sans question 3)
-                console.log('[ORCHESTRATOR] Generating BLOC 2B final mirror (API)');
+                const block2BAnswers = candidateStore.getBlock2BAnswers(currentCandidate);
+                const answersCount = block2BAnswers?.answers?.length ?? 0;
+                if (answersCount !== nextQuestionIndex) {
+                    console.warn('[ORCHESTRATOR] BLOC 2B mirror: answers.length !== nextQuestionIndex', {
+                        answersCount,
+                        nextQuestionIndex,
+                        queueLength,
+                    });
+                }
+                console.log('[ORCHESTRATOR] Generating BLOC 2B final mirror (API)', {
+                    nextQuestionIndex,
+                    queueLength,
+                    answersCount,
+                });
                 console.log('[LOT1] Mirror generated — awaiting validation');
                 await candidateStore.setBlock2BCompleted(candidateId);
                 candidateStore.markBlockComplete(candidateId, blockNumber);
@@ -1722,6 +1757,61 @@ Format de sortie OBLIGATOIRE :
             .map((p) => p.trim())
             .filter((p) => p.length > 0);
         return parts.length > 0 ? parts : [raw];
+    }
+    /**
+     * Retourne le contenu de la prochaine question 2B en lecture seule (aucune mutation).
+     * Utilisé pour l'idempotence : requête doublon → même réponse sans append ni incrément.
+     */
+    async getNextQuestion2BContentOnly(candidateId, blockNumber) {
+        const candidate = candidateStore.get(candidateId) ?? (await candidateStore.getAsync(candidateId));
+        if (!candidate)
+            throw new Error(`Candidate ${candidateId} not found`);
+        const queue = candidate.blockQueues?.[blockNumber];
+        if (!queue || queue.questions.length === 0) {
+            return {
+                response: normalizeSingleResponse("Aucune question disponible. Recharge la page."),
+                step: BLOC_02,
+                expectsAnswer: true,
+                autoContinue: false,
+            };
+        }
+        const currentQuestionIndex = candidate.session.blockStates?.['2B']?.currentQuestionIndex ?? 0;
+        if (currentQuestionIndex >= queue.questions.length) {
+            return {
+                response: normalizeSingleResponse("Toutes les questions ont été posées."),
+                step: BLOC_02,
+                expectsAnswer: true,
+                autoContinue: false,
+            };
+        }
+        let question = queue.questions[currentQuestionIndex];
+        if (!queue.meta && question.includes('[NOM DU PERSONNAGE]')) {
+            const block2B = candidateStore.getBlock2BAnswers(candidate);
+            const answers = block2B?.answers ?? [];
+            const QUESTIONS_PER_WORK = 6;
+            const workIndex = Math.floor(currentQuestionIndex / QUESTIONS_PER_WORK);
+            const slotInWork = currentQuestionIndex % QUESTIONS_PER_WORK;
+            if (slotInWork >= 2 && slotInWork <= 4) {
+                const characterIndex = slotInWork - 2;
+                const personnagesQuestionIndex = 1 + workIndex * QUESTIONS_PER_WORK;
+                const personnagesAnswer = answers[personnagesQuestionIndex] ?? '';
+                const characterNames = this.parseCharacterNames(personnagesAnswer);
+                const name = characterNames[characterIndex] ?? characterNames[0] ?? 'ce personnage';
+                question = question.replace(/\[NOM DU PERSONNAGE\]/g, name);
+            }
+            else {
+                question = question.replace(/\[NOM DU PERSONNAGE\]/g, 'ce personnage');
+            }
+        }
+        if (question.includes('[NOM DU PERSONNAGE]')) {
+            question = question.replace(/\[NOM DU PERSONNAGE\]/g, 'ce personnage');
+        }
+        return {
+            response: normalizeSingleResponse(question),
+            step: BLOC_02,
+            expectsAnswer: true,
+            autoContinue: false,
+        };
     }
     /**
      * Sert la prochaine question BLOC 2B depuis la queue (state machine : currentQuestionIndex).

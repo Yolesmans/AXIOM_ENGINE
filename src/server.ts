@@ -41,6 +41,25 @@ console.log("BOOT SERVER START");
 const AXIOM_BUILD_SHA = process.env.VERCEL_GIT_COMMIT_SHA || process.env.AXIOM_GIT_SHA || 'dev';
 const AXIOM_API_LABEL = 'axiom-engine';
 
+// ============================================
+// BLOC 2 — Mutex par sessionId (stabilité déterministe)
+// ============================================
+// Une seule requête bloc 2 à la fois par session ; release en finally.
+const block2LockMap = new Map<string, Promise<void>>();
+
+async function acquireBlock2Lock(sessionId: string): Promise<() => void> {
+  const prev = block2LockMap.get(sessionId) ?? Promise.resolve();
+  let release!: () => void;
+  const next = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  block2LockMap.set(sessionId, next);
+  await prev;
+  return () => {
+    release();
+  };
+}
+
 function setAxiomBuildHeaders(res: Response): void {
   res.setHeader('X-AXIOM-BUILD', AXIOM_BUILD_SHA);
   res.setHeader('X-AXIOM-API', AXIOM_API_LABEL);
@@ -1520,105 +1539,117 @@ app.post("/axiom/stream", async (req: Request, res: Response) => {
       return;
     }
 
-    // 7) BLOC 2A / 2B : déléguer à l'orchestrateur avec onChunk (copié de /axiom)
+    // 7) BLOC 2A / 2B : mutex par session + reload avant routage (stabilité déterministe)
     if (candidate.session.ui?.step === BLOC_02 && candidate.session.currentBlock === 2) {
-      if (userMessageText) {
-        const candidateIdForUserMessage = candidate.candidateId;
-        candidateStore.appendUserMessage(candidateIdForUserMessage, userMessageText, {
-          block: 2,
-          step: BLOC_02,
-          kind: "other",
-        });
-        candidate = candidateStore.get(candidateIdForUserMessage);
-        if (!candidate) {
-          candidate = await candidateStore.getAsync(candidateIdForUserMessage);
+      const sessionIdForBlock2 = candidate.candidateId;
+      const release = await acquireBlock2Lock(sessionIdForBlock2);
+      try {
+        // Reload candidat depuis le store (état à jour avant toute décision)
+        let candidateBloc2 = await candidateStore.getAsync(sessionIdForBlock2);
+        if (!candidateBloc2) {
+          candidateBloc2 = candidateStore.get(sessionIdForBlock2);
         }
-        if (!candidate) {
+        if (!candidateBloc2) {
           writeEvent("error", {
             error: "INTERNAL_ERROR",
-            message: "Failed to store user message",
+            message: "Candidate not found after block2 lock",
           });
           res.end();
           return;
         }
-      }
 
-      const orchestrator = new BlockOrchestrator();
-      let result: OrchestratorResult;
-
-      try {
-        result = await orchestrator.handleMessage(candidate, userMessageText, null, onChunk, onUx);
-      } catch (error) {
-        if (error instanceof Error && error.message.includes("BLOC 2B validation failed")) {
-          console.error("[ORCHESTRATOR] [2B_VALIDATION_FAIL] fatal=true", error.message);
-
-          const payload = {
-            sessionId: candidate.candidateId,
-            currentBlock: candidate.session.currentBlock,
-            state: "collecting",
-            response:
-              "Une erreur technique est survenue lors de la génération des questions. Veuillez réessayer ou contacter le support.",
+        if (userMessageText) {
+          candidateStore.appendUserMessage(sessionIdForBlock2, userMessageText, {
+            block: 2,
             step: BLOC_02,
-            expectsAnswer: false,
-            autoContinue: false,
-          };
+            kind: "other",
+          });
+          candidateBloc2 = candidateStore.get(sessionIdForBlock2) ?? (await candidateStore.getAsync(sessionIdForBlock2));
+          if (!candidateBloc2) {
+            writeEvent("error", {
+              error: "INTERNAL_ERROR",
+              message: "Failed to store user message",
+            });
+            res.end();
+            return;
+          }
+        }
 
-          writeEvent("done", {
-            type: "done",
-            ...payload,
+        const orchestrator = new BlockOrchestrator();
+        let result: OrchestratorResult;
+
+        try {
+          result = await orchestrator.handleMessage(candidateBloc2, userMessageText, null, onChunk, onUx);
+        } catch (error) {
+          if (error instanceof Error && error.message.includes("BLOC 2B validation failed")) {
+            console.error("[ORCHESTRATOR] [2B_VALIDATION_FAIL] fatal=true", error.message);
+
+            const payload = {
+              sessionId: candidateBloc2.candidateId,
+              currentBlock: candidateBloc2.session.currentBlock,
+              state: "collecting",
+              response:
+                "Une erreur technique est survenue lors de la génération des questions. Veuillez réessayer ou contacter le support.",
+              step: BLOC_02,
+              expectsAnswer: false,
+              autoContinue: false,
+            };
+
+            writeEvent("done", {
+              type: "done",
+              ...payload,
+            });
+            res.end();
+            return;
+          }
+
+          throw error;
+        }
+
+        candidateBloc2 = candidateStore.get(sessionIdForBlock2) ?? (await candidateStore.getAsync(sessionIdForBlock2));
+        if (!candidateBloc2) {
+          writeEvent("error", {
+            error: "INTERNAL_ERROR",
+            message: "Failed to get candidate",
           });
           res.end();
           return;
         }
 
-        throw error;
-      }
+        const responseState = mapStepToState(result.step);
+        const responseStep = result.step;
 
-      const candidateIdAfterExecution = candidate.candidateId;
-      candidate = candidateStore.get(candidateIdAfterExecution);
-      if (!candidate) {
-        candidate = await candidateStore.getAsync(candidateIdAfterExecution);
-      }
-      if (!candidate) {
-        writeEvent("error", {
-          error: "INTERNAL_ERROR",
-          message: "Failed to get candidate",
+        if (candidateBloc2.identity.completedAt) {
+          try {
+            const trackingRow = candidateToLiveTrackingRow(candidateBloc2);
+            await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+          } catch (error) {
+            console.error("[axiom/stream] live tracking error:", error);
+          }
+        }
+
+        const response = result.response || "";
+        const finalResponse = streamedText || response || "Une erreur technique est survenue. Recharge la page.";
+
+        const payload = {
+          sessionId: candidateBloc2.candidateId,
+          currentBlock: candidateBloc2.session.currentBlock,
+          state: responseState,
+          response: finalResponse,
+          step: responseStep,
+          expectsAnswer: response ? result.expectsAnswer : false,
+          autoContinue: result.autoContinue,
+        };
+
+        writeEvent("done", {
+          type: "done",
+          ...payload,
         });
         res.end();
         return;
+      } finally {
+        release();
       }
-
-      const responseState = mapStepToState(result.step);
-      const responseStep = result.step;
-
-      if (candidate.identity.completedAt) {
-        try {
-          const trackingRow = candidateToLiveTrackingRow(candidate);
-          await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
-        } catch (error) {
-          console.error("[axiom/stream] live tracking error:", error);
-        }
-      }
-
-      const response = result.response || "";
-      const finalResponse = streamedText || response || "Une erreur technique est survenue. Recharge la page.";
-
-      const payload = {
-        sessionId: candidate.candidateId,
-        currentBlock: candidate.session.currentBlock,
-        state: responseState,
-        response: finalResponse,
-        step: responseStep,
-        expectsAnswer: response ? result.expectsAnswer : false,
-        autoContinue: result.autoContinue,
-      };
-
-      writeEvent("done", {
-        type: "done",
-        ...payload,
-      });
-      res.end();
-      return;
     }
 
     // 8) Enregistrer le message utilisateur dans l'historique
