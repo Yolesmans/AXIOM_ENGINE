@@ -1740,7 +1740,24 @@ Format de sortie OBLIGATOIRE :
   }
 
   /**
-   * Sert la prochaine question BLOC 2B depuis la queue
+   * Parse une réponse "personnages" (ex. "Arthur, Tommy et John") en liste de noms.
+   * Tolérant : virgules, " et ", retours ligne, point-virgules.
+   */
+  private parseCharacterNames(text: string): string[] {
+    if (!text || typeof text !== 'string') return [];
+    const raw = text.trim().replace(/\s+/g, ' ');
+    if (raw.length === 0) return [];
+    const parts = raw
+      .split(/,|;\s*|\n|\s+et\s+/i)
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0);
+    return parts.length > 0 ? parts : [raw];
+  }
+
+  /**
+   * Sert la prochaine question BLOC 2B depuis la queue.
+   * Injection dynamique : remplace [NOM DU PERSONNAGE] par le nom saisi par l'utilisateur
+   * pour la question "personnages" de la même œuvre.
    */
   private serveNextQuestion2B(candidateId: string, blockNumber: number): OrchestratorResult {
     const candidate = candidateStore.get(candidateId);
@@ -1757,29 +1774,45 @@ Format de sortie OBLIGATOIRE :
       throw new Error(`All questions for block ${blockNumber} have been served`);
     }
 
-    const question = queue.questions[queue.cursorIndex];
-    
+    let question = queue.questions[queue.cursorIndex];
+
+    if (question.includes('[NOM DU PERSONNAGE]')) {
+      const answerMap = candidate.answerMaps?.[blockNumber];
+      const answers = answerMap?.answers || {};
+      const QUESTIONS_PER_WORK = 6;
+      const workIndex = Math.floor(queue.cursorIndex / QUESTIONS_PER_WORK);
+      const slotInWork = queue.cursorIndex % QUESTIONS_PER_WORK;
+      if (slotInWork >= 2 && slotInWork <= 4) {
+        const characterIndex = slotInWork - 2;
+        const personnagesQuestionIndex = 1 + workIndex * QUESTIONS_PER_WORK;
+        const answersRecord = answers as Record<number, string>;
+        const personnagesAnswer = answersRecord[personnagesQuestionIndex] ?? '';
+        const characterNames = this.parseCharacterNames(personnagesAnswer);
+        const name = characterNames[characterIndex] ?? characterNames[0] ?? 'ce personnage';
+        question = question.replace(/\[NOM DU PERSONNAGE\]/g, name);
+      } else {
+        question = question.replace(/\[NOM DU PERSONNAGE\]/g, 'ce personnage');
+      }
+    }
+
     console.log('[ORCHESTRATOR] serve question BLOC 2B from queue (NO API)', {
       blockNumber,
       questionIndex: queue.cursorIndex,
       totalQuestions: queue.questions.length,
     });
 
-    // Enregistrer la question dans conversationHistory AVANT d'avancer le cursor
     candidateStore.appendAssistantMessage(candidateId, question, {
       block: blockNumber,
       step: BLOC_02,
       kind: 'question',
     });
 
-    // Mettre à jour UI state
     candidateStore.updateUIState(candidateId, {
       step: BLOC_02,
       lastQuestion: question,
       identityDone: true,
     });
 
-    // Avancer le cursor APRÈS avoir servi la question
     candidateStore.advanceQuestionCursor(candidateId, blockNumber);
 
     return {
