@@ -613,7 +613,7 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
     const answeredCount = Object.keys(answers).length;
 
     // Cas 1 : Aucune réponse encore → Question 2A.1 statique (0 token, pas d'API)
-    if (answeredCount === 0) {
+    if (answeredCount === 0 && !userMessage) {
       const question = STATIC_QUESTION_2A1;
       console.log('[ORCHESTRATOR] question 2A.1 - Médium (statique, no API)');
 

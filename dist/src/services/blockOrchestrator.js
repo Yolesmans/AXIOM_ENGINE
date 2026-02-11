@@ -13,6 +13,25 @@ import { renderMentorStyle, transposeToSecondPerson } from './mentorStyleRendere
 function getFullAxiomPrompt() {
     return `${PROMPT_AXIOM_ENGINE}\n\n${PROMPT_AXIOM_PROFIL}`;
 }
+/** Question 2A.1 statique (0 token, pas d'appel LLM, pas de validation/retry) — modèle BLOC 1 */
+const STATIC_QUESTION_2A1 = `Tu préfères qu'on parle de séries ou de films ?
+A. Série
+B. Film`;
+/**
+ * Normalise la réponse 2A.1 (Médium) en valeur canonique.
+ * Tolérant : A/a/A./Série/série → SERIE ; B/b/B./Film/film → FILM.
+ * Retourne null si la réponse n'est pas reconnue.
+ */
+function normalize2A1Response(raw) {
+    if (!raw || typeof raw !== 'string')
+        return null;
+    const s = raw.trim().toLowerCase();
+    if (s === 'a' || s === 'a.' || s === 'série' || s === 'serie' || s.startsWith('a.') || s.startsWith('a '))
+        return 'SERIE';
+    if (s === 'b' || s === 'b.' || s === 'film' || s.startsWith('b.') || s.startsWith('b '))
+        return 'FILM';
+    return null;
+}
 // Helper pour construire l'historique conversationnel (copié depuis axiomExecutor)
 const MAX_CONV_MESSAGES = 40;
 function buildConversationHistory(candidate) {
@@ -478,10 +497,10 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
         const answerMap = currentCandidate.answerMaps?.[blockNumber];
         const answers = answerMap?.answers || {};
         const answeredCount = Object.keys(answers).length;
-        // Cas 1 : Aucune réponse encore → Générer question 2A.1 (Médium)
-        if (answeredCount === 0) {
-            console.log('[ORCHESTRATOR] generate question 2A.1 - Médium (API)');
-            const question = await this.generateQuestion2A1(currentCandidate);
+        // Cas 1 : Aucune réponse encore → Question 2A.1 statique (0 token, pas d'API)
+        if (answeredCount === 0 && !userMessage) {
+            const question = STATIC_QUESTION_2A1;
+            console.log('[ORCHESTRATOR] question 2A.1 - Médium (statique, no API)');
             // Enregistrer la question dans conversationHistory
             candidateStore.appendAssistantMessage(candidateId, question, {
                 block: blockNumber,
@@ -503,9 +522,25 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
         }
         // Cas 2 : Réponse utilisateur reçue
         if (userMessage) {
-            // Stocker la réponse
             const questionIndex = answeredCount; // Index de la question qui vient d'être posée
-            candidateStore.storeAnswerForBlock(candidateId, blockNumber, questionIndex, userMessage);
+            // Réponse à la question 2A.1 : normalisation tolérante (A/B/Série/Film et variantes)
+            if (questionIndex === 0) {
+                const canonical = normalize2A1Response(userMessage);
+                if (canonical === null) {
+                    // Réponse non reconnue → redemander 2A.1 sans stocker (évite boucle sur réponse invalide)
+                    return {
+                        response: normalizeSingleResponse(STATIC_QUESTION_2A1),
+                        step: BLOC_02,
+                        expectsAnswer: true,
+                        autoContinue: false,
+                    };
+                }
+                const valueToStore = canonical === 'SERIE' ? 'Série' : 'Film';
+                candidateStore.storeAnswerForBlock(candidateId, blockNumber, questionIndex, valueToStore);
+            }
+            else {
+                candidateStore.storeAnswerForBlock(candidateId, blockNumber, questionIndex, userMessage);
+            }
             // Recharger candidate après stockage
             currentCandidate = candidateStore.get(candidateId);
             if (!currentCandidate) {
@@ -517,6 +552,10 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
             const updatedAnswerMap = currentCandidate.answerMaps?.[blockNumber];
             const updatedAnswers = updatedAnswerMap?.answers || {};
             const updatedAnsweredCount = Object.keys(updatedAnswers).length;
+            // Log de corrélation (diagnostic désync front/back) — après storeAnswer 2A.1
+            if (updatedAnsweredCount === 1 && blockNumber === 2) {
+                console.log('[DEBUG] block=2A answeredCount=1 next=2A.2');
+            }
             // Si 1 réponse → Générer question 2A.2 (adaptée)
             if (updatedAnsweredCount === 1) {
                 console.log('[ORCHESTRATOR] generate question 2A.2 - Préférences adaptées (API)');
