@@ -2040,11 +2040,12 @@ Toute sortie hors règles = invalide.`;
             });
         }
         // Enregistrer la réponse assistant APRÈS avoir déterminé nextState
+        // Miroirs blocs 3-9 : kind 'mirror' pour que la validation miroir (lastAssistantMessage.kind === 'mirror') soit reconnue
         if (aiText) {
             candidateStore.appendAssistantMessage(candidate.candidateId, aiText, {
                 block: blocNumber,
                 step: nextState,
-                kind: expectsAnswer ? 'question' : 'mirror',
+                kind: isMirror ? 'mirror' : 'question',
             });
         }
         logTransition(candidate.candidateId, stateIn, nextState, userMessage ? 'message' : 'event');
