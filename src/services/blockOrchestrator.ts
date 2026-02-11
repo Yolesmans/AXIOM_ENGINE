@@ -969,12 +969,27 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
 
     // ÉTAPE 1 — CONTEXTE (injection forcée BLOC 2A)
     const messages = buildConversationHistoryForBlock2B(currentCandidate);
-    
-    // Vérifier que les données BLOC 2A sont présentes
+
+    const safeReturnMessage = (
+      message: string,
+      logContext: string
+    ): OrchestratorResult => {
+      console.warn('[ORCHESTRATOR] [2B_SAFE_RETURN]', logContext, message);
+      return {
+        response: normalizeSingleResponse(message),
+        step: BLOC_02,
+        expectsAnswer: true,
+        autoContinue: false,
+      };
+    };
+
+    // Vérifier que les données BLOC 2A sont présentes (jamais throw : retour message utilisateur)
     const answerMap = currentCandidate.answerMaps?.[2];
     if (!answerMap || !answerMap.answers) {
-      console.error('[ORCHESTRATOR] [2B_CONTEXT_INJECTION] forced=false - BLOC 2A answers missing');
-      throw new Error('BLOC 2A answers not found. Cannot proceed to BLOC 2B.');
+      return safeReturnMessage(
+        "Les réponses de la phase précédente sont absentes. Recharge la page ou reprends depuis le début du bloc.",
+        'BLOC 2A answers missing'
+      );
     }
 
     const answers = answerMap.answers;
@@ -983,22 +998,27 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
     const coreWorkAnswer = answers[2] || '';
 
     if (!mediumAnswer || !preferencesAnswer || !coreWorkAnswer) {
-      console.error('[ORCHESTRATOR] [2B_CONTEXT_INJECTION] forced=false - Incomplete BLOC 2A data');
-      throw new Error('BLOC 2A data incomplete. Cannot proceed to BLOC 2B.');
+      return safeReturnMessage(
+        "Il manque une ou plusieurs réponses de la phase précédente. Recharge la page ou reprends depuis le début du bloc.",
+        'Incomplete BLOC 2A data'
+      );
+    }
+
+    const works = this.parseWorks(preferencesAnswer);
+
+    if (works.length === 0) {
+      return safeReturnMessage(
+        "Tu n'as pas indiqué d'œuvre dans ta réponse précédente. Peux-tu me donner au moins une série ou un film qui te parle (par exemple : \"Breaking Bad, Dark, Squid Game\" ou une seule œuvre) ?",
+        'No works parsed from preferences'
+      );
     }
 
     console.log('[ORCHESTRATOR] [2B_CONTEXT_INJECTION] forced=true', {
       medium: mediumAnswer,
       preferences: preferencesAnswer,
-      coreWork: coreWorkAnswer
+      coreWork: coreWorkAnswer,
+      worksCount: works.length,
     });
-
-    // Parser les 3 œuvres depuis preferencesAnswer
-    const works = this.parseWorks(preferencesAnswer);
-    if (works.length < 3) {
-      console.error('[ORCHESTRATOR] [2B_CONTEXT_INJECTION] forced=false - Less than 3 works found');
-      throw new Error(`Expected 3 works, found ${works.length}. Cannot proceed to BLOC 2B.`);
-    }
 
     const queue = currentCandidate.blockQueues?.[blockNumber];
 
@@ -1159,17 +1179,26 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
   }
 
   /**
-   * Parse les 3 œuvres depuis la réponse utilisateur (format libre)
+   * Parse les œuvres depuis la réponse utilisateur (format libre, tolérant).
+   * Accepte virgules, retours ligne, points-virgules. Nettoie les espaces.
+   * Retourne 1, 2 ou 3 œuvres selon le contenu (jamais de throw).
    */
   private parseWorks(preferencesAnswer: string): string[] {
-    // Essayer de parser : "Œuvre 1, Œuvre 2, Œuvre 3" ou "Œuvre 1\nŒuvre 2\nŒuvre 3"
-    const works = preferencesAnswer
-      .split(/[,\n]/)
-      .map(w => w.trim())
-      .filter(w => w.length > 0)
-      .slice(0, 3); // Prendre les 3 premières
-    
-    return works;
+    if (!preferencesAnswer || typeof preferencesAnswer !== 'string') {
+      return [];
+    }
+    const raw = preferencesAnswer.trim().replace(/\s+/g, ' ');
+    if (raw.length === 0) {
+      return [];
+    }
+    const parts = raw
+      .split(/[,;\n]+/)
+      .map((w) => w.trim())
+      .filter((w) => w.length > 0);
+    if (parts.length === 0) {
+      return [raw];
+    }
+    return parts.slice(0, 3);
   }
 
   /**
