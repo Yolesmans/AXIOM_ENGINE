@@ -1083,9 +1083,18 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
           
           // Message utilisateur présent → validation miroir BLOC 2B
           console.log('[ORCHESTRATOR] Validation miroir BLOC 2B reçue');
+          console.log('[ORCHESTRATOR] [2B_VALIDATION] before', {
+            sessionId: candidateId,
+            status2B: currentCandidate.session.blockStates?.['2B']?.status,
+            step: currentCandidate.session.ui?.step,
+            currentBlock: currentCandidate.session.currentBlock,
+            lastAssistantKind: lastAssistantMessage?.kind,
+            lastAssistantBlock: lastAssistantMessage?.block,
+          });
           candidateStore.appendMirrorValidation(candidateId, blockNumber, userMessage);
-          
-          // Passer au BLOC 3
+          await candidateStore.setBlock2BCompleted(candidateId);
+          candidateStore.markBlockComplete(candidateId, 2);
+          await candidateStore.persistAndFlush(candidateId);
           candidateStore.updateSession(candidateId, {
             state: "collecting",
             currentBlock: 3,
@@ -1096,7 +1105,13 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
             identityDone: true,
             mirrorValidated: true,
           });
-          
+          const afterCandidate = candidateStore.get(candidateId) ?? (await candidateStore.getAsync(candidateId));
+          console.log('[ORCHESTRATOR] [2B_VALIDATION] after', {
+            sessionId: candidateId,
+            status2B: afterCandidate?.session.blockStates?.['2B']?.status,
+            step: afterCandidate?.session.ui?.step,
+            currentBlock: afterCandidate?.session.currentBlock,
+          });
           // Recharger le candidate pour avoir l'état à jour
           let updatedCandidate = candidateStore.get(candidateId);
           if (!updatedCandidate) {
@@ -1137,10 +1152,7 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
           queueLength,
           answersCount,
         });
-        console.log('[LOT1] Mirror generated — awaiting validation');
-        await candidateStore.setBlock2BCompleted(candidateId);
-        candidateStore.markBlockComplete(candidateId, blockNumber);
-        
+        console.log('[LOT1] Mirror generated — awaiting validation (2B reste IN_PROGRESS jusqu\'à validation)');
         const mirror = await this.generateMirror2B(currentCandidate, works, coreWorkAnswer, onChunk, onUx);
         
         // Enregistrer le miroir dans conversationHistory
