@@ -819,29 +819,41 @@ app.post("/axiom", async (req: Request, res: Response) => {
       });
     }
 
-    // PHASE 2A : Déléguer BLOC 2A à l'orchestrateur
+    // PHASE 2A : Déléguer BLOC 2A/2B à l'orchestrateur (même mutex + ensure blockStates que stream)
     if (candidate.session.ui?.step === BLOC_02 && candidate.session.currentBlock === 2) {
-      // Enregistrer le message utilisateur dans conversationHistory AVANT d'appeler l'orchestrateur
-      if (userMessageText) {
-        const candidateIdForUserMessage = candidate.candidateId;
-        candidateStore.appendUserMessage(candidateIdForUserMessage, userMessageText, {
-          block: 2,
-          step: BLOC_02,
-          kind: 'other',
-        });
-        // Recharger candidate après enregistrement
-        candidate = candidateStore.get(candidateIdForUserMessage);
-        if (!candidate) {
-          candidate = await candidateStore.getAsync(candidateIdForUserMessage);
-        }
-        if (!candidate) {
+      const sessionIdForBlock2 = candidate.candidateId;
+      const release = await acquireBlock2Lock(sessionIdForBlock2);
+      try {
+        let candidateBloc2 = await candidateStore.getAsync(sessionIdForBlock2) ?? candidateStore.get(sessionIdForBlock2);
+        if (!candidateBloc2) {
           return res.status(500).json({
             error: "INTERNAL_ERROR",
-            message: "Failed to store user message",
+            message: "Candidate not found for block 2",
           });
         }
+        const ensured = await candidateStore.ensureBlock2StateAndPersistIfNeeded(sessionIdForBlock2);
+        if (ensured) candidateBloc2 = ensured;
+
+        if (userMessageText) {
+          candidateStore.appendUserMessage(sessionIdForBlock2, userMessageText, {
+            block: 2,
+            step: BLOC_02,
+            kind: 'other',
+          });
+          candidateBloc2 = candidateStore.get(sessionIdForBlock2) ?? (await candidateStore.getAsync(sessionIdForBlock2));
+          if (!candidateBloc2) {
+            return res.status(500).json({
+              error: "INTERNAL_ERROR",
+              message: "Failed to store user message",
+            });
+          }
+        }
+
+        candidate = candidateBloc2;
+      } finally {
+        release();
       }
-      
+
       const orchestrator = new BlockOrchestrator();
       let result: OrchestratorResult;
       
@@ -1580,6 +1592,9 @@ app.post("/axiom/stream", async (req: Request, res: Response) => {
           res.end();
           return;
         }
+        // Garantir blockStates toujours initialisé en bloc 2 (évite routage null → boucle)
+        const ensured = await candidateStore.ensureBlock2StateAndPersistIfNeeded(sessionIdForBlock2);
+        if (ensured) candidateBloc2 = ensured;
 
         if (userMessageText) {
           candidateStore.appendUserMessage(sessionIdForBlock2, userMessageText, {

@@ -35,7 +35,9 @@ export async function testOpenAI(): Promise<string> {
 
 export async function callOpenAI(params: {
   messages: Array<{ role: string; content: string }>;
+  temperature?: number;
 }): Promise<string> {
+  const temperature = params.temperature ?? DEFAULT_TEMPERATURE;
   try {
     const response = await client.chat.completions.create({
       model: DEFAULT_MODEL,
@@ -43,7 +45,7 @@ export async function callOpenAI(params: {
         role: msg.role as 'system' | 'user' | 'assistant',
         content: msg.content,
       })),
-      temperature: DEFAULT_TEMPERATURE,
+      temperature,
     });
 
     const content = response.choices[0]?.message?.content;
@@ -62,7 +64,7 @@ export async function callOpenAI(params: {
           role: msg.role as 'system' | 'user' | 'assistant',
           content: msg.content,
         })),
-        temperature: DEFAULT_TEMPERATURE,
+        temperature,
       });
 
       const content = response.choices[0]?.message?.content;

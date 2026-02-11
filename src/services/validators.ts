@@ -243,13 +243,14 @@ export function validateQuestion2A1(content: string): ValidationResult {
     };
   }
   
-  const hasSerie = /A\.?\s*(Série|série)/i.test(content);
-  const hasFilm = /B\.?\s*(Film|film)/i.test(content);
+  // Accepter "A. Série" / "A) Série" / "A Série" et idem pour B. Film
+  const hasSerie = /A\s*[\.\)]?\s*(Série|série)/i.test(content);
+  const hasFilm = /B\s*[\.\)]?\s*(Film|film)/i.test(content);
   
   if (!hasSerie || !hasFilm) {
     const missing: string[] = [];
-    if (!hasSerie) missing.push('"A. Série"');
-    if (!hasFilm) missing.push('"B. Film"');
+    if (!hasSerie) missing.push('option Série (A. ou A))');
+    if (!hasFilm) missing.push('option Film (B. ou B))');
     
     return {
       valid: false,

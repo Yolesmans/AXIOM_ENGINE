@@ -716,8 +716,8 @@ La question doit être claire et directe.`;
     }
     
     if (!validation.valid) {
-      console.error('[ORCHESTRATOR] Question 2A.1 validation failed after retry:', validation.error);
-      // Retourner quand même la question (avec warning)
+      console.warn('[ORCHESTRATOR] Question 2A.1 validation failed after retry, fallback déterministe');
+      return "Tu préfères les séries ou les films ?\n\nA. Série\nB. Film";
     }
     
     return question;
@@ -1083,6 +1083,7 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
             candidateStore.markBlockComplete(candidateId, 2);
             candidateStore.updateSession(candidateId, { state: 'collecting', currentBlock: 3 });
             candidateStore.updateUIState(candidateId, { step: BLOC_03, lastQuestion: null, identityDone: true });
+            await candidateStore.persistAndFlush(candidateId);
             updatedCandidate = candidateStore.get(candidateId) ?? (await candidateStore.getAsync(candidateId));
           }
           if (!updatedCandidate) {
@@ -1243,10 +1244,25 @@ Si ambiguïté ou réponse insuffisante : {"needsClarification":true,"message":"
     return { needsClarification: true, message: "Peux-tu me donner les noms des personnages (ex. : Harvey, Mike, Donna) ?" };
   }
 
+  /** Extrait le premier tableau JSON [...] du texte (ignore préambule markdown/commentaire). */
+  private extractFirstJsonArray(raw: string): string {
+    const start = raw.indexOf('[');
+    if (start === -1) return raw;
+    let depth = 0;
+    for (let i = start; i < raw.length; i++) {
+      if (raw[i] === '[') depth++;
+      else if (raw[i] === ']') {
+        depth--;
+        if (depth === 0) return raw.slice(start, i + 1);
+      }
+    }
+    return raw;
+  }
+
   /**
    * BLOC 2B PREMIUM — Génère les 6 questions motif + personnages avec sortie structurée.
-   * Meta dérivée du JSON LLM → invariant meta[i] décrit exactement questions[i].
-   * Titres d'œuvre SANS crochets dans le prompt et en post-traitement.
+   * Température basse, prompt JSON strict, extraction du premier [...], retry si parse échoue.
+   * Fallback : génération motif personnalisée par œuvre (LLM) + personnages avec titre.
    */
   private async generateMotifAndPersonnagesQuestions2B(
     candidate: AxiomCandidate,
@@ -1256,37 +1272,43 @@ Si ambiguïté ou réponse insuffisante : {"needsClarification":true,"message":"
     const w0 = works[0] || 'N/A';
     const w1 = works[1] || 'N/A';
     const w2 = works[2] || 'N/A';
-    const messages = buildConversationHistoryForBlock2B(candidate);
-    const completion = await callOpenAI({
-      messages: [
-        { role: 'system', content: getFullAxiomPrompt() },
-        {
-          role: 'system',
-          content: `BLOC 2B — Génère UNIQUEMENT 6 questions (motif + personnages). Une entrée JSON par question.
-Œuvres (écris les titres SANS crochets dans les questions) : #1 ${w0}, #2 ${w1}, #3 ${w2}. Œuvre noyau : ${coreWork}
-
-RÈGLE : Dans le texte des questions, écris toujours le titre de l'œuvre SANS crochets (ex: "dans Suits" pas "dans [Suits]").
-
-Réponds UNIQUEMENT par un tableau JSON valide de 6 objets, dans cet ordre exact :
-[
-  {"slot":"motif","workIndex":0,"text":"Qu'est-ce qui t'attire le PLUS dans ${w0} ?\\n\\nA. ...\\nB. ...\\nC. ...\\nD. ...\\nE. ..."},
-  {"slot":"personnages","workIndex":0,"text":"Dans ${w0}, quels sont les 1 à 3 personnages qui te parlent le plus ?"},
-  {"slot":"motif","workIndex":1,"text":"Qu'est-ce qui t'attire le PLUS dans ${w1} ?\\n\\nA. ...\\nB. ...\\nC. ...\\nD. ...\\nE. ..."},
-  {"slot":"personnages","workIndex":1,"text":"Dans ${w1}, quels sont les 1 à 3 personnages qui te parlent le plus ?"},
-  {"slot":"motif","workIndex":2,"text":"Qu'est-ce qui t'attire le PLUS dans ${w2} ?\\n\\nA. ...\\nB. ...\\nC. ...\\nD. ...\\nE. ..."},
-  {"slot":"personnages","workIndex":2,"text":"Dans ${w2}, quels sont les 1 à 3 personnages qui te parlent le plus ?"}
-]
-Chaque "text" doit être la question complète (motif = question + 5 options A à E). workIndex 0 = première œuvre, 1 = deuxième, 2 = troisième. Pas de markdown, pas de texte autour du JSON.`,
-        },
-        ...messages,
-      ],
-    });
-    const raw = completion.replace(/^```\w*\n?|\n?```$/g, '').trim();
+    const canonicalMeta: Block2BQuestionMeta[] = [
+      { workIndex: 2, slot: 'motif' },
+      { workIndex: 2, slot: 'personnages' },
+      { workIndex: 1, slot: 'motif' },
+      { workIndex: 1, slot: 'personnages' },
+      { workIndex: 0, slot: 'motif' },
+      { workIndex: 0, slot: 'personnages' },
+    ];
     const workOrder: Record<number, number> = { 2: 0, 1: 1, 0: 2 };
     const slotOrder: Record<string, number> = { motif: 0, personnages: 1 };
-    try {
-      const parsed = JSON.parse(raw) as Array<{ slot?: string; workIndex?: number; text?: string }>;
-      if (Array.isArray(parsed) && parsed.length >= 6) {
+
+    const systemPrompt = `BLOC 2B — Génère UNIQUEMENT 6 questions (motif + personnages).
+Œuvres (écris les titres SANS crochets dans les questions) : #1 ${w0}, #2 ${w1}, #3 ${w2}. Œuvre noyau : ${coreWork}
+
+RÈGLE : Dans le texte des questions, écris toujours le titre de l'œuvre SANS crochets (ex: "dans ${w0}" pas "dans [${w0}]").
+PERSONNALISATION OBLIGATOIRE : Les 5 options A à E des questions motif doivent être SPÉCIFIQUES à chaque œuvre (thème, univers, intrigue selon la série/film). Interdit de mettre les mêmes 5 options pour les 3 œuvres. Chaque question personnages doit citer explicitement le titre (ex: "Dans ${w0}, quels sont...").
+
+Réponds UNIQUEMENT par le tableau JSON. Aucun texte avant ou après. Aucun markdown.
+Format exact : un tableau de 6 objets avec "slot" ("motif" ou "personnages"), "workIndex" (0, 1 ou 2), "text" (question complète ; motif = question + 5 options A à E).
+Ordre : motif #1, personnages #1, motif #2, personnages #2, motif #3, personnages #3.`;
+
+    const messages = buildConversationHistoryForBlock2B(candidate);
+    let completion = await callOpenAI({
+      messages: [
+        { role: 'system', content: getFullAxiomPrompt() },
+        { role: 'system', content: systemPrompt },
+        ...messages,
+      ],
+      temperature: 0.35,
+    });
+    let raw = completion.replace(/^```\w*\n?|\n?```$/g, '').trim();
+    raw = this.extractFirstJsonArray(raw);
+
+    const tryParse = (): { questions: string[]; meta: Block2BQuestionMeta[] } | null => {
+      try {
+        const parsed = JSON.parse(raw) as Array<{ slot?: string; workIndex?: number; text?: string }>;
+        if (!Array.isArray(parsed) || parsed.length < 6) return null;
         const items = parsed.slice(0, 6).map((item) => ({
           workIndex: typeof item.workIndex === 'number' && item.workIndex >= 0 && item.workIndex <= 2 ? item.workIndex : 0,
           slot: item.slot === 'personnages' ? 'personnages' as const : 'motif' as const,
@@ -1300,54 +1322,89 @@ Chaque "text" doit être la question complète (motif = question + 5 options A �
         });
         const questions = items.map((i) => i.text).filter((t) => t.length > 0);
         const meta: Block2BQuestionMeta[] = items.map((i) => ({ workIndex: i.workIndex, slot: i.slot }));
-        if (questions.length >= 6 && meta.length >= 6) {
-          const q6 = questions.slice(0, 6);
-          const m6 = meta.slice(0, 6);
-          const canonicalMeta: Block2BQuestionMeta[] = [
-            { workIndex: 2, slot: 'motif' },
-            { workIndex: 2, slot: 'personnages' },
-            { workIndex: 1, slot: 'motif' },
-            { workIndex: 1, slot: 'personnages' },
-            { workIndex: 0, slot: 'motif' },
-            { workIndex: 0, slot: 'personnages' },
-          ];
-          const questionsSansCrochets = this.stripWorkBracketsFromQuestions(q6, works);
-          let finalQuestions = questionsSansCrochets;
-          let finalMeta = m6[0]?.slot === 'motif' ? m6 : canonicalMeta;
-          if (finalMeta[0]?.slot !== 'motif') {
-            finalMeta = [...canonicalMeta];
-            finalQuestions = this.rebuildQuestionsCanonical(finalQuestions, finalMeta, works);
-          }
-          const firstQ = finalQuestions[0] || '';
-          if (!this.hasMotifAE(firstQ)) {
-            finalQuestions[0] = this.ensureMotifAEFormat(firstQ, works[finalMeta[0]?.workIndex ?? 0]);
-          }
-          return { questions: finalQuestions, meta: finalMeta };
+        if (questions.length < 6 || meta.length < 6) return null;
+        const q6 = questions.slice(0, 6);
+        const m6 = meta.slice(0, 6);
+        const questionsSansCrochets = this.stripWorkBracketsFromQuestions(q6, works);
+        let finalQuestions = questionsSansCrochets;
+        let finalMeta = m6[0]?.slot === 'motif' ? m6 : canonicalMeta;
+        if (finalMeta[0]?.slot !== 'motif') {
+          finalMeta = [...canonicalMeta];
+          finalQuestions = this.rebuildQuestionsCanonical(finalQuestions, finalMeta, works);
         }
+        const firstQ = finalQuestions[0] || '';
+        if (!this.hasMotifAE(firstQ)) {
+          finalQuestions[0] = this.ensureMotifAEFormat(firstQ, works[finalMeta[0]?.workIndex ?? 0]);
+        }
+        return { questions: finalQuestions, meta: finalMeta };
+      } catch {
+        return null;
       }
-    } catch {
-      /* fallback ci-dessous */
-    }
-    console.warn('[ORCHESTRATOR] BLOC 2B premium: fallback après échec parse JSON (ordre déduit du texte)');
-    const fallback = completion
-      .split('---QUESTION_SEPARATOR---')
-      .map((q) => q.trim())
-      .filter((q) => q.length > 0)
-      .slice(0, 6);
-    const canonicalMeta: Block2BQuestionMeta[] = [
-      { workIndex: 2, slot: 'motif' },
-      { workIndex: 2, slot: 'personnages' },
-      { workIndex: 1, slot: 'motif' },
-      { workIndex: 1, slot: 'personnages' },
-      { workIndex: 0, slot: 'motif' },
-      { workIndex: 0, slot: 'personnages' },
+    };
+
+    let result = tryParse();
+    if (result) return result;
+
+    // Retry unique avec prompt simplifié + température 0.2
+    console.warn('[ORCHESTRATOR] BLOC 2B premium: retry JSON après échec parse');
+    const retryPrompt = `Réponds UNIQUEMENT par un tableau JSON de 6 objets. Chaque objet : {"slot":"motif" ou "personnages","workIndex":0|1|2,"text":"question complète"}.
+Œuvres : 1=${w0}, 2=${w1}, 3=${w2}. Ordre : motif1, personnages1, motif2, personnages2, motif3, personnages3. Aucun texte avant ou après le tableau.`;
+    completion = await callOpenAI({
+      messages: [
+        { role: 'system', content: getFullAxiomPrompt() },
+        { role: 'system', content: retryPrompt },
+        ...messages,
+      ],
+      temperature: 0.2,
+    });
+    raw = completion.replace(/^```\w*\n?|\n?```$/g, '').trim();
+    raw = this.extractFirstJsonArray(raw);
+    result = tryParse();
+    if (result) return result;
+
+    // Fallback : 3 questions motif personnalisées (LLM une par œuvre) + 3 personnages avec titre
+    console.warn('[ORCHESTRATOR] BLOC 2B premium: fallback personnalisé (motif LLM + personnages titre)');
+    const motifQuestions = await Promise.all([
+      this.generateOneMotifQuestionForWork(works[2] ?? w2),
+      this.generateOneMotifQuestionForWork(works[1] ?? w1),
+      this.generateOneMotifQuestionForWork(works[0] ?? w0),
+    ]);
+    const persoQuestions = [
+      `Dans « ${works[2] ?? w2} », quels sont les 1 à 3 personnages qui te parlent le plus ?`,
+      `Dans « ${works[1] ?? w1} », quels sont les 1 à 3 personnages qui te parlent le plus ?`,
+      `Dans « ${works[0] ?? w0} », quels sont les 1 à 3 personnages qui te parlent le plus ?`,
     ];
-    const questionsSansCrochets = this.stripWorkBracketsFromQuestions(fallback, works);
-    const rebuilt = this.rebuildQuestionsCanonical(questionsSansCrochets, canonicalMeta, works);
-    const meta = canonicalMeta.slice(0, rebuilt.length);
-    const firstQ = rebuilt[0] || '';
-    if (!this.hasMotifAE(firstQ)) rebuilt[0] = this.ensureMotifAEFormat(firstQ, works[2] ?? '');
-    return { questions: rebuilt, meta };
+    const fallbackQuestions = [
+      motifQuestions[0],
+      persoQuestions[0],
+      motifQuestions[1],
+      persoQuestions[1],
+      motifQuestions[2],
+      persoQuestions[2],
+    ];
+    return { questions: this.stripWorkBracketsFromQuestions(fallbackQuestions, works), meta: canonicalMeta };
+  }
+
+  /** Génère une seule question motif (avec 5 options A–E) personnalisée pour une œuvre. */
+  private async generateOneMotifQuestionForWork(work: string): Promise<string> {
+    const title = work || 'N/A';
+    try {
+      const completion = await callOpenAI({
+        messages: [
+          {
+            role: 'system',
+            content: `Tu génères UNE question pour le bloc 2B : "Qu'est-ce qui t'attire le PLUS dans « ${title} » ?" avec exactement 5 options A, B, C, D, E spécifiques à cette œuvre (thème, personnages, univers, intrigue, émotion). Réponds UNIQUEMENT par la question suivie des 5 lignes A. ... B. ... C. ... D. ... E. ... Sans préambule.`,
+          },
+          { role: 'user', content: `Œuvre : ${title}.` },
+        ],
+        temperature: 0.35,
+      });
+      const text = completion.trim();
+      if (this.hasMotifAE(text)) return text;
+    } catch {
+      /* ignore */
+    }
+    return this.ensureMotifAEFormat('', title);
   }
 
   /** Enlève les crochets autour des titres d'œuvre dans le texte des questions (ex: [Suits] → Suits). */
@@ -1400,28 +1457,46 @@ Chaque "text" doit être la question complète (motif = question + 5 options A �
 
   /** BLOC 2B PREMIUM — Génère une question traits + 5 options pour un personnage (nom canonique déjà connu). */
   private async generateTraitsForCharacterLLM(work: string, character: string, _context?: string): Promise<{ question: string; options: string[] }> {
-    const completion = await callOpenAI({
+    const defaultQuestion = `Qu'est-ce que tu apprécies le PLUS chez ${character} dans « ${work} » ?\n\nA. Sa présence\nB. Son rôle\nC. Ses choix\nD. Son impact\nE. Son parcours`;
+    const defaultOpts = ['Sa présence', 'Son rôle', 'Ses choix', 'Son impact', 'Son parcours'];
+    const parseResponse = (raw: string): { question: string; options: string[] } | null => {
+      try {
+        const cleaned = raw.replace(/^```\w*\n?|\n?```$/g, '').trim();
+        const start = cleaned.indexOf('{');
+        if (start === -1) return null;
+        const end = cleaned.lastIndexOf('}');
+        if (end < start) return null;
+        const parsed = JSON.parse(cleaned.slice(start, end + 1)) as { question?: string; options?: string[] };
+        const q = typeof parsed.question === 'string' ? parsed.question : `Qu'est-ce que tu apprécies le PLUS chez ${character} dans « ${work} » ?`;
+        const opts = Array.isArray(parsed.options) && parsed.options.length >= 5 ? parsed.options.slice(0, 5) : defaultOpts;
+        const lines = opts.map((o, i) => `${String.fromCharCode(65 + i)}. ${o}`);
+        return { question: `${q}\n\n${lines.join('\n')}`, options: opts };
+      } catch {
+        return null;
+      }
+    };
+    let completion = await callOpenAI({
       messages: [
         {
           role: 'system',
-          content: `Tu génères une question de type "traits" pour un personnage d'une œuvre. Réponds UNIQUEMENT en JSON valide : {"question":"Qu'est-ce que tu apprécies le PLUS chez ${character} ?","options":["option A","option B","option C","option D","option E"]}
-Les 5 options doivent être spécifiques à ${character} dans ${work}, pas génériques. Pas de placeholder.`,
+          content: `Tu génères une question de type "traits" pour un personnage d'une œuvre. La question doit mentionner explicitement l'œuvre et le personnage (ex: "chez ${character} dans « ${work} »"). Réponds UNIQUEMENT en JSON : {"question":"...","options":["A","B","C","D","E"]}. Les 5 options doivent être spécifiques à ${character} dans ${work}. Pas de markdown.`,
         },
         { role: 'user', content: `Œuvre : ${work}. Personnage : ${character}.` },
       ],
+      temperature: 0.4,
     });
-    try {
-      const parsed = JSON.parse(completion.replace(/^```\w*\n?|\n?```$/g, '').trim()) as { question?: string; options?: string[] };
-      const q = typeof parsed.question === 'string' ? parsed.question : `Qu'est-ce que tu apprécies le PLUS chez ${character} ?`;
-      const opts = Array.isArray(parsed.options) && parsed.options.length >= 5 ? parsed.options.slice(0, 5) : ['Sa présence', 'Son rôle', 'Ses choix', 'Son impact', 'Son parcours'];
-      const lines = opts.map((o, i) => `${String.fromCharCode(65 + i)}. ${o}`);
-      return { question: `${q}\n\n${lines.join('\n')}`, options: opts };
-    } catch {
-      return {
-        question: `Qu'est-ce que tu apprécies le PLUS chez ${character} ?\n\nA. Sa présence\nB. Son rôle\nC. Ses choix\nD. Son impact\nE. Son parcours`,
-        options: ['Sa présence', 'Son rôle', 'Ses choix', 'Son impact', 'Son parcours'],
-      };
-    }
+    let out = parseResponse(completion);
+    if (out) return out;
+    completion = await callOpenAI({
+      messages: [
+        { role: 'system', content: `Réponds UNIQUEMENT en JSON : {"question":"Qu'est-ce que tu apprécies chez ${character} dans ${work} ?","options":["opt1","opt2","opt3","opt4","opt5"]}. 5 options spécifiques au personnage.` },
+        { role: 'user', content: `Œuvre : ${work}. Personnage : ${character}.` },
+      ],
+      temperature: 0.2,
+    });
+    out = parseResponse(completion);
+    if (out) return out;
+    return { question: defaultQuestion, options: defaultOpts };
   }
 
   /**
