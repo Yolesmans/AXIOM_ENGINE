@@ -3,7 +3,14 @@ import type { AxiomState } from '../types/session.js';
 import type { AnswerRecord } from '../types/answer.js';
 import type { MatchingResult } from '../types/matching.js';
 import type { ConversationMessage, ConversationMessageKind } from '../types/conversation.js';
-import type { QuestionQueue, AnswerMap, Block2BQuestionMeta } from '../types/blocks.js';
+import type {
+  QuestionQueue,
+  AnswerMap,
+  Block2BQuestionMeta,
+  BlockStates,
+  Block2AAnswers,
+  Block2BAnswers,
+} from '../types/blocks.js';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -58,6 +65,12 @@ class CandidateStore {
     filePersistTimer = setTimeout(() => {
       this.saveToFile();
     }, 200);
+  }
+
+  /** Persistance garantie avant retour API (Redis + file immédiat). À appeler après toute modification blockStates / block2Answers. */
+  async persistAndFlush(candidateId: string): Promise<void> {
+    await this.persistCandidate(candidateId);
+    this.saveToFile();
   }
 
   private saveToFile(): void {
@@ -667,6 +680,180 @@ class CandidateStore {
 
     this.candidates.set(candidateId, updated);
     this.persistCandidate(candidateId);
+  }
+
+  // ========== BLOC 2 — STATE MACHINE & RÉPONSES SÉPARÉES ==========
+
+  private ensureBlock2State(candidate: AxiomCandidate): BlockStates {
+    const existing = candidate.session.blockStates;
+    if (existing?.['2A'] && existing?.['2B']) return existing;
+    return {
+      '2A': { status: 'NOT_STARTED' },
+      '2B': { status: 'NOT_STARTED', currentQuestionIndex: 0 },
+    };
+  }
+
+  /** Initialise blockStates pour le bloc 2 si absent ; met 2A IN_PROGRESS si encore NOT_STARTED. Retourne le candidat mis à jour. */
+  async ensureBlock2AndStart2AIfNeeded(candidateId: string): Promise<AxiomCandidate | undefined> {
+    const candidate = this.candidates.get(candidateId);
+    if (!candidate) return undefined;
+    const blockStates = this.ensureBlock2State(candidate);
+    const next2A = blockStates['2A'].status === 'NOT_STARTED'
+      ? { ...blockStates['2A'], status: 'IN_PROGRESS' as const }
+      : blockStates['2A'];
+    const updated: AxiomCandidate = {
+      ...candidate,
+      session: {
+        ...candidate.session,
+        blockStates: { ...blockStates, '2A': next2A },
+        lastActivityAt: new Date(),
+      },
+      block2Answers: candidate.block2Answers ?? { block2A: {}, block2B: { answers: [] } },
+    };
+    this.candidates.set(candidateId, updated);
+    await this.persistAndFlush(candidateId);
+    return updated;
+  }
+
+  getBlock2AAnswers(candidate: AxiomCandidate): Block2AAnswers | undefined {
+    return candidate.block2Answers?.block2A;
+  }
+
+  getBlock2BAnswers(candidate: AxiomCandidate): Block2BAnswers | undefined {
+    return candidate.block2Answers?.block2B;
+  }
+
+  async setBlock2AMedium(candidateId: string, value: string): Promise<AxiomCandidate | undefined> {
+    const candidate = this.candidates.get(candidateId);
+    if (!candidate) return undefined;
+    const block2A = { ...(candidate.block2Answers?.block2A ?? {}), medium: value };
+    const updated: AxiomCandidate = {
+      ...candidate,
+      block2Answers: {
+        ...(candidate.block2Answers ?? {}),
+        block2A,
+        block2B: candidate.block2Answers?.block2B ?? { answers: [] },
+      },
+      session: { ...candidate.session, lastActivityAt: new Date() },
+    };
+    this.candidates.set(candidateId, updated);
+    await this.persistAndFlush(candidateId);
+    return updated;
+  }
+
+  async setBlock2APreference(candidateId: string, value: string): Promise<AxiomCandidate | undefined> {
+    const candidate = this.candidates.get(candidateId);
+    if (!candidate) return undefined;
+    const block2A = { ...(candidate.block2Answers?.block2A ?? {}), preference: value };
+    const updated: AxiomCandidate = {
+      ...candidate,
+      block2Answers: {
+        ...(candidate.block2Answers ?? {}),
+        block2A,
+        block2B: candidate.block2Answers?.block2B ?? { answers: [] },
+      },
+      session: { ...candidate.session, lastActivityAt: new Date() },
+    };
+    this.candidates.set(candidateId, updated);
+    await this.persistAndFlush(candidateId);
+    return updated;
+  }
+
+  async setBlock2ACoreWork(candidateId: string, value: string): Promise<AxiomCandidate | undefined> {
+    const candidate = this.candidates.get(candidateId);
+    if (!candidate) return undefined;
+    const block2A = { ...(candidate.block2Answers?.block2A ?? {}), coreWork: value };
+    const updated: AxiomCandidate = {
+      ...candidate,
+      block2Answers: {
+        ...(candidate.block2Answers ?? {}),
+        block2A,
+        block2B: candidate.block2Answers?.block2B ?? { answers: [] },
+      },
+      session: { ...candidate.session, lastActivityAt: new Date() },
+    };
+    this.candidates.set(candidateId, updated);
+    await this.persistAndFlush(candidateId);
+    return updated;
+  }
+
+  /** 2A COMPLETED, 2B IN_PROGRESS, currentQuestionIndex = 0. À appeler une seule fois après stockage coreWork. */
+  async setBlock2ACompletedAndStart2B(candidateId: string): Promise<AxiomCandidate | undefined> {
+    const candidate = this.candidates.get(candidateId);
+    if (!candidate) return undefined;
+    const blockStates = this.ensureBlock2State(candidate);
+    const updated: AxiomCandidate = {
+      ...candidate,
+      session: {
+        ...candidate.session,
+        blockStates: {
+          '2A': { status: 'COMPLETED' },
+          '2B': { status: 'IN_PROGRESS', currentQuestionIndex: 0 },
+        },
+        lastActivityAt: new Date(),
+      },
+    };
+    this.candidates.set(candidateId, updated);
+    await this.persistAndFlush(candidateId);
+    return updated;
+  }
+
+  async appendBlock2BAnswer(candidateId: string, answer: string): Promise<AxiomCandidate | undefined> {
+    const candidate = this.candidates.get(candidateId);
+    if (!candidate) return undefined;
+    const prev = candidate.block2Answers?.block2B?.answers ?? [];
+    const updated: AxiomCandidate = {
+      ...candidate,
+      block2Answers: {
+        ...(candidate.block2Answers ?? {}),
+        block2A: candidate.block2Answers?.block2A,
+        block2B: { answers: [...prev, answer] },
+      },
+      session: { ...candidate.session, lastActivityAt: new Date() },
+    };
+    this.candidates.set(candidateId, updated);
+    await this.persistAndFlush(candidateId);
+    return updated;
+  }
+
+  async setBlock2BCurrentQuestionIndex(candidateId: string, index: number): Promise<AxiomCandidate | undefined> {
+    const candidate = this.candidates.get(candidateId);
+    if (!candidate) return undefined;
+    const blockStates = this.ensureBlock2State(candidate);
+    const updated: AxiomCandidate = {
+      ...candidate,
+      session: {
+        ...candidate.session,
+        blockStates: {
+          ...blockStates,
+          '2B': { ...blockStates['2B'], status: 'IN_PROGRESS', currentQuestionIndex: index },
+        },
+        lastActivityAt: new Date(),
+      },
+    };
+    this.candidates.set(candidateId, updated);
+    await this.persistAndFlush(candidateId);
+    return updated;
+  }
+
+  async setBlock2BCompleted(candidateId: string): Promise<AxiomCandidate | undefined> {
+    const candidate = this.candidates.get(candidateId);
+    if (!candidate) return undefined;
+    const blockStates = this.ensureBlock2State(candidate);
+    const updated: AxiomCandidate = {
+      ...candidate,
+      session: {
+        ...candidate.session,
+        blockStates: {
+          ...blockStates,
+          '2B': { ...blockStates['2B'], status: 'COMPLETED' },
+        },
+        lastActivityAt: new Date(),
+      },
+    };
+    this.candidates.set(candidateId, updated);
+    await this.persistAndFlush(candidateId);
+    return updated;
   }
 
   storeAnswerForBlock(

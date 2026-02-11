@@ -1,7 +1,7 @@
 import type { AxiomState } from './session.js';
 import type { AnswerRecord } from './answer.js';
 import type { ConversationMessage } from './conversation.js';
-import type { QuestionQueue, AnswerMap } from './blocks.js';
+import type { QuestionQueue, AnswerMap, BlockStates, Block2Answers } from './blocks.js';
 
 export interface CandidateIdentity {
   firstName: string;
@@ -29,6 +29,8 @@ export interface CandidateSession {
   startedAt: Date;
   lastActivityAt: Date;
   completedAt?: Date;
+  /** BLOC 2 — machine d'état stricte (plus de answeredCount) */
+  blockStates?: BlockStates;
   /** BLOC 2A/2B premium : œuvres normalisées (source de vérité pour 2B) */
   normalizedWorks?: NormalizedWork[];
   /** BLOC 2B premium : personnages normalisés par œuvre (index = workIndex) */
@@ -60,4 +62,6 @@ export interface AxiomCandidate {
   tonePreference?: 'tutoiement' | 'vouvoiement';
   blockQueues?: Record<number, QuestionQueue>;
   answerMaps?: Record<number, AnswerMap>;
+  /** BLOC 2 — réponses séparées 2A / 2B (aucun index partagé) */
+  block2Answers?: Block2Answers;
 }

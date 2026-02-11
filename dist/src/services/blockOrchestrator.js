@@ -67,13 +67,11 @@ function buildConversationHistory(candidate) {
  */
 function buildConversationHistoryForBlock2B(candidate) {
     const messages = [];
-    // TOUJOURS inclure les réponses BLOC 2A dans le contexte (INJECTION FORCÉE)
-    const answerMap = candidate.answerMaps?.[2];
-    if (answerMap && answerMap.answers) {
-        const answers = answerMap.answers;
-        const mediumAnswer = answers[0] || 'N/A';
-        const preferencesAnswer = answers[1] || 'N/A';
-        const coreWorkAnswer = answers[2] || 'N/A';
+    const block2A = candidate.block2Answers?.block2A;
+    if (block2A?.medium != null || block2A?.preference != null || block2A?.coreWork != null) {
+        const mediumAnswer = block2A.medium ?? 'N/A';
+        const preferencesAnswer = block2A.preference ?? 'N/A';
+        const coreWorkAnswer = block2A.coreWork ?? 'N/A';
         messages.push({
             role: 'system',
             content: `CONTEXTE BLOC 2A (OBLIGATOIRE — INJECTION FORCÉE) :
@@ -84,14 +82,10 @@ Préférences (3 œuvres) : ${preferencesAnswer}
 Ces informations sont CRITIQUES pour personnaliser les questions BLOC 2B.
 Chaque question doit être spécifique à ces œuvres.`
         });
-        console.log('[ORCHESTRATOR] BLOC 2A context injected:', {
-            medium: mediumAnswer,
-            preferences: preferencesAnswer,
-            coreWork: coreWorkAnswer
-        });
+        console.log('[ORCHESTRATOR] BLOC 2A context injected:', { medium: mediumAnswer, preferences: preferencesAnswer, coreWork: coreWorkAnswer });
     }
     else {
-        console.warn('[ORCHESTRATOR] BLOC 2A answers not found in AnswerMap. BLOC 2B cannot be personalized.');
+        console.warn('[ORCHESTRATOR] BLOC 2A answers not found (block2A). BLOC 2B cannot be personalized.');
     }
     // Historique conversationnel standard
     if (candidate.conversationHistory && candidate.conversationHistory.length > 0) {
@@ -145,18 +139,19 @@ export class BlockOrchestrator {
         // Déterminer le bloc en cours
         const currentBlock = candidate.session.currentBlock || 1;
         const currentStep = candidate.session.ui?.step || '';
-        // Détecter BLOC 2A (première partie du BLOC 2)
+        // BLOC 2 — routage strict par state machine (aucun answeredCount)
         if (currentBlock === 2 && (currentStep === BLOC_02 || currentStep === '')) {
-            // Vérifier si BLOC 2A est terminé (3 réponses stockées)
-            const answerMap = candidate.answerMaps?.[2];
-            const answers = answerMap?.answers || {};
-            const answeredCount = Object.keys(answers).length;
-            // Si BLOC 2A terminé (3 réponses) → passer à BLOC 2B
-            if (answeredCount >= 3) {
+            const blockStates = candidate.session.blockStates ?? {
+                '2A': { status: 'NOT_STARTED' },
+                '2B': { status: 'NOT_STARTED', currentQuestionIndex: 0 },
+            };
+            if (blockStates['2B'].status === 'IN_PROGRESS') {
                 return this.handleBlock2B(candidate, userMessage, event, onChunk, onUx);
             }
-            // Sinon → continuer BLOC 2A
-            return this.handleBlock2A(candidate, userMessage, event, onChunk, onUx);
+            if (blockStates['2A'].status === 'IN_PROGRESS' || blockStates['2A'].status === 'NOT_STARTED') {
+                return this.handleBlock2A(candidate, userMessage, event, onChunk, onUx);
+            }
+            return this.handleBlock2B(candidate, userMessage, event, onChunk, onUx);
         }
         // BLOC 1 (logique existante)
         const blockNumber = 1;
@@ -485,156 +480,90 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
     async handleBlock2A(candidate, userMessage, event, onChunk, onUx) {
         const blockNumber = 2;
         const candidateId = candidate.candidateId;
-        // Recharger candidate pour avoir l'état à jour
-        let currentCandidate = candidateStore.get(candidateId);
-        if (!currentCandidate) {
-            currentCandidate = await candidateStore.getAsync(candidateId);
-        }
-        if (!currentCandidate) {
+        let currentCandidate = candidateStore.get(candidateId) ?? await candidateStore.getAsync(candidateId);
+        if (!currentCandidate)
             throw new Error(`Candidate ${candidateId} not found`);
-        }
-        // Récupérer les réponses existantes du BLOC 2A
-        const answerMap = currentCandidate.answerMaps?.[blockNumber];
-        const answers = answerMap?.answers || {};
-        const answeredCount = Object.keys(answers).length;
-        // Cas 1 : Aucune réponse encore → Question 2A.1 statique (0 token, pas d'API)
-        if (answeredCount === 0 && !userMessage) {
-            const question = STATIC_QUESTION_2A1;
-            console.log('[ORCHESTRATOR] question 2A.1 - Médium (statique, no API)');
-            // Enregistrer la question dans conversationHistory
-            candidateStore.appendAssistantMessage(candidateId, question, {
-                block: blockNumber,
-                step: BLOC_02,
-                kind: 'question',
-            });
-            // Mettre à jour UI state
-            candidateStore.updateUIState(candidateId, {
-                step: BLOC_02,
-                lastQuestion: question,
-                identityDone: true,
-            });
-            return {
-                response: normalizeSingleResponse(question),
-                step: BLOC_02,
-                expectsAnswer: true,
-                autoContinue: false,
-            };
-        }
-        // Cas 2 : Réponse utilisateur reçue
-        if (userMessage) {
-            const questionIndex = answeredCount; // Index de la question qui vient d'être posée
-            // Réponse à la question 2A.1 : normalisation tolérante (A/B/Série/Film et variantes)
-            if (questionIndex === 0) {
-                const canonical = normalize2A1Response(userMessage);
-                if (canonical === null) {
-                    // Réponse non reconnue → redemander 2A.1 sans stocker (évite boucle sur réponse invalide)
-                    return {
-                        response: normalizeSingleResponse(STATIC_QUESTION_2A1),
-                        step: BLOC_02,
-                        expectsAnswer: true,
-                        autoContinue: false,
-                    };
-                }
-                const valueToStore = canonical === 'SERIE' ? 'Série' : 'Film';
-                candidateStore.storeAnswerForBlock(candidateId, blockNumber, questionIndex, valueToStore);
+        const block2A = candidateStore.getBlock2AAnswers(currentCandidate);
+        const hasMedium = block2A?.medium != null && block2A.medium !== '';
+        const hasPreference = block2A?.preference != null && block2A.preference !== '';
+        const hasCoreWork = block2A?.coreWork != null && block2A.coreWork !== '';
+        if (!userMessage) {
+            if (!hasMedium) {
+                currentCandidate = await candidateStore.ensureBlock2AndStart2AIfNeeded(candidateId);
+                if (!currentCandidate)
+                    throw new Error(`Candidate ${candidateId} not found`);
+                candidateStore.appendAssistantMessage(candidateId, STATIC_QUESTION_2A1, { block: blockNumber, step: BLOC_02, kind: 'question' });
+                candidateStore.updateUIState(candidateId, { step: BLOC_02, lastQuestion: STATIC_QUESTION_2A1, identityDone: true });
+                return { response: normalizeSingleResponse(STATIC_QUESTION_2A1), step: BLOC_02, expectsAnswer: true, autoContinue: false };
             }
-            else {
-                candidateStore.storeAnswerForBlock(candidateId, blockNumber, questionIndex, userMessage);
-            }
-            // Recharger candidate après stockage
-            currentCandidate = candidateStore.get(candidateId);
-            if (!currentCandidate) {
-                currentCandidate = await candidateStore.getAsync(candidateId);
-            }
-            if (!currentCandidate) {
-                throw new Error(`Candidate ${candidateId} not found after storing answer`);
-            }
-            const updatedAnswerMap = currentCandidate.answerMaps?.[blockNumber];
-            const updatedAnswers = updatedAnswerMap?.answers || {};
-            const updatedAnsweredCount = Object.keys(updatedAnswers).length;
-            // Log de corrélation (diagnostic désync front/back) — après storeAnswer 2A.1
-            if (updatedAnsweredCount === 1 && blockNumber === 2) {
-                console.log('[DEBUG] block=2A answeredCount=1 next=2A.2');
-            }
-            // Si 1 réponse → Générer question 2A.2 (adaptée)
-            if (updatedAnsweredCount === 1) {
-                console.log('[ORCHESTRATOR] generate question 2A.2 - Préférences adaptées (API)');
-                const mediumAnswer = updatedAnswers[0] || '';
+            if (!hasPreference) {
+                const mediumAnswer = block2A.medium;
                 const question = await this.generateQuestion2A2(currentCandidate, mediumAnswer);
-                candidateStore.appendAssistantMessage(candidateId, question, {
-                    block: blockNumber,
-                    step: BLOC_02,
-                    kind: 'question',
-                });
-                candidateStore.updateUIState(candidateId, {
-                    step: BLOC_02,
-                    lastQuestion: question,
-                    identityDone: true,
-                });
-                return {
-                    response: normalizeSingleResponse(question),
-                    step: BLOC_02,
-                    expectsAnswer: true,
-                    autoContinue: false,
-                };
+                candidateStore.appendAssistantMessage(candidateId, question, { block: blockNumber, step: BLOC_02, kind: 'question' });
+                candidateStore.updateUIState(candidateId, { step: BLOC_02, lastQuestion: question, identityDone: true });
+                return { response: normalizeSingleResponse(question), step: BLOC_02, expectsAnswer: true, autoContinue: false };
             }
-            // Si 2 réponses → Normalisation LLM des œuvres (PREMIUM) puis question 2A.3 (Œuvre noyau)
-            if (updatedAnsweredCount === 2) {
-                const preferencesAnswer = updatedAnswers[1] || '';
-                const normResult = await this.normalizeWorksLLM(preferencesAnswer);
-                if (normResult.needsClarification && normResult.message) {
-                    return {
-                        response: normalizeSingleResponse(normResult.message),
-                        step: BLOC_02,
-                        expectsAnswer: true,
-                        autoContinue: false,
-                    };
-                }
-                if (normResult.works && normResult.works.length >= 1) {
-                    candidateStore.setNormalizedWorks(candidateId, normResult.works);
-                }
-                console.log('[ORCHESTRATOR] generate question 2A.3 - Œuvre noyau (API)');
-                const question = await this.generateQuestion2A3(currentCandidate, updatedAnswers);
-                candidateStore.appendAssistantMessage(candidateId, question, {
-                    block: blockNumber,
-                    step: BLOC_02,
-                    kind: 'question',
-                });
-                candidateStore.updateUIState(candidateId, {
-                    step: BLOC_02,
-                    lastQuestion: question,
-                    identityDone: true,
-                });
-                return {
-                    response: normalizeSingleResponse(question),
-                    step: BLOC_02,
-                    expectsAnswer: true,
-                    autoContinue: false,
-                };
+            if (!hasCoreWork) {
+                currentCandidate = candidateStore.get(candidateId) ?? await candidateStore.getAsync(candidateId);
+                const answersFor2A3 = { 0: block2A.medium, 1: block2A.preference };
+                const question = await this.generateQuestion2A3(currentCandidate, answersFor2A3);
+                candidateStore.appendAssistantMessage(candidateId, question, { block: blockNumber, step: BLOC_02, kind: 'question' });
+                candidateStore.updateUIState(candidateId, { step: BLOC_02, lastQuestion: question, identityDone: true });
+                return { response: normalizeSingleResponse(question), step: BLOC_02, expectsAnswer: true, autoContinue: false };
             }
-            // ÉTAPE 1 — Transition automatique BLOC 2A → BLOC 2B (après 3 réponses) : une seule réponse = transition + 1ère question 2B
-            if (updatedAnsweredCount === 3) {
-                console.log('[ORCHESTRATOR] BLOC 2A terminé → transition + première question 2B en une réponse');
-                const result = await this.handleBlock2B(currentCandidate, null, null, onChunk, onUx);
-                const transitionText = "🧠 FIN DU BLOC 2A — PROJECTIONS NARRATIVES\n\nLes préférences sont collectées.\nAucune analyse n'a été produite.\n\nOn passe maintenant au BLOC 2B — Analyse projective des œuvres retenues.\n\n";
-                return {
-                    ...result,
-                    response: normalizeSingleResponse(transitionText + (result.response || '')),
-                };
-            }
+            const lastQuestion = currentCandidate.session.ui?.lastQuestion;
+            if (lastQuestion)
+                return { response: normalizeSingleResponse(lastQuestion), step: BLOC_02, expectsAnswer: true, autoContinue: false };
+            return { response: normalizeSingleResponse(STATIC_QUESTION_2A1), step: BLOC_02, expectsAnswer: true, autoContinue: false };
         }
-        // Cas 3 : Pas de message utilisateur → Retourner la dernière question si disponible
+        if (!hasMedium) {
+            const canonical = normalize2A1Response(userMessage);
+            if (canonical === null) {
+                return { response: normalizeSingleResponse(STATIC_QUESTION_2A1), step: BLOC_02, expectsAnswer: true, autoContinue: false };
+            }
+            const valueToStore = canonical === 'SERIE' ? 'Série' : 'Film';
+            currentCandidate = await candidateStore.setBlock2AMedium(candidateId, valueToStore);
+            if (!currentCandidate)
+                throw new Error(`Candidate ${candidateId} not found`);
+            const question = await this.generateQuestion2A2(currentCandidate, valueToStore);
+            candidateStore.appendAssistantMessage(candidateId, question, { block: blockNumber, step: BLOC_02, kind: 'question' });
+            candidateStore.updateUIState(candidateId, { step: BLOC_02, lastQuestion: question, identityDone: true });
+            return { response: normalizeSingleResponse(question), step: BLOC_02, expectsAnswer: true, autoContinue: false };
+        }
+        if (!hasPreference) {
+            const normResult = await this.normalizeWorksLLM(userMessage);
+            if (normResult.needsClarification && normResult.message) {
+                return { response: normalizeSingleResponse(normResult.message), step: BLOC_02, expectsAnswer: true, autoContinue: false };
+            }
+            if (normResult.works && normResult.works.length >= 1) {
+                candidateStore.setNormalizedWorks(candidateId, normResult.works);
+            }
+            currentCandidate = await candidateStore.setBlock2APreference(candidateId, userMessage);
+            if (!currentCandidate)
+                throw new Error(`Candidate ${candidateId} not found`);
+            const block2AAfter = candidateStore.getBlock2AAnswers(currentCandidate);
+            const answersFor2A3 = { 0: block2AAfter.medium, 1: block2AAfter.preference };
+            const question = await this.generateQuestion2A3(currentCandidate, answersFor2A3);
+            candidateStore.appendAssistantMessage(candidateId, question, { block: blockNumber, step: BLOC_02, kind: 'question' });
+            candidateStore.updateUIState(candidateId, { step: BLOC_02, lastQuestion: question, identityDone: true });
+            return { response: normalizeSingleResponse(question), step: BLOC_02, expectsAnswer: true, autoContinue: false };
+        }
+        if (!hasCoreWork) {
+            currentCandidate = await candidateStore.setBlock2ACoreWork(candidateId, userMessage);
+            if (!currentCandidate)
+                throw new Error(`Candidate ${candidateId} not found`);
+            await candidateStore.setBlock2ACompletedAndStart2B(candidateId);
+            currentCandidate = candidateStore.get(candidateId) ?? await candidateStore.getAsync(candidateId);
+            if (!currentCandidate)
+                throw new Error(`Candidate ${candidateId} not found`);
+            const result = await this.handleBlock2B(currentCandidate, null, null, onChunk, onUx);
+            const transitionText = "🧠 FIN DU BLOC 2A — PROJECTIONS NARRATIVES\n\nLes préférences sont collectées.\nAucune analyse n'a été produite.\n\nOn passe maintenant au BLOC 2B — Analyse projective des œuvres retenues.\n\n";
+            return { ...result, response: normalizeSingleResponse(transitionText + (result.response || '')) };
+        }
         const lastQuestion = currentCandidate.session.ui?.lastQuestion;
-        if (lastQuestion) {
-            return {
-                response: normalizeSingleResponse(lastQuestion),
-                step: BLOC_02,
-                expectsAnswer: true,
-                autoContinue: false,
-            };
-        }
-        // Par défaut, générer la première question
-        return this.handleBlock2A(currentCandidate, null, null, onChunk, onUx);
+        if (lastQuestion)
+            return { response: normalizeSingleResponse(lastQuestion), step: BLOC_02, expectsAnswer: true, autoContinue: false };
+        return { response: normalizeSingleResponse(STATIC_QUESTION_2A1), step: BLOC_02, expectsAnswer: true, autoContinue: false };
     }
     async generateQuestion2A1(candidate, retryCount = 0) {
         const messages = buildConversationHistory(candidate);
@@ -820,17 +749,16 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
                 autoContinue: false,
             };
         };
-        // Vérifier que les données BLOC 2A sont présentes (jamais throw : retour message utilisateur)
-        const answerMap = currentCandidate.answerMaps?.[2];
-        if (!answerMap || !answerMap.answers) {
-            return safeReturnMessage("Les réponses de la phase précédente sont absentes. Recharge la page ou reprends depuis le début du bloc.", 'BLOC 2A answers missing');
+        const blockStates = currentCandidate.session.blockStates;
+        const block2A = candidateStore.getBlock2AAnswers(currentCandidate);
+        if (!block2A?.medium || !block2A?.preference || !block2A?.coreWork) {
+            return safeReturnMessage("Les réponses de la phase précédente sont absentes. Recharge la page ou reprends depuis le début du bloc.", 'BLOC 2A answers missing (block2A)');
         }
-        const answers = answerMap.answers;
-        const mediumAnswer = answers[0] || '';
-        const preferencesAnswer = answers[1] || '';
-        const coreWorkAnswer = answers[2] || '';
-        if (!mediumAnswer || !preferencesAnswer || !coreWorkAnswer) {
-            return safeReturnMessage("Il manque une ou plusieurs réponses de la phase précédente. Recharge la page ou reprends depuis le début du bloc.", 'Incomplete BLOC 2A data');
+        const mediumAnswer = block2A.medium;
+        const preferencesAnswer = block2A.preference;
+        const coreWorkAnswer = block2A.coreWork;
+        if (blockStates?.['2B']?.status !== 'IN_PROGRESS' && userMessage) {
+            return safeReturnMessage("L'état du bloc 2B est incohérent. Recharge la page.", 'BLOC 2B status not IN_PROGRESS');
         }
         // PREMIUM : source de vérité = normalizedWorks (plus de parseWorks pour décider des œuvres)
         const normalizedWorks = currentCandidate.session.normalizedWorks;
@@ -849,29 +777,28 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
                 console.log('[ORCHESTRATOR] Generating BLOC 2B premium (motif + personnages only)');
                 const { questions, meta } = await this.generateMotifAndPersonnagesQuestions2B(currentCandidate, works, coreWorkAnswer);
                 candidateStore.setQuestionsForBlock(candidateId, blockNumber, questions.slice(0, 6), meta.slice(0, 6));
-                return this.serveNextQuestion2B(candidateId, blockNumber);
+                return await this.serveNextQuestion2B(candidateId, blockNumber);
             }
             // LEGACY : queue sans meta (ancien flux)
             console.log('[ORCHESTRATOR] Generating BLOC 2B legacy (full block)');
             let questions = await this.generateQuestions2B(currentCandidate, works, coreWorkAnswer);
             const validatedQuestions = await this.validateAndRetryQuestions2B(questions, works, currentCandidate, coreWorkAnswer);
             candidateStore.setQuestionsForBlock(candidateId, blockNumber, validatedQuestions);
-            return this.serveNextQuestion2B(candidateId, blockNumber);
+            return await this.serveNextQuestion2B(candidateId, blockNumber);
         }
-        // ÉTAPE 3 — RÉPONSE UTILISATEUR REÇUE
+        // ÉTAPE 3 — RÉPONSE UTILISATEUR REÇUE (state machine : currentQuestionIndex, block2B.answers)
         if (userMessage) {
             const currentQueue = currentCandidate.blockQueues?.[blockNumber];
             if (!currentQueue) {
                 throw new Error(`Queue for block ${blockNumber} not found`);
             }
-            // Stocker la réponse
-            const questionIndex = currentQueue.cursorIndex - 1;
-            candidateStore.storeAnswerForBlock(candidateId, blockNumber, questionIndex, userMessage);
-            // Recharger candidate après stockage
-            currentCandidate = candidateStore.get(candidateId);
-            if (!currentCandidate) {
-                currentCandidate = await candidateStore.getAsync(candidateId);
+            const currentQuestionIndex = currentCandidate.session.blockStates?.['2B']?.currentQuestionIndex ?? 0;
+            const questionIndex = currentQuestionIndex - 1;
+            if (questionIndex < 0) {
+                return safeReturnMessage("Aucune question en cours. Recharge la page.", 'BLOC 2B questionIndex < 0');
             }
+            await candidateStore.appendBlock2BAnswer(candidateId, userMessage);
+            currentCandidate = candidateStore.get(candidateId) ?? await candidateStore.getAsync(candidateId);
             if (!currentCandidate) {
                 throw new Error(`Candidate ${candidateId} not found after storing answer`);
             }
@@ -922,11 +849,12 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
                     const recapLine = `Sur ${work}, dis-moi en une phrase ce qui t'a le plus marqué dans tes réponses ci-dessus.`;
                     newQuestions.push(recapLine);
                     newMeta.push({ workIndex, slot: 'recap' });
-                    candidateStore.insertQuestionsAt(candidateId, blockNumber, finalQueue.cursorIndex, newQuestions, newMeta);
+                    const nextIndex = currentCandidate.session.blockStates?.['2B']?.currentQuestionIndex ?? currentQuestionIndex + 1;
+                    candidateStore.insertQuestionsAt(candidateId, blockNumber, nextIndex, newQuestions, newMeta);
                 }
             }
-            // Vérifier si toutes les questions ont été répondues
-            if (finalQueue.cursorIndex >= finalQueue.questions.length) {
+            const nextQuestionIndex = currentCandidate.session.blockStates?.['2B']?.currentQuestionIndex ?? currentQuestionIndex + 1;
+            if (nextQuestionIndex >= finalQueue.questions.length) {
                 // Vérifier si le miroir a déjà été généré (dernier message assistant est un miroir de BLOC 2B)
                 const conversationHistory = currentCandidate.conversationHistory || [];
                 const lastAssistantMessage = [...conversationHistory]
@@ -985,6 +913,7 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
                 // Toutes les questions répondues → Générer miroir (sans question 3)
                 console.log('[ORCHESTRATOR] Generating BLOC 2B final mirror (API)');
                 console.log('[LOT1] Mirror generated — awaiting validation');
+                await candidateStore.setBlock2BCompleted(candidateId);
                 candidateStore.markBlockComplete(candidateId, blockNumber);
                 const mirror = await this.generateMirror2B(currentCandidate, works, coreWorkAnswer, onChunk, onUx);
                 // Enregistrer le miroir dans conversationHistory
@@ -1015,11 +944,11 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
             }
             else {
                 // Il reste des questions → Servir la suivante (pas d'API)
-                return this.serveNextQuestion2B(candidateId, blockNumber);
+                return await this.serveNextQuestion2B(candidateId, blockNumber);
             }
         }
         // Cas 3 : Pas de message utilisateur → Servir question suivante si disponible
-        return this.serveNextQuestion2B(candidateId, blockNumber);
+        return await this.serveNextQuestion2B(candidateId, blockNumber);
     }
     /**
      * Parse les œuvres depuis la réponse utilisateur (format libre, tolérant).
@@ -1795,36 +1724,31 @@ Format de sortie OBLIGATOIRE :
         return parts.length > 0 ? parts : [raw];
     }
     /**
-     * Sert la prochaine question BLOC 2B depuis la queue.
-     * INVARIANT : Aucun texte "[NOM DU PERSONNAGE]" ne doit sortir vers l'UI.
-     * Premium (queue.meta) : les questions traits ont déjà le nom canonique ; pas d'injection par index.
-     * Legacy (sans meta) : injection par personnagesQuestionIndex + safety net final.
+     * Sert la prochaine question BLOC 2B depuis la queue (state machine : currentQuestionIndex).
+     * Incrémente currentQuestionIndex après envoi (persistance garantie).
      */
-    serveNextQuestion2B(candidateId, blockNumber) {
+    async serveNextQuestion2B(candidateId, blockNumber) {
         const candidate = candidateStore.get(candidateId);
-        if (!candidate) {
+        if (!candidate)
             throw new Error(`Candidate ${candidateId} not found`);
-        }
         const queue = candidate.blockQueues?.[blockNumber];
-        if (!queue || queue.questions.length === 0) {
+        if (!queue || queue.questions.length === 0)
             throw new Error(`Queue for block ${blockNumber} is empty`);
-        }
-        if (queue.cursorIndex >= queue.questions.length) {
+        const currentQuestionIndex = candidate.session.blockStates?.['2B']?.currentQuestionIndex ?? 0;
+        if (currentQuestionIndex >= queue.questions.length) {
             throw new Error(`All questions for block ${blockNumber} have been served`);
         }
-        let question = queue.questions[queue.cursorIndex];
-        // Legacy : injection par index (queue sans meta) — peut être incorrect si nombre variable de questions par œuvre
+        let question = queue.questions[currentQuestionIndex];
         if (!queue.meta && question.includes('[NOM DU PERSONNAGE]')) {
-            const answerMap = candidate.answerMaps?.[blockNumber];
-            const answers = answerMap?.answers || {};
+            const block2B = candidateStore.getBlock2BAnswers(candidate);
+            const answers = block2B?.answers ?? [];
             const QUESTIONS_PER_WORK = 6;
-            const workIndex = Math.floor(queue.cursorIndex / QUESTIONS_PER_WORK);
-            const slotInWork = queue.cursorIndex % QUESTIONS_PER_WORK;
+            const workIndex = Math.floor(currentQuestionIndex / QUESTIONS_PER_WORK);
+            const slotInWork = currentQuestionIndex % QUESTIONS_PER_WORK;
             if (slotInWork >= 2 && slotInWork <= 4) {
                 const characterIndex = slotInWork - 2;
                 const personnagesQuestionIndex = 1 + workIndex * QUESTIONS_PER_WORK;
-                const answersRecord = answers;
-                const personnagesAnswer = answersRecord[personnagesQuestionIndex] ?? '';
+                const personnagesAnswer = answers[personnagesQuestionIndex] ?? '';
                 const characterNames = this.parseCharacterNames(personnagesAnswer);
                 const name = characterNames[characterIndex] ?? characterNames[0] ?? 'ce personnage';
                 question = question.replace(/\[NOM DU PERSONNAGE\]/g, name);
@@ -1833,26 +1757,17 @@ Format de sortie OBLIGATOIRE :
                 question = question.replace(/\[NOM DU PERSONNAGE\]/g, 'ce personnage');
             }
         }
-        // INVARIANT : jamais de placeholder vers l'UI (safety net pour premium + legacy)
         if (question.includes('[NOM DU PERSONNAGE]')) {
             question = question.replace(/\[NOM DU PERSONNAGE\]/g, 'ce personnage');
         }
-        console.log('[ORCHESTRATOR] serve question BLOC 2B from queue (NO API)', {
+        console.log('[ORCHESTRATOR] serve question BLOC 2B from queue (state machine)', {
             blockNumber,
-            questionIndex: queue.cursorIndex,
+            questionIndex: currentQuestionIndex,
             totalQuestions: queue.questions.length,
         });
-        candidateStore.appendAssistantMessage(candidateId, question, {
-            block: blockNumber,
-            step: BLOC_02,
-            kind: 'question',
-        });
-        candidateStore.updateUIState(candidateId, {
-            step: BLOC_02,
-            lastQuestion: question,
-            identityDone: true,
-        });
-        candidateStore.advanceQuestionCursor(candidateId, blockNumber);
+        candidateStore.appendAssistantMessage(candidateId, question, { block: blockNumber, step: BLOC_02, kind: 'question' });
+        candidateStore.updateUIState(candidateId, { step: BLOC_02, lastQuestion: question, identityDone: true });
+        await candidateStore.setBlock2BCurrentQuestionIndex(candidateId, currentQuestionIndex + 1);
         return {
             response: normalizeSingleResponse(question),
             step: BLOC_02,
@@ -1871,23 +1786,8 @@ Format de sortie OBLIGATOIRE :
      * - Validation simple : structure JSON + marqueurs expérientiels
      */
     async generateMirror2B(candidate, works, coreWork, onChunk, onUx) {
-        // Construire le contexte des réponses depuis conversationHistory (source robuste)
-        const conversationHistory = candidate.conversationHistory || [];
-        const block2UserMessages = conversationHistory
-            .filter(m => m.role === 'user' && m.block === 2 && m.kind !== 'mirror_validation')
-            .map(m => m.content);
-        // Filtrer pour ne garder que les réponses BLOC 2B (après les 3 réponses BLOC 2A)
-        const block2BAnswers = block2UserMessages.length > 3
-            ? block2UserMessages.slice(3).map(a => a.trim()).filter(a => a.length > 0)
-            : [];
-        if (block2BAnswers.length === 0) {
-            // Fallback : answerMaps
-            const answerMap = candidate.answerMaps?.[2];
-            const answers = answerMap?.answers || {};
-            const sortedEntries = Object.entries(answers)
-                .sort(([a], [b]) => parseInt(a) - parseInt(b));
-            block2BAnswers.push(...sortedEntries.slice(3).map(([, answer]) => answer).filter(a => a && a.trim().length > 0));
-        }
+        const block2B = candidateStore.getBlock2BAnswers(candidate);
+        const block2BAnswers = (block2B?.answers ?? []).map(a => (a || '').trim()).filter(a => a.length > 0);
         console.log('[BLOC2B][NEW_ARCHITECTURE] Génération miroir en 3 étapes (interprétation + angle + rendu)');
         console.log('[BLOC2B] Réponses utilisateur:', block2BAnswers.length);
         // UX FAST — occupation pendant analyse (1 message statique max)

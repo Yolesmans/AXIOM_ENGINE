@@ -46,6 +46,11 @@ class CandidateStore {
             this.saveToFile();
         }, 200);
     }
+    /** Persistance garantie avant retour API (Redis + file immédiat). À appeler après toute modification blockStates / block2Answers. */
+    async persistAndFlush(candidateId) {
+        await this.persistCandidate(candidateId);
+        this.saveToFile();
+    }
     saveToFile() {
         try {
             const data = {};
@@ -514,6 +519,177 @@ class CandidateStore {
         };
         this.candidates.set(candidateId, updated);
         this.persistCandidate(candidateId);
+    }
+    // ========== BLOC 2 — STATE MACHINE & RÉPONSES SÉPARÉES ==========
+    ensureBlock2State(candidate) {
+        const existing = candidate.session.blockStates;
+        if (existing?.['2A'] && existing?.['2B'])
+            return existing;
+        return {
+            '2A': { status: 'NOT_STARTED' },
+            '2B': { status: 'NOT_STARTED', currentQuestionIndex: 0 },
+        };
+    }
+    /** Initialise blockStates pour le bloc 2 si absent ; met 2A IN_PROGRESS si encore NOT_STARTED. Retourne le candidat mis à jour. */
+    async ensureBlock2AndStart2AIfNeeded(candidateId) {
+        const candidate = this.candidates.get(candidateId);
+        if (!candidate)
+            return undefined;
+        const blockStates = this.ensureBlock2State(candidate);
+        const next2A = blockStates['2A'].status === 'NOT_STARTED'
+            ? { ...blockStates['2A'], status: 'IN_PROGRESS' }
+            : blockStates['2A'];
+        const updated = {
+            ...candidate,
+            session: {
+                ...candidate.session,
+                blockStates: { ...blockStates, '2A': next2A },
+                lastActivityAt: new Date(),
+            },
+            block2Answers: candidate.block2Answers ?? { block2A: {}, block2B: { answers: [] } },
+        };
+        this.candidates.set(candidateId, updated);
+        await this.persistAndFlush(candidateId);
+        return updated;
+    }
+    getBlock2AAnswers(candidate) {
+        return candidate.block2Answers?.block2A;
+    }
+    getBlock2BAnswers(candidate) {
+        return candidate.block2Answers?.block2B;
+    }
+    async setBlock2AMedium(candidateId, value) {
+        const candidate = this.candidates.get(candidateId);
+        if (!candidate)
+            return undefined;
+        const block2A = { ...(candidate.block2Answers?.block2A ?? {}), medium: value };
+        const updated = {
+            ...candidate,
+            block2Answers: {
+                ...(candidate.block2Answers ?? {}),
+                block2A,
+                block2B: candidate.block2Answers?.block2B ?? { answers: [] },
+            },
+            session: { ...candidate.session, lastActivityAt: new Date() },
+        };
+        this.candidates.set(candidateId, updated);
+        await this.persistAndFlush(candidateId);
+        return updated;
+    }
+    async setBlock2APreference(candidateId, value) {
+        const candidate = this.candidates.get(candidateId);
+        if (!candidate)
+            return undefined;
+        const block2A = { ...(candidate.block2Answers?.block2A ?? {}), preference: value };
+        const updated = {
+            ...candidate,
+            block2Answers: {
+                ...(candidate.block2Answers ?? {}),
+                block2A,
+                block2B: candidate.block2Answers?.block2B ?? { answers: [] },
+            },
+            session: { ...candidate.session, lastActivityAt: new Date() },
+        };
+        this.candidates.set(candidateId, updated);
+        await this.persistAndFlush(candidateId);
+        return updated;
+    }
+    async setBlock2ACoreWork(candidateId, value) {
+        const candidate = this.candidates.get(candidateId);
+        if (!candidate)
+            return undefined;
+        const block2A = { ...(candidate.block2Answers?.block2A ?? {}), coreWork: value };
+        const updated = {
+            ...candidate,
+            block2Answers: {
+                ...(candidate.block2Answers ?? {}),
+                block2A,
+                block2B: candidate.block2Answers?.block2B ?? { answers: [] },
+            },
+            session: { ...candidate.session, lastActivityAt: new Date() },
+        };
+        this.candidates.set(candidateId, updated);
+        await this.persistAndFlush(candidateId);
+        return updated;
+    }
+    /** 2A COMPLETED, 2B IN_PROGRESS, currentQuestionIndex = 0. À appeler une seule fois après stockage coreWork. */
+    async setBlock2ACompletedAndStart2B(candidateId) {
+        const candidate = this.candidates.get(candidateId);
+        if (!candidate)
+            return undefined;
+        const blockStates = this.ensureBlock2State(candidate);
+        const updated = {
+            ...candidate,
+            session: {
+                ...candidate.session,
+                blockStates: {
+                    '2A': { status: 'COMPLETED' },
+                    '2B': { status: 'IN_PROGRESS', currentQuestionIndex: 0 },
+                },
+                lastActivityAt: new Date(),
+            },
+        };
+        this.candidates.set(candidateId, updated);
+        await this.persistAndFlush(candidateId);
+        return updated;
+    }
+    async appendBlock2BAnswer(candidateId, answer) {
+        const candidate = this.candidates.get(candidateId);
+        if (!candidate)
+            return undefined;
+        const prev = candidate.block2Answers?.block2B?.answers ?? [];
+        const updated = {
+            ...candidate,
+            block2Answers: {
+                ...(candidate.block2Answers ?? {}),
+                block2A: candidate.block2Answers?.block2A,
+                block2B: { answers: [...prev, answer] },
+            },
+            session: { ...candidate.session, lastActivityAt: new Date() },
+        };
+        this.candidates.set(candidateId, updated);
+        await this.persistAndFlush(candidateId);
+        return updated;
+    }
+    async setBlock2BCurrentQuestionIndex(candidateId, index) {
+        const candidate = this.candidates.get(candidateId);
+        if (!candidate)
+            return undefined;
+        const blockStates = this.ensureBlock2State(candidate);
+        const updated = {
+            ...candidate,
+            session: {
+                ...candidate.session,
+                blockStates: {
+                    ...blockStates,
+                    '2B': { ...blockStates['2B'], status: 'IN_PROGRESS', currentQuestionIndex: index },
+                },
+                lastActivityAt: new Date(),
+            },
+        };
+        this.candidates.set(candidateId, updated);
+        await this.persistAndFlush(candidateId);
+        return updated;
+    }
+    async setBlock2BCompleted(candidateId) {
+        const candidate = this.candidates.get(candidateId);
+        if (!candidate)
+            return undefined;
+        const blockStates = this.ensureBlock2State(candidate);
+        const updated = {
+            ...candidate,
+            session: {
+                ...candidate.session,
+                blockStates: {
+                    ...blockStates,
+                    '2B': { ...blockStates['2B'], status: 'COMPLETED' },
+                },
+                lastActivityAt: new Date(),
+            },
+        };
+        this.candidates.set(candidateId, updated);
+        await this.persistAndFlush(candidateId);
+        return updated;
     }
     storeAnswerForBlock(candidateId, blockNumber, questionIndex, answer) {
         const candidate = this.candidates.get(candidateId);
