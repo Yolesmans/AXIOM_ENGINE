@@ -1444,6 +1444,7 @@ app.post("/axiom/stream", async (req, res) => {
                     step: responseStep,
                     expectsAnswer: response ? result.expectsAnswer : false,
                     autoContinue: result.autoContinue,
+                    ...(result.mirrorAwaitingValidation === true && { mirrorAwaitingValidation: true }),
                 };
                 writeEvent("done", {
                     type: "done",

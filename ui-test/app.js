@@ -414,7 +414,7 @@ async function callAxiom(message, event = null) {
     });
 
     // Détection miroir 2B → masquer input, afficher bouton "Continuer" (transition 2B → 3)
-    const mirror2BAwaiting = isMirror2BAwaitingValidation(data, finalContent);
+    const mirror2BAwaiting = isMirror2BAwaitingValidation(data);
     if (mirror2BAwaiting) {
       const chatForm = document.getElementById('chat-form');
       if (chatForm) {
@@ -555,15 +555,9 @@ function displayMatchingButton() {
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
 
-// Détection miroir 2B : step BLOC_02, currentBlock 2, expectsAnswer true, réponse non vide (dernier message = miroir)
-function isMirror2BAwaitingValidation(data, finalContent) {
-  return (
-    data.step === 'BLOC_02' &&
-    data.currentBlock === 2 &&
-    data.expectsAnswer === true &&
-    typeof finalContent === 'string' &&
-    finalContent.trim().length > 0
-  );
+// Détection miroir 2B : uniquement quand le backend renvoie mirrorAwaitingValidation (évite affichage sur 2A questions)
+function isMirror2BAwaitingValidation(data) {
+  return data.mirrorAwaitingValidation === true;
 }
 
 function displayContinueAfterMirrorButton() {
