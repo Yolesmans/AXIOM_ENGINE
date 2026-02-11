@@ -15,6 +15,12 @@ export function isValidBlockNumber(block: number): boolean {
 // TYPES PHASE 1 (NOUVEAUX)
 // ============================================
 
+/** Métadonnée par question BLOC 2B premium (ordre fixe : motif, personnages, traits…, récap par œuvre) */
+export interface Block2BQuestionMeta {
+  workIndex: number;
+  slot: 'motif' | 'personnages' | 'trait' | 'recap';
+}
+
 export interface QuestionQueue {
   blockNumber: number;
   questions: string[];
@@ -22,6 +28,8 @@ export interface QuestionQueue {
   isComplete: boolean;
   generatedAt: string;
   completedAt: string | null;
+  /** BLOC 2B premium uniquement : même longueur que questions, pour savoir slot/workIndex */
+  meta?: Block2BQuestionMeta[];
 }
 
 export interface AnswerMap {

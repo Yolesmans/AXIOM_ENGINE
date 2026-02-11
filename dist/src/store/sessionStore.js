@@ -186,6 +186,18 @@ class CandidateStore {
         this.persistCandidate(candidateId);
         return updated;
     }
+    setNormalizedWorks(candidateId, works) {
+        return this.updateSession(candidateId, { normalizedWorks: works });
+    }
+    setNormalizedCharacters(candidateId, workIndex, characters) {
+        const candidate = this.candidates.get(candidateId);
+        if (!candidate)
+            return undefined;
+        const prev = candidate.session.normalizedCharacters ?? [];
+        const next = [...prev];
+        next[workIndex] = characters;
+        return this.updateSession(candidateId, { normalizedCharacters: next });
+    }
     updatePrivateData(candidateId, updates) {
         const candidate = this.candidates.get(candidateId);
         if (!candidate) {
@@ -380,20 +392,19 @@ class CandidateStore {
         this.persistCandidate(candidateId);
         return queue;
     }
-    setQuestionsForBlock(candidateId, blockNumber, questions) {
+    setQuestionsForBlock(candidateId, blockNumber, questions, meta) {
         const candidate = this.candidates.get(candidateId);
         if (!candidate) {
             throw new Error(`Candidate ${candidateId} not found`);
         }
-        // Appeler initQuestionQueue si nécessaire
         const queue = this.initQuestionQueue(candidateId, blockNumber);
-        // Remplacer questions par le tableau fourni
         const updatedQueue = {
             ...queue,
             questions,
             cursorIndex: 0,
             isComplete: false,
             completedAt: null,
+            ...(meta !== undefined && meta.length === questions.length ? { meta } : {}),
         };
         const blockQueues = candidate.blockQueues || {};
         const updated = {
@@ -406,6 +417,38 @@ class CandidateStore {
                 ...candidate.session,
                 lastActivityAt: new Date(),
             },
+        };
+        this.candidates.set(candidateId, updated);
+        this.persistCandidate(candidateId);
+        return updatedQueue;
+    }
+    /** Insère des questions à un index donné (BLOC 2B premium : traits + récap après personnages). Ne modifie pas cursorIndex. */
+    insertQuestionsAt(candidateId, blockNumber, atIndex, newQuestions, newMeta) {
+        const candidate = this.candidates.get(candidateId);
+        if (!candidate)
+            return undefined;
+        const queue = candidate.blockQueues?.[blockNumber];
+        if (!queue || atIndex < 0 || atIndex > queue.questions.length)
+            return undefined;
+        const questions = [
+            ...queue.questions.slice(0, atIndex),
+            ...newQuestions,
+            ...queue.questions.slice(atIndex),
+        ];
+        const meta = queue.meta && newMeta && newMeta.length === newQuestions.length
+            ? [...queue.meta.slice(0, atIndex), ...newMeta, ...queue.meta.slice(atIndex)]
+            : queue.meta
+                ? [...queue.meta.slice(0, atIndex), ...newQuestions.map(() => ({ workIndex: 0, slot: 'trait' })), ...queue.meta.slice(atIndex)]
+                : undefined;
+        const updatedQueue = {
+            ...queue,
+            questions,
+            ...(meta ? { meta } : {}),
+        };
+        const updated = {
+            ...candidate,
+            blockQueues: { ...(candidate.blockQueues || {}), [blockNumber]: updatedQueue },
+            session: { ...candidate.session, lastActivityAt: new Date() },
         };
         this.candidates.set(candidateId, updated);
         this.persistCandidate(candidateId);
