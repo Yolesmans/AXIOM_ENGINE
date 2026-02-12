@@ -11,6 +11,7 @@ let tenantId = null;
 let posteId = null;
 let isWaiting = false;
 let showStartButton = false;
+let showContinueButton = false;
 let isInitializing = false;
 let hasActiveQuestion = false; // Verrou UI séquentiel : empêche l'affichage de plusieurs questions simultanément
 let sendCounter = 0; // Compteur d'envoi pour id unique (diagnostic double requête)
@@ -293,6 +294,13 @@ async function callAxiom(message, event = null) {
   }
   showStartButton = false;
 
+  // Masquer le bouton Continuer s'il est visible
+  const continueButtonContainer = document.getElementById('continue-bloc3-button-container');
+  if (continueButtonContainer) {
+    continueButtonContainer.classList.add('hidden');
+  }
+  showContinueButton = false;
+
   try {
     const body = {
       tenantId: tenantId,
@@ -417,6 +425,14 @@ async function callAxiom(message, event = null) {
     if (data.step === 'STEP_03_BLOC1') {
       showStartButton = true;
       displayStartButton();
+    } else if (data.step === 'STEP_WAIT_BLOC_3') {
+      showContinueButton = true;
+      displayContinueButton();
+      // Masquer le champ de saisie
+      const chatForm = document.getElementById('chat-form');
+      if (chatForm) {
+        chatForm.style.display = 'none';
+      }
     } else if (data.step === 'STEP_99_MATCH_READY' && data.expectsAnswer === false) {
       showStartButton = true;
       displayMatchingButton();
@@ -492,6 +508,40 @@ function displayStartButton() {
     startButton.addEventListener('click', async () => {
       startButton.disabled = true;
       await callAxiom(null, "START_BLOC_1");
+    });
+  }
+
+  messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
+
+// Fonction pour afficher le bouton Continuer (après miroir 2B)
+function displayContinueButton() {
+  const messagesContainer = document.getElementById('messages');
+  if (!messagesContainer) return;
+
+  // Vérifier si le bouton existe déjà
+  let buttonContainer = document.getElementById('continue-bloc3-button-container');
+  if (!buttonContainer) {
+    buttonContainer = document.createElement('div');
+    buttonContainer.id = 'continue-bloc3-button-container';
+    buttonContainer.className = 'mvp-start-button';
+    messagesContainer.appendChild(buttonContainer);
+  }
+
+  buttonContainer.innerHTML = `
+    <button id="continue-bloc3-button" type="button">
+      Continuer
+    </button>
+  `;
+
+  buttonContainer.classList.remove('hidden');
+
+  // Gestionnaire de clic
+  const continueButton = document.getElementById('continue-bloc3-button');
+  if (continueButton) {
+    continueButton.addEventListener('click', async () => {
+      continueButton.disabled = true;
+      await callAxiom(null, "START_BLOC_3");
     });
   }
 
@@ -661,6 +711,13 @@ window.addEventListener('DOMContentLoaded', async () => {
       if (data.step === 'STEP_03_BLOC1') {
         showStartButton = true;
         displayStartButton();
+        // Masquer le champ de saisie
+        if (chatForm) {
+          chatForm.style.display = 'none';
+        }
+      } else if (data.step === 'STEP_WAIT_BLOC_3') {
+        showContinueButton = true;
+        displayContinueButton();
         // Masquer le champ de saisie
         if (chatForm) {
           chatForm.style.display = 'none';

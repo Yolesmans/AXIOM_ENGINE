@@ -11,6 +11,7 @@ import {
   STEP_02_TONE,
   STEP_03_PREAMBULE,
   STEP_03_BLOC1,
+  STEP_WAIT_BLOC_3,
   BLOC_01,
   BLOC_02,
   BLOC_03,
@@ -750,6 +751,20 @@ app.post("/axiom", async (req: Request, res: Response) => {
         state: "wait_start_button",
         response: "Pour commencer le profil, clique sur le bouton 'Je commence mon profil' ci-dessus.",
         step: STEP_03_BLOC1,
+        expectsAnswer: false,
+        autoContinue: false,
+      });
+    }
+
+    // Garde : Si step === STEP_WAIT_BLOC_3 ET userMessage présent ET event !== START_BLOC_3
+    // → Ignorer le message ou retourner erreur explicite
+    if (candidate.session.ui?.step === STEP_WAIT_BLOC_3 && userMessageText && event !== 'START_BLOC_3') {
+      return res.status(200).json({
+        sessionId: candidate.candidateId,
+        currentBlock: candidate.session.currentBlock,
+        state: "wait_continue_button",
+        response: "Pour continuer vers le BLOC 3, clique sur le bouton 'Continuer' ci-dessus.",
+        step: STEP_WAIT_BLOC_3,
         expectsAnswer: false,
         autoContinue: false,
       });

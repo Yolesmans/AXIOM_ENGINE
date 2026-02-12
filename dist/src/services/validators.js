@@ -200,14 +200,15 @@ export function validateQuestion2A1(content) {
             error: 'Question 2A.1 vide ou invalide'
         };
     }
-    const hasSerie = /A\.?\s*(Série|série)/i.test(content);
-    const hasFilm = /B\.?\s*(Film|film)/i.test(content);
+    // Accepter "A. Série" / "A) Série" / "A Série" et idem pour B. Film
+    const hasSerie = /A\s*[\.\)]?\s*(Série|série)/i.test(content);
+    const hasFilm = /B\s*[\.\)]?\s*(Film|film)/i.test(content);
     if (!hasSerie || !hasFilm) {
         const missing = [];
         if (!hasSerie)
-            missing.push('"A. Série"');
+            missing.push('option Série (A. ou A))');
         if (!hasFilm)
-            missing.push('"B. Film"');
+            missing.push('option Film (B. ou B))');
         return {
             valid: false,
             error: `Question 2A.1 : format incorrect. Manque : ${missing.join(', ')}`

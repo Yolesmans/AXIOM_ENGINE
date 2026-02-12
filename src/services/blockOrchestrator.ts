@@ -2,7 +2,7 @@ import type { AxiomCandidate, NormalizedWork, NormalizedCharacter } from '../typ
 import type { Block2BQuestionMeta } from '../types/blocks.js';
 import { candidateStore } from '../store/sessionStore.js';
 import { callOpenAI, callOpenAIStream } from './openaiClient.js';
-import { BLOC_01, BLOC_02, BLOC_03, executeAxiom } from '../engine/axiomExecutor.js';
+import { BLOC_01, BLOC_02, BLOC_03, STEP_WAIT_BLOC_3, executeAxiom } from '../engine/axiomExecutor.js';
 import { STATIC_QUESTIONS, getStaticQuestion } from '../engine/staticQuestions.js';
 // getFullAxiomPrompt n'est pas exporté, on doit le reconstruire
 import { PROMPT_AXIOM_ENGINE, PROMPT_AXIOM_PROFIL } from '../engine/prompts.js';
@@ -1137,40 +1137,15 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
           identityDone: true,
         });
 
-        // 🔒 Transition stable directe 2B → 3 (bypass executeAxiom)
-        const firstQuestionBloc3 =
-          getStaticQuestion(3, 0) ||
-          `Quand tu dois prendre une décision importante, tu te fies plutôt à :
-A. Ce qui est logique et cohérent
-B. Ce que tu ressens comme juste
-C. Ce qui a déjà fait ses preuves
-D. Ce qui t'ouvre le plus d'options
-(1 lettre)`;
-
-        // Enregistrer la question dans conversationHistory (structure moteur respectée)
-        candidateStore.appendAssistantMessage(candidateId, firstQuestionBloc3, {
-          block: 3,
-          step: BLOC_03,
-          kind: 'question',
-        });
-
-        // Mettre à jour UI state proprement
-        candidateStore.updateUIState(candidateId, {
-          step: BLOC_03,
-          lastQuestion: firstQuestionBloc3,
-        });
-
-        console.log('[ORCHESTRATOR] Transition 2B→3 directe (stable, sans executeAxiom)');
-
-        const combinedResponse = `${mirror}\n\n${firstQuestionBloc3}`;
+        // 🔒 Transition 2B → 3 via bouton user-trigger (pattern préambule)
+        console.log('[ORCHESTRATOR] Miroir 2B généré — attente bouton user pour BLOC 3');
 
         return {
-          response: combinedResponse,
-          step: BLOC_03,
-          expectsAnswer: true,
+          response: mirror,
+          step: STEP_WAIT_BLOC_3,
+          expectsAnswer: false,
           autoContinue: false,
           mirror,
-          nextQuestion: firstQuestionBloc3,
         };
       } else {
         // Il reste des questions → Servir la suivante (pas d'API)

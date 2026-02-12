@@ -916,6 +916,7 @@ export const STEP_01_IDENTITY = 'STEP_01_IDENTITY';
 export const STEP_02_TONE = 'STEP_02_TONE';
 export const STEP_03_PREAMBULE = 'STEP_03_PREAMBULE';
 export const STEP_03_BLOC1 = 'STEP_03_BLOC1'; // wait_start_button
+export const STEP_WAIT_BLOC_3 = 'STEP_WAIT_BLOC_3'; // wait_continue_button after miroir 2B
 export const BLOC_01 = 'BLOC_01';
 // ============================================
 // HELPER : Construction historique conversationnel pour OpenAI
@@ -1009,6 +1010,17 @@ function deriveStateFromConversationHistory(candidate) {
     if (lastAssistant.kind === 'preambule') {
         // Préambule généré → STEP_03_BLOC1 (attente bouton)
         return STEP_03_BLOC1;
+    }
+    if (lastAssistant.kind === 'mirror') {
+        const mirrorBlock = lastAssistant.block;
+        if (mirrorBlock && mirrorBlock >= 1 && mirrorBlock <= 9) {
+            const nextBlock = mirrorBlock + 1;
+            return `BLOC_${String(nextBlock).padStart(2, '0')}`;
+        }
+        // Fallback sécurité
+        if (candidate.session.currentBlock > 0) {
+            return `BLOC_${String(candidate.session.currentBlock).padStart(2, '0')}`;
+        }
     }
     if (lastAssistant.kind === 'question') {
         // Question bloc posée → Vérifier dans quel bloc
@@ -1522,6 +1534,61 @@ Toute sortie hors règles = invalide.`;
         };
     }
     // ============================================
+    // STEP_WAIT_BLOC_3 (wait_continue_button après miroir 2B)
+    // ============================================
+    // Vérifier si miroir 2B existe dans l'historique (source de vérité)
+    const miroir2BInHistory = candidate.conversationHistory?.find(m => m.kind === 'mirror' && m.block === 2);
+    const canStartBloc3 = currentState === STEP_WAIT_BLOC_3 || miroir2BInHistory !== undefined;
+    if (canStartBloc3 && currentState === STEP_WAIT_BLOC_3) {
+        // PARTIE 6 — Bouton "Continuer" (après miroir 2B)
+        if (event === 'START_BLOC_3') {
+            // Mettre à jour l'état UI vers BLOC_03
+            candidateStore.updateUIState(candidate.candidateId, {
+                step: BLOC_03,
+                lastQuestion: null,
+                identityDone: true,
+            });
+            // Mettre à jour la session vers collecting + bloc 3
+            candidateStore.updateSession(candidate.candidateId, { state: 'collecting', currentBlock: 3 });
+            // Récupérer première question BLOC 3 (catalogue statique)
+            const firstQuestionBloc3 = getStaticQuestion(3, 0);
+            if (!firstQuestionBloc3) {
+                console.error('[AXIOM_CRITICAL_ERROR]', { sessionId: candidate.candidateId, state: BLOC_03 });
+                throw new Error('Question BLOC 3 introuvable dans catalogue statique');
+            }
+            // Enregistrer la question dans conversationHistory (structure moteur respectée)
+            candidateStore.appendAssistantMessage(candidate.candidateId, firstQuestionBloc3, {
+                block: 3,
+                step: BLOC_03,
+                kind: 'question',
+            });
+            // Mettre à jour UI state avec lastQuestion
+            candidateStore.updateUIState(candidate.candidateId, {
+                step: BLOC_03,
+                lastQuestion: firstQuestionBloc3,
+            });
+            console.log('[AXIOM_EXECUTOR] Transition 2B→3 via bouton user-trigger (pattern préambule)');
+            currentState = BLOC_03;
+            logTransition(candidate.candidateId, stateIn, currentState, 'event');
+            return {
+                response: firstQuestionBloc3,
+                step: BLOC_03,
+                lastQuestion: firstQuestionBloc3,
+                expectsAnswer: true,
+                autoContinue: false,
+            };
+        }
+        // Si message texte reçu → ignorer (on attend le bouton)
+        logTransition(candidate.candidateId, stateIn, STEP_WAIT_BLOC_3, 'message');
+        return {
+            response: '',
+            step: STEP_WAIT_BLOC_3,
+            lastQuestion: null,
+            expectsAnswer: false,
+            autoContinue: false,
+        };
+    }
+    // ============================================
     // HELPER — Noms des blocs pour annonce de transition
     // ============================================
     function getBlockName(blockNumber) {
@@ -1827,8 +1894,14 @@ Toute sortie hors règles = invalide.`;
             }
         }
         // Validation REVELIOM pour miroirs (blocs 3-9 uniquement) — sur texte nettoyé
-        let expectsAnswer = cleanMirrorText ? cleanMirrorText.trim().endsWith('?') : false;
+        // Détection intelligente attente réponse
+        const looksLikeQuestion = aiText &&
+            (aiText.trim().endsWith('?') ||
+                /A\.\s+\S/.test(aiText) || // options A-E
+                /\(1 lettre\)/i.test(aiText) || // instruction réponse courte
+                /réponds/i.test(aiText));
         let isMirror = false;
+        let expectsAnswer = isMirror ? true : (looksLikeQuestion || false);
         if (cleanMirrorText && blocNumber >= 1 && blocNumber <= 9 && !expectsAnswer) {
             // C'est un miroir → utiliser nouvelle architecture séparée (blocs 1 et 3-9)
             isMirror = true;

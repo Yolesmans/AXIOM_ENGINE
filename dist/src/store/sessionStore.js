@@ -1,3 +1,4 @@
+import { BLOC_02 } from '../engine/axiomExecutor.js';
 import * as fs from 'fs';
 let redisClient = null;
 let filePersistTimer = null;
@@ -525,10 +526,62 @@ class CandidateStore {
         const existing = candidate.session.blockStates;
         if (existing?.['2A'] && existing?.['2B'])
             return existing;
+        return this.deriveBlock2StateFromAnswers(candidate);
+    }
+    /**
+     * Dérive blockStates à partir de block2Answers (pour candidats chargés sans blockStates).
+     */
+    deriveBlock2StateFromAnswers(candidate) {
+        const block2A = candidate.block2Answers?.block2A;
+        const block2B = candidate.block2Answers?.block2B;
+        const hasCoreWork = !!(block2A && 'coreWork' in block2A && block2A.coreWork);
+        const hasAny2A = !!(block2A && (block2A.medium || block2A.preference || block2A.coreWork));
+        const answers2BCount = block2B?.answers?.length ?? 0;
+        if (hasCoreWork) {
+            return {
+                '2A': { status: 'COMPLETED' },
+                '2B': { status: 'IN_PROGRESS', currentQuestionIndex: answers2BCount },
+            };
+        }
+        if (hasAny2A) {
+            return {
+                '2A': { status: 'IN_PROGRESS' },
+                '2B': { status: 'NOT_STARTED', currentQuestionIndex: 0 },
+            };
+        }
         return {
             '2A': { status: 'NOT_STARTED' },
             '2B': { status: 'NOT_STARTED', currentQuestionIndex: 0 },
         };
+    }
+    /**
+     * Garantit blockStates renseigné en bloc 2. Si absent ou incomplet, dérive depuis block2Answers,
+     * met à jour la session, persiste immédiatement et retourne le candidat à jour.
+     * À appeler au chargement du candidat dans le flux bloc 2 (stream sous mutex).
+     */
+    async ensureBlock2StateAndPersistIfNeeded(candidateId) {
+        const candidate = this.candidates.get(candidateId) ?? (await this.getAsync(candidateId));
+        if (!candidate)
+            return undefined;
+        const inBloc2 = candidate.session.currentBlock === 2 || candidate.session.ui?.step === BLOC_02;
+        if (!inBloc2)
+            return candidate;
+        const existing = candidate.session.blockStates;
+        const hasComplete = existing?.['2A'] && existing?.['2B'];
+        if (hasComplete)
+            return candidate;
+        const blockStates = this.ensureBlock2State(candidate);
+        const updated = {
+            ...candidate,
+            session: {
+                ...candidate.session,
+                blockStates,
+                lastActivityAt: new Date(),
+            },
+        };
+        this.candidates.set(candidateId, updated);
+        await this.persistAndFlush(candidateId);
+        return updated;
     }
     /** Initialise blockStates pour le bloc 2 si absent ; met 2A IN_PROGRESS si encore NOT_STARTED. Retourne le candidat mis à jour. */
     async ensureBlock2AndStart2AIfNeeded(candidateId) {
