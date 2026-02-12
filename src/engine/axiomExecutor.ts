@@ -1068,6 +1068,20 @@ function deriveStateFromConversationHistory(candidate: AxiomCandidate): string {
     return STEP_03_BLOC1;
   }
   
+  if (lastAssistant.kind === 'mirror') {
+    const mirrorBlock = lastAssistant.block;
+
+    if (mirrorBlock && mirrorBlock >= 1 && mirrorBlock <= 9) {
+      const nextBlock = mirrorBlock + 1;
+      return `BLOC_${String(nextBlock).padStart(2, '0')}`;
+    }
+
+    // Fallback sécurité
+    if (candidate.session.currentBlock > 0) {
+      return `BLOC_${String(candidate.session.currentBlock).padStart(2, '0')}`;
+    }
+  }
+  
   if (lastAssistant.kind === 'question') {
     // Question bloc posée → Vérifier dans quel bloc
     const lastUserMessage = history.filter(m => m.role === 'user').pop();
