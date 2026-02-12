@@ -1005,16 +1005,19 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
       }
 
       const meta = finalQueue.meta;
-      const isPersonnagesAnswer = meta && meta[questionIndex]?.slot === 'personnages';
       const looksLikeChoiceAE = /^[A-Ea-e]\s*[\.\)]?\s*$/.test((userMessage || '').trim());
 
-      // Garde dure : une réponse type A–E n'est jamais une réponse "personnages" → on ne normalise pas, on sert la suite
-      if (looksLikeChoiceAE && isPersonnagesAnswer) {
-        console.warn('[ORCHESTRATOR] BLOC 2B: réponse A–E interprétée comme slot personnages (meta mismatch) — pas de normalisation, on sert la suite');
-      }
+      // P0-3 : GARDE A-E PRIORITAIRE — Détecter AVANT toute logique isPersonnagesAnswer
+      if (looksLikeChoiceAE) {
+        console.log('[ORCHESTRATOR] BLOC 2B: réponse A–E détectée — pas de normalisation personnages, on sert la suite');
+        // Une réponse A-E ne peut JAMAIS déclencher normalisation personnages
+        // → passer directement à serveNextQuestion2B
+      } else {
+        // Seulement si réponse != A-E, on vérifie si c'est une question personnages
+        const isPersonnagesAnswer = meta && meta[questionIndex]?.slot === 'personnages';
 
-      // PREMIUM : après réponse "personnages" (et pas choix A–E) → normalisation LLM + génération traits par personnage + insertion
-      if (isPersonnagesAnswer && !looksLikeChoiceAE && meta && currentCandidate.session.normalizedWorks) {
+        // PREMIUM : après réponse "personnages" (et pas choix A–E) → normalisation LLM + génération traits par personnage + insertion
+        if (isPersonnagesAnswer && meta && currentCandidate.session.normalizedWorks) {
         const workIndex = meta[questionIndex].workIndex;
         const work = currentCandidate.session.normalizedWorks[workIndex]?.canonicalTitle ?? works[workIndex] ?? '';
         const trimmed = (userMessage || '').trim().toLowerCase();
@@ -1059,6 +1062,7 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
           }
           currentCandidate = reloaded;
           finalQueue = currentCandidate.blockQueues?.[blockNumber] ?? finalQueue;
+        }
         }
       }
 
@@ -1321,22 +1325,58 @@ Ordre : motif #1, personnages #1, motif #2, personnages #2, motif #3, personnage
           return (slotOrder[a.slot] ?? 0) - (slotOrder[b.slot] ?? 0);
         });
         const questions = items.map((i) => i.text).filter((t) => t.length > 0);
-        const meta: Block2BQuestionMeta[] = items.map((i) => ({ workIndex: i.workIndex, slot: i.slot }));
-        if (questions.length < 6 || meta.length < 6) return null;
+        const metaFromLLM: Block2BQuestionMeta[] = items.map((i) => ({ workIndex: i.workIndex, slot: i.slot }));
+        if (questions.length < 6 || metaFromLLM.length < 6) return null;
         const q6 = questions.slice(0, 6);
-        const m6 = meta.slice(0, 6);
+        const m6 = metaFromLLM.slice(0, 6);
         const questionsSansCrochets = this.stripWorkBracketsFromQuestions(q6, works);
-        let finalQuestions = questionsSansCrochets;
-        let finalMeta = m6[0]?.slot === 'motif' ? m6 : canonicalMeta;
-        if (finalMeta[0]?.slot !== 'motif') {
-          finalMeta = [...canonicalMeta];
-          finalQuestions = this.rebuildQuestionsCanonical(finalQuestions, finalMeta, works);
+        
+        // P0-1 : ALIGNEMENT META / ORDRE RÉEL QUESTIONS
+        // Ne PAS faire confiance au meta LLM, détecter dynamiquement le type de chaque question
+        const detectedMeta: Block2BQuestionMeta[] = [];
+        for (let i = 0; i < questionsSansCrochets.length; i++) {
+          const q = questionsSansCrochets[i];
+          const isMotif = /Qu'est-ce qui t'attire.*\n.*A\./i.test(q) || /A\.\s*\S/i.test(q);
+          const isPersonnages = /quels sont les.*personnages/i.test(q) || /personnages qui te parlent/i.test(q);
+          
+          if (isMotif) {
+            // Déduire workIndex depuis titre œuvre mentionné dans question
+            let detectedWorkIndex = m6[i]?.workIndex ?? 0;
+            for (let wIdx = 0; wIdx < works.length; wIdx++) {
+              const workTitle = works[wIdx];
+              if (workTitle && q.includes(workTitle)) {
+                detectedWorkIndex = wIdx;
+                break;
+              }
+            }
+            detectedMeta.push({ workIndex: detectedWorkIndex, slot: 'motif' });
+          } else if (isPersonnages) {
+            // Déduire workIndex depuis titre œuvre mentionné
+            let detectedWorkIndex = m6[i]?.workIndex ?? 0;
+            for (let wIdx = 0; wIdx < works.length; wIdx++) {
+              const workTitle = works[wIdx];
+              if (workTitle && q.includes(workTitle)) {
+                detectedWorkIndex = wIdx;
+                break;
+              }
+            }
+            detectedMeta.push({ workIndex: detectedWorkIndex, slot: 'personnages' });
+          } else {
+            // Fallback : conserver meta LLM
+            detectedMeta.push(m6[i] || { workIndex: 0, slot: 'motif' });
+          }
         }
-        const firstQ = finalQuestions[0] || '';
+        
+        const firstQ = questionsSansCrochets[0] || '';
         if (!this.hasMotifAE(firstQ)) {
-          finalQuestions[0] = this.ensureMotifAEFormat(firstQ, works[finalMeta[0]?.workIndex ?? 0]);
+          questionsSansCrochets[0] = this.ensureMotifAEFormat(firstQ, works[detectedMeta[0]?.workIndex ?? 0]);
         }
-        return { questions: finalQuestions, meta: finalMeta };
+        
+        console.log('[ORCHESTRATOR] P0-1: Meta aligné dynamiquement avec ordre réel questions', {
+          detectedMeta: detectedMeta.map(m => m.slot)
+        });
+        
+        return { questions: questionsSansCrochets, meta: detectedMeta };
       } catch {
         return null;
       }
@@ -1362,13 +1402,36 @@ Ordre : motif #1, personnages #1, motif #2, personnages #2, motif #3, personnage
     result = tryParse();
     if (result) return result;
 
-    // Fallback : 3 questions motif personnalisées (LLM une par œuvre) + 3 personnages avec titre
+    // P0-2 : FALLBACK 2B ROBUSTE — Validation spécificité motifs obligatoire
     console.warn('[ORCHESTRATOR] BLOC 2B premium: fallback personnalisé (motif LLM + personnages titre)');
-    const motifQuestions = await Promise.all([
-      this.generateOneMotifQuestionForWork(works[2] ?? w2),
-      this.generateOneMotifQuestionForWork(works[1] ?? w1),
-      this.generateOneMotifQuestionForWork(works[0] ?? w0),
-    ]);
+    
+    // Générer motifs avec retry individuel si validation échoue
+    const motifQuestions: string[] = [];
+    for (const [idx, workTitle] of [works[2] ?? w2, works[1] ?? w1, works[0] ?? w0].entries()) {
+      let motifQ = await this.generateOneMotifQuestionForWork(workTitle);
+      
+      // Retry individuel si motif ne contient pas 5 options A-E
+      if (!this.hasMotifAE(motifQ)) {
+        console.warn(`[ORCHESTRATOR] P0-2: Motif œuvre ${workTitle} invalide, retry`);
+        motifQ = await this.generateOneMotifQuestionForWork(workTitle);
+        if (!this.hasMotifAE(motifQ)) {
+          console.error(`[ORCHESTRATOR] P0-2: Motif œuvre ${workTitle} invalide après retry, fallback déterministe`);
+          motifQ = this.ensureMotifAEFormat('', workTitle);
+        }
+      }
+      
+      motifQuestions.push(motifQ);
+    }
+    
+    // Validation spécificité motifs (similarité < 70%)
+    const motifsValidation = validateMotifsSpecificity(motifQuestions[0], motifQuestions[1], motifQuestions[2]);
+    if (!motifsValidation.valid) {
+      console.error('[ORCHESTRATOR] P0-2: Fallback motifs validation échouée (FAIL-HARD)', motifsValidation.error);
+      throw new Error(`BLOC 2B fallback échoué: motifs non spécifiques. ${motifsValidation.error}`);
+    }
+    
+    console.log('[ORCHESTRATOR] P0-2: Fallback motifs validés avec succès (spécificité garantie)');
+    
     const persoQuestions = [
       `Dans « ${works[2] ?? w2} », quels sont les 1 à 3 personnages qui te parlent le plus ?`,
       `Dans « ${works[1] ?? w1} », quels sont les 1 à 3 personnages qui te parlent le plus ?`,
@@ -1382,7 +1445,18 @@ Ordre : motif #1, personnages #1, motif #2, personnages #2, motif #3, personnage
       motifQuestions[2],
       persoQuestions[2],
     ];
-    return { questions: this.stripWorkBracketsFromQuestions(fallbackQuestions, works), meta: canonicalMeta };
+    
+    // P0-1 : Construire meta dynamiquement (fallback connaît l'ordre)
+    const fallbackMeta: Block2BQuestionMeta[] = [
+      { workIndex: 2, slot: 'motif' },
+      { workIndex: 2, slot: 'personnages' },
+      { workIndex: 1, slot: 'motif' },
+      { workIndex: 1, slot: 'personnages' },
+      { workIndex: 0, slot: 'motif' },
+      { workIndex: 0, slot: 'personnages' },
+    ];
+    
+    return { questions: this.stripWorkBracketsFromQuestions(fallbackQuestions, works), meta: fallbackMeta };
   }
 
   /** Génère une seule question motif (avec 5 options A–E) personnalisée pour une œuvre. */
