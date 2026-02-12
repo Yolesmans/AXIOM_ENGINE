@@ -1304,7 +1304,7 @@ Ordre : motif #1, personnages #1, motif #2, personnages #2, motif #3, personnage
         { role: 'system', content: systemPrompt },
         ...messages,
       ],
-      temperature: 0.35,
+      temperature: 0.6,
     });
     let raw = completion.replace(/^```\w*\n?|\n?```$/g, '').trim();
     raw = this.extractFirstJsonArray(raw);
@@ -1395,7 +1395,7 @@ Ordre : motif #1, personnages #1, motif #2, personnages #2, motif #3, personnage
         { role: 'system', content: retryPrompt },
         ...messages,
       ],
-      temperature: 0.2,
+      temperature: 0.6,
     });
     raw = completion.replace(/^```\w*\n?|\n?```$/g, '').trim();
     raw = this.extractFirstJsonArray(raw);

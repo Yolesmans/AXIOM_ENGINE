@@ -1987,8 +1987,17 @@ Toute sortie hors règles = invalide.`;
     }
 
     // Validation REVELIOM pour miroirs (blocs 3-9 uniquement) — sur texte nettoyé
-    let expectsAnswer = cleanMirrorText ? cleanMirrorText.trim().endsWith('?') : false;
+    // Détection intelligente attente réponse
+    const looksLikeQuestion =
+      aiText &&
+      (
+        aiText.trim().endsWith('?') ||
+        /A\.\s+\S/.test(aiText) ||                 // options A-E
+        /\(1 lettre\)/i.test(aiText) ||            // instruction réponse courte
+        /réponds/i.test(aiText)
+      );
     let isMirror = false;
+    let expectsAnswer = isMirror ? true : (looksLikeQuestion || false);
     
     if (cleanMirrorText && blocNumber >= 1 && blocNumber <= 9 && !expectsAnswer) {
       // C'est un miroir → utiliser nouvelle architecture séparée (blocs 1 et 3-9)
