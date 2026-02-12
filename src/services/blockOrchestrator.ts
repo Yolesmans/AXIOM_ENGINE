@@ -3,7 +3,7 @@ import type { Block2BQuestionMeta } from '../types/blocks.js';
 import { candidateStore } from '../store/sessionStore.js';
 import { callOpenAI, callOpenAIStream } from './openaiClient.js';
 import { BLOC_01, BLOC_02, BLOC_03, executeAxiom } from '../engine/axiomExecutor.js';
-import { STATIC_QUESTIONS } from '../engine/staticQuestions.js';
+import { STATIC_QUESTIONS, getStaticQuestion } from '../engine/staticQuestions.js';
 // getFullAxiomPrompt n'est pas exporté, on doit le reconstruire
 import { PROMPT_AXIOM_ENGINE, PROMPT_AXIOM_PROFIL } from '../engine/prompts.js';
 import {
@@ -1137,24 +1137,40 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
           identityDone: true,
         });
 
-        let candidateForBloc3 = candidateStore.get(candidateId) ?? (await candidateStore.getAsync(candidateId));
-        if (!candidateForBloc3) {
-          throw new Error(`Candidate ${candidateId} not found after 2B completion`);
-        }
-        const nextResult = await executeAxiom({
-          candidate: candidateForBloc3,
-          userMessage: null,
-          event: undefined,
+        // 🔒 Transition stable directe 2B → 3 (bypass executeAxiom)
+        const firstQuestionBloc3 =
+          getStaticQuestion(3, 0) ||
+          `Quand tu dois prendre une décision importante, tu te fies plutôt à :
+A. Ce qui est logique et cohérent
+B. Ce que tu ressens comme juste
+C. Ce qui a déjà fait ses preuves
+D. Ce qui t'ouvre le plus d'options
+(1 lettre)`;
+
+        // Enregistrer la question dans conversationHistory (structure moteur respectée)
+        candidateStore.appendAssistantMessage(candidateId, firstQuestionBloc3, {
+          block: 3,
+          step: BLOC_03,
+          kind: 'question',
         });
-        const nextQuestion = normalizeSingleResponse(nextResult.response || '');
-        const combinedResponse = `${mirror}\n\n${nextQuestion}`;
+
+        // Mettre à jour UI state proprement
+        candidateStore.updateUIState(candidateId, {
+          step: BLOC_03,
+          lastQuestion: firstQuestionBloc3,
+        });
+
+        console.log('[ORCHESTRATOR] Transition 2B→3 directe (stable, sans executeAxiom)');
+
+        const combinedResponse = `${mirror}\n\n${firstQuestionBloc3}`;
+
         return {
           response: combinedResponse,
           step: BLOC_03,
-          expectsAnswer: nextResult.expectsAnswer,
+          expectsAnswer: true,
           autoContinue: false,
           mirror,
-          nextQuestion,
+          nextQuestion: firstQuestionBloc3,
         };
       } else {
         // Il reste des questions → Servir la suivante (pas d'API)
