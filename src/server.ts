@@ -88,6 +88,12 @@ function logRequestState(candidate: AxiomCandidate, label?: string): void {
 // PRIORITÉ A : Empêcher les retours en arrière
 // Dérive l'état depuis l'historique du candidat si UI est null
 function deriveStepFromHistory(candidate: AxiomCandidate): string {
+  // Règle 0 (PRIORITAIRE) : Préserver l'état d'attente du bouton Continuer pour éviter le blocage UI
+  // Si le store est déjà en Bloc 3 mais que l'UI est toujours en attente du bouton, on renvoie l'état d'attente.
+  if (candidate.session.ui?.step === STEP_WAIT_BLOC_3) {
+    return STEP_WAIT_BLOC_3;
+  }
+
   // Règle 1 : Si currentBlock > 0 → candidat est dans un bloc
   if (candidate.session.currentBlock > 0) {
     return `BLOC_${String(candidate.session.currentBlock).padStart(2, '0')}`;
@@ -140,6 +146,9 @@ const app = express();
 // BODY PARSER
 app.use(express.json());
 
+// SERVIR FICHIERS STATIQUES UI (pour tests E2E locaux)
+app.use(express.static('ui-test'));
+
 // CORS — AUTORISER VERCEL
 app.use(
   cors({
@@ -175,6 +184,23 @@ const AxiomBodySchema = z.object({
 
 app.get("/health", (_req, res) => {
   res.status(200).json({ ok: true });
+});
+
+// Endpoint pour reset du store en mode test
+app.post("/test/reset", (_req, res) => {
+  if (process.env.NODE_ENV !== 'test' && process.env.AXIOM_TEST_MODE !== 'true') {
+    return res.status(403).json({ error: 'Endpoint disponible uniquement en mode test' });
+  }
+  
+  try {
+    // Clear tous les candidats du store
+    candidateStore.clear();
+    console.log('[TEST] CandidateStore reset ✅');
+    res.status(200).json({ ok: true, message: 'Store reset' });
+  } catch (error: any) {
+    console.error('[TEST] Erreur reset store:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 app.get("/", (_req, res) => {
@@ -768,6 +794,50 @@ app.post("/axiom", async (req: Request, res: Response) => {
         expectsAnswer: false,
         autoContinue: false,
       });
+    }
+
+    // HANDLER EXPLICITE START_BLOC_3 (Transition 2B → 3)
+    if (event === 'START_BLOC_3') {
+      console.log('[SERVER][POST] Event START_BLOC_3 reçu - Déclenchement transition Bloc 3');
+      
+      // Exécute la logique métier via l'executor (récupère Q1 du Bloc 3)
+      const result = await executeWithAutoContinue(candidate, null, 'START_BLOC_3');
+      
+      // Rechargement du candidat pour synchroniser le tracking
+      const candidateIdAfterB3 = candidate.candidateId;
+      candidate = candidateStore.get(candidateIdAfterB3);
+      if (!candidate) {
+        candidate = await candidateStore.getAsync(candidateIdAfterB3);
+      }
+      if (!candidate) {
+        return res.status(500).json({
+          error: 'INTERNAL_ERROR',
+          message: 'Candidate not found after START_BLOC_3'
+        });
+      }
+      
+      try {
+        const trackingRow = candidateToLiveTrackingRow(candidate);
+        await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+        console.log('[SERVER] Google Sheet synchronisé pour le début du Bloc 3');
+      } catch (err) {
+        console.error('[SERVER] Erreur tracking START_BLOC_3:', err);
+      }
+
+      // Payload de sortie forçant l'affichage de la question et la réactivation du chat
+      const payload = {
+        sessionId: candidate.candidateId,
+        currentBlock: candidate.session.currentBlock,
+        state: 'collecting',
+        response: result.response || '',
+        step: result.step, // Retourne BLOC_03
+        expectsAnswer: true, // Crucial pour ré-afficher l'input texte
+        autoContinue: false,
+      };
+
+      console.log('[SERVER][POST] Transition 2B->3 terminée - Step:', result.step);
+
+      return res.status(200).json(payload);
     }
     
     // PHASE 2 : Déléguer BLOC 1 à l'orchestrateur (LOT 1 : uniquement si BLOC 1 déjà démarré)
@@ -1521,6 +1591,71 @@ app.post("/axiom/stream", async (req: Request, res: Response) => {
       return;
     }
 
+    // 5.1) GARDE STEP_WAIT_BLOC_3 (attente bouton Continuer)
+    if (candidate.session.ui?.step === STEP_WAIT_BLOC_3 && userMessageText && event !== 'START_BLOC_3') {
+      const payload = {
+        sessionId: candidate.candidateId,
+        currentBlock: candidate.session.currentBlock,
+        state: "wait_continue_button",
+        response: "Pour continuer vers le BLOC 3, clique sur le bouton 'Continuer' ci-dessus.",
+        step: STEP_WAIT_BLOC_3,
+        expectsAnswer: false,
+        autoContinue: false,
+      };
+
+      writeEvent("done", {
+        type: "done",
+        ...payload,
+      });
+      res.end();
+      return;
+    }
+
+    // 5.2) HANDLER EXPLICITE START_BLOC_3 (Transition 2B → 3)
+    if (event === 'START_BLOC_3') {
+      console.log('[SERVER][SSE] Event START_BLOC_3 reçu - Déclenchement transition Bloc 3');
+      
+      // Exécute la logique métier via l'executor (récupère Q1 du Bloc 3)
+      const result = await executeWithAutoContinue(candidate, null, 'START_BLOC_3', onChunk, onUx);
+      
+      // Rechargement du candidat pour synchroniser le tracking
+      const candidateIdAfterB3 = candidate.candidateId;
+      candidate = candidateStore.get(candidateIdAfterB3);
+      if (!candidate) {
+        candidate = await candidateStore.getAsync(candidateIdAfterB3);
+      }
+      if (!candidate) {
+        writeEvent('error', { error: 'INTERNAL_ERROR', message: 'Candidate not found after START_BLOC_3' });
+        res.end();
+        return;
+      }
+      
+      try {
+        const trackingRow = candidateToLiveTrackingRow(candidate);
+        await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+        console.log('[SERVER] Google Sheet synchronisé pour le début du Bloc 3');
+      } catch (err) {
+        console.error('[SERVER] Erreur tracking START_BLOC_3:', err);
+      }
+
+      // Payload de sortie forçant l'affichage de la question et la réactivation du chat
+      const payload = {
+        sessionId: candidate.candidateId,
+        currentBlock: candidate.session.currentBlock,
+        state: 'collecting',
+        response: streamedText || result.response || '',
+        step: result.step, // Retourne BLOC_03
+        expectsAnswer: true, // Crucial pour ré-afficher l'input texte
+        autoContinue: false,
+      };
+
+      console.log('[SERVER][SSE] Transition 2B->3 terminée - Step:', result.step);
+
+      writeEvent('done', { type: 'done', ...payload });
+      res.end();
+      return;
+    }
+
     // 6) BLOC 1 : déléguer à l'orchestrateur avec onChunk
     if (candidate.session.ui?.step === BLOC_01 && candidate.session.currentBlock === 1) {
       if (userMessageText) {
@@ -1732,7 +1867,9 @@ app.post("/axiom/stream", async (req: Request, res: Response) => {
     }
 
     // 9) Chemin générique — executeWithAutoContinue avec onChunk
+    console.log('[DEBUG_STREAM] Avant executeWithAutoContinue', { event, step: candidate.session.ui?.step, currentBlock: candidate.session.currentBlock });
     const result = await executeWithAutoContinue(candidate, userMessageText, event || null, onChunk, onUx);
+    console.log('[DEBUG_STREAM] Après executeWithAutoContinue', { result_step: result?.step, result_response: result?.response?.substring(0, 50) });
 
     const candidateIdAfterExecution = candidate.candidateId;
     candidate = candidateStore.get(candidateIdAfterExecution);
