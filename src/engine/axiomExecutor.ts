@@ -1810,12 +1810,21 @@ Toute sortie hors règles = invalide.`;
     let aiText: string | null = null;
 
     // DÉCISION : Forcer prompt miroir si toutes questions répondues (BLOCS 1 et 3-9, pas 2A/2B)
-    const shouldForceMirror =
+    let shouldForceMirror =
       (blocNumber === 1 || (blocNumber >= 3 && blocNumber <= 9)) && allQuestionsAnswered;
 
+    // CORRECTION BLOC 3 : Si toutes réponses données mais pas encore de miroir généré
+    // Forcer la génération du miroir au lieu de chercher une question inexistante
     const answersInBlockForLog = (candidate.conversationHistory || []).filter(
       m => m.role === 'user' && m.block === blocNumber && m.kind !== 'mirror_validation'
     ).length;
+    
+    if (blocNumber >= 1 && blocNumber <= 9 && blocNumber !== 2 && allQuestionsAnswered && userMessage) {
+      shouldForceMirror = true;
+      console.log(`[AXIOM_EXECUTOR] 🔥 Forçage miroir BLOC ${blocNumber} (toutes questions répondues)`);
+      console.log(`[AXIOM_EXECUTOR] Réponses: ${answersInBlockForLog}/${EXPECTED_ANSWERS_FOR_MIRROR[blocNumber]}`);
+    }
+
     if (blocNumber >= 1 && blocNumber <= 9) {
       console.log('[AXIOM][STATE]', {
         step: currentState,
