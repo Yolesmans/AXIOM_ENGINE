@@ -961,6 +961,15 @@ class CandidateStore {
     this.persistCandidate(candidateId);
     return updatedAnswerMap;
   }
+
+  /**
+   * Vide complètement le store (pour tests uniquement)
+   */
+  clear(): void {
+    if (this.candidates && typeof this.candidates.clear === 'function') {
+      this.candidates.clear();
+    }
+  }
 }
 
 export const candidateStore = new CandidateStore();
