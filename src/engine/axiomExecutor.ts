@@ -1105,6 +1105,7 @@ export const BLOC_07 = 'BLOC_07';
 export const BLOC_08 = 'BLOC_08';
 export const BLOC_09 = 'BLOC_09';
 export const BLOC_10 = 'BLOC_10';
+export const WAIT_BLOC10_YES = 'WAIT_BLOC10_YES';
 export const STEP_99_MATCH_READY = 'STEP_99_MATCH_READY';
 export const STEP_99_MATCHING = 'STEP_99_MATCHING';
 export const DONE_MATCHING = 'DONE_MATCHING';
@@ -1215,6 +1216,50 @@ export async function executeAxiom(
 ): Promise<ExecuteAxiomResult> {
   const { candidate: inputCandidate, userMessage, event, onChunk, onUx } = input;
   let candidate = inputCandidate;
+
+  // ============================================
+  // 🚨 PRIORITÉ ABSOLUE : EVENTS EXPLICITES
+  // ============================================
+  // Les events (START_BLOC_1, START_BLOC_3, etc.) DOIVENT être traités AVANT toute logique
+  // de dérivation d'état, sinon ils sont interceptés par les conditions de currentState
+  
+  if (event === 'START_BLOC_3') {
+    // Mettre à jour l'état UI vers BLOC_03
+    candidateStore.updateUIState(candidate.candidateId, {
+      step: BLOC_03,
+      lastQuestion: null,
+      identityDone: true,
+    });
+
+    // Mettre à jour la session vers collecting + bloc 3
+    candidateStore.updateSession(candidate.candidateId, {
+      state: 'collecting',
+      currentBlock: 3,
+    });
+
+    // Récupérer première question BLOC 3 (catalogue statique)
+    const firstQuestion = getStaticQuestion(3, 0);
+    if (!firstQuestion) {
+      throw new Error('Question BLOC 3 introuvable');
+    }
+
+    // Enregistrer la question dans conversationHistory (structure moteur respectée)
+    candidateStore.appendAssistantMessage(candidate.candidateId, firstQuestion, {
+      block: 3,
+      step: BLOC_03,
+      kind: 'question',
+    });
+
+    console.log('[AXIOM_EXECUTOR] Transition 2B→3 via bouton user-trigger (simplifié)');
+
+    return {
+      response: firstQuestion,
+      step: BLOC_03,
+      lastQuestion: firstQuestion,
+      expectsAnswer: true,
+      autoContinue: false,
+    };
+  }
 
   // PRIORITÉ A3 : INIT ÉTAT avec dérivation depuis conversationHistory (source de vérité n°1)
   // Synchronisation automatique FSM ← Historique
@@ -1663,48 +1708,6 @@ Toute sortie hors règles = invalide.`;
       step: STEP_03_BLOC1,
       lastQuestion: null,
       expectsAnswer: false,
-      autoContinue: false,
-    };
-  }
-
-  // ============================================
-  // START_BLOC_3 (event bouton "Continuer" après miroir 2B)
-  // ============================================
-  // Handler simplifié : indépendant de currentState et FSM intermédiaire
-  if (event === 'START_BLOC_3') {
-    // Mettre à jour l'état UI vers BLOC_03
-    candidateStore.updateUIState(candidate.candidateId, {
-      step: BLOC_03,
-      lastQuestion: null,
-      identityDone: true,
-    });
-
-    // Mettre à jour la session vers collecting + bloc 3
-    candidateStore.updateSession(candidate.candidateId, {
-      state: 'collecting',
-      currentBlock: 3,
-    });
-
-    // Récupérer première question BLOC 3 (catalogue statique)
-    const firstQuestion = getStaticQuestion(3, 0);
-    if (!firstQuestion) {
-      throw new Error('Question BLOC 3 introuvable');
-    }
-
-    // Enregistrer la question dans conversationHistory (structure moteur respectée)
-    candidateStore.appendAssistantMessage(candidate.candidateId, firstQuestion, {
-      block: 3,
-      step: BLOC_03,
-      kind: 'question',
-    });
-
-    console.log('[AXIOM_EXECUTOR] Transition 2B→3 via bouton user-trigger (simplifié)');
-
-    return {
-      response: firstQuestion,
-      step: BLOC_03,
-      lastQuestion: firstQuestion,
-      expectsAnswer: true,
       autoContinue: false,
     };
   }
@@ -2173,31 +2176,9 @@ Toute sortie hors règles = invalide.`;
         // Fin du bloc (pas un miroir) → passer au suivant
         nextState = blocStates[blocNumber] as any;
       } else if (!expectsAnswer && blocNumber === 10) {
-        // Fin du bloc 10 → synthèse déjà générée avec nouvelle architecture (si shouldForceSynthesis était vrai)
-        // Sinon, générer maintenant
-        if (!aiText) {
-          try {
-            const conversationHistory = candidate.conversationHistory || [];
-            const allUserAnswers = conversationHistory
-              .filter(m => m.role === 'user' && m.kind !== 'mirror_validation')
-              .map(m => m.content.trim())
-              .filter(a => a.length > 0);
-            
-            // Générer synthèse avec nouvelle architecture
-            const generatedSynthesis = await generateMirrorWithNewArchitecture(allUserAnswers, 'synthesis', undefined, onChunk, onUx);
-            
-            candidateStore.setFinalProfileText(candidate.candidateId, generatedSynthesis);
-            aiText = generatedSynthesis;
-            console.log(`[AXIOM_EXECUTOR] Synthèse finale BLOC 10 générée avec succès (nouvelle architecture)`);
-          } catch (error) {
-            console.error(`[AXIOM_EXECUTOR] Erreur génération synthèse finale avec nouvelle architecture:`, error);
-            console.error('[AXIOM_EXECUTOR] Synthèse finale vide');
-          }
-        } else {
-          // Synthèse déjà générée → s'assurer qu'elle est stockée
-          candidateStore.setFinalProfileText(candidate.candidateId, aiText);
-        }
-        nextState = STEP_99_MATCH_READY;
+        // Fin du bloc 9 → passer à l'attente du "Oui" pour BLOC 10
+        // Ne pas générer la synthèse maintenant, attendre le verrou "Oui"
+        nextState = WAIT_BLOC10_YES;
       } else if (isMirror && expectsAnswer) {
         // Miroir affiché → rester sur le bloc courant jusqu'à validation (LOT 1)
         nextState = currentState;
@@ -2208,31 +2189,9 @@ Toute sortie hors règles = invalide.`;
         // Fin du bloc (pas un miroir) → passer au suivant
         nextState = blocStates[blocNumber] as any;
       } else if (!expectsAnswer && blocNumber === 10) {
-        // Fin du bloc 10 → synthèse déjà générée avec nouvelle architecture (si shouldForceSynthesis était vrai)
-        // Sinon, générer maintenant
-        if (!aiText) {
-          try {
-            const conversationHistory = candidate.conversationHistory || [];
-            const allUserAnswers = conversationHistory
-              .filter(m => m.role === 'user' && m.kind !== 'mirror_validation')
-              .map(m => m.content.trim())
-              .filter(a => a.length > 0);
-            
-            // Générer synthèse avec nouvelle architecture
-            const generatedSynthesis = await generateMirrorWithNewArchitecture(allUserAnswers, 'synthesis', undefined, onChunk, onUx);
-            
-            candidateStore.setFinalProfileText(candidate.candidateId, generatedSynthesis);
-            aiText = generatedSynthesis;
-            console.log(`[AXIOM_EXECUTOR] Synthèse finale BLOC 10 générée avec succès (nouvelle architecture)`);
-          } catch (error) {
-            console.error(`[AXIOM_EXECUTOR] Erreur génération synthèse finale avec nouvelle architecture:`, error);
-            console.error('[AXIOM_EXECUTOR] Synthèse finale vide');
-          }
-        } else {
-          // Synthèse déjà générée → s'assurer qu'elle est stockée
-          candidateStore.setFinalProfileText(candidate.candidateId, aiText);
-        }
-        nextState = STEP_99_MATCH_READY;
+        // Fin du bloc 9 → passer à l'attente du "Oui" pour BLOC 10
+        // Ne pas générer la synthèse maintenant, attendre le verrou "Oui"
+        nextState = WAIT_BLOC10_YES;
       } else if (isMirror && expectsAnswer) {
         // Miroir affiché → rester sur le bloc courant jusqu'à validation (LOT 1)
         nextState = currentState;
@@ -2341,14 +2300,91 @@ Toute sortie hors règles = invalide.`;
   }
 
   // ============================================
-  // STEP_99_MATCH_READY
+  // WAIT_BLOC10_YES — Verrou "Oui" obligatoire
   // ============================================
-  if (currentState === STEP_99_MATCH_READY) {
-    // Attendre le bouton "Je génère mon matching"
-    if (!userMessage && !event) {
+  if (currentState === WAIT_BLOC10_YES) {
+    if (!userMessage) {
       logTransition(candidate.candidateId, stateIn, currentState, 'message');
       return {
-        response: 'Ton profil est terminé.\n\n👉 Découvre ton matching pour savoir si ce poste te correspond vraiment.',
+        response: '🔒 TRANSITION EXPLICITE — ACCÈS À LA SYNTHÈSE FINALE\n\nLes informations nécessaires à l\'analyse sont maintenant collectées.\n\nAucune lecture globale n\'a encore été produite.\n\n⚠️ VERROU TECHNIQUE FINAL\n\nDis-moi exactement "Oui" pour activer le BLOC 10 et découvrir ta synthèse complète.\n\nToute autre réponse maintient AXIOM en état de collecte inactive.\nAucune synthèse ne peut être produite sans ce mot exact.',
+        step: currentState,
+        lastQuestion: null,
+        expectsAnswer: true,
+        autoContinue: false,
+      };
+    }
+    
+    // Vérifier si la réponse est exactement "Oui"
+    const cleanMessage = userMessage.trim().toLowerCase();
+    if (cleanMessage !== 'oui') {
+      logTransition(candidate.candidateId, stateIn, currentState, 'message');
+      return {
+        response: 'Pour accéder à ta synthèse finale, dis-moi exactement "Oui".\n\nToute autre réponse maintient AXIOM en état d\'attente.',
+        step: currentState,
+        lastQuestion: null,
+        expectsAnswer: true,
+        autoContinue: false,
+      };
+    }
+    
+    // "Oui" reçu → Générer synthèse BLOC 10
+    console.log('[AXIOM_EXECUTOR] Verrou "Oui" validé — génération synthèse BLOC 10');
+    
+    let synthesisText: string | null = null;
+    try {
+      const conversationHistory = candidate.conversationHistory || [];
+      const allUserAnswers = conversationHistory
+        .filter(m => m.role === 'user' && m.kind !== 'mirror_validation')
+        .map(m => m.content.trim())
+        .filter(a => a.length > 0);
+      
+      // Générer synthèse avec nouvelle architecture
+      const generatedSynthesis = await generateMirrorWithNewArchitecture(allUserAnswers, 'synthesis', undefined, onChunk, onUx);
+      
+      candidateStore.setFinalProfileText(candidate.candidateId, generatedSynthesis);
+      synthesisText = generatedSynthesis;
+      console.log(`[AXIOM_EXECUTOR] Synthèse finale BLOC 10 générée avec succès`);
+    } catch (error) {
+      console.error(`[AXIOM_EXECUTOR] Erreur génération synthèse finale:`, error);
+      synthesisText = 'Erreur lors de la génération de ta synthèse. Veuillez réessayer.';
+    }
+    
+    // Transition vers STEP_99_MATCH_READY
+    const nextState = STEP_99_MATCH_READY;
+    candidateStore.updateUIState(candidate.candidateId, {
+      step: nextState,
+      lastQuestion: null,
+      tutoiement: ui.tutoiement || undefined,
+      identityDone: true,
+    });
+    
+    // Enregistrer la synthèse
+    if (synthesisText) {
+      candidateStore.appendAssistantMessage(candidate.candidateId, synthesisText, {
+        step: nextState,
+        kind: 'other',
+      });
+    }
+    
+    logTransition(candidate.candidateId, stateIn, nextState, 'message');
+    return {
+      response: synthesisText || '',
+      step: nextState,
+      lastQuestion: null,
+      expectsAnswer: false,
+      autoContinue: false,
+    };
+  }
+
+  // ============================================
+  // STEP_99_MATCH_READY — Attente event START_MATCHING
+  // ============================================
+  if (currentState === STEP_99_MATCH_READY) {
+    // Vérifier que l'event START_MATCHING est présent
+    if (!event || event !== 'START_MATCHING') {
+      logTransition(candidate.candidateId, stateIn, currentState, 'message');
+      return {
+        response: 'Ton profil est terminé.\n\n👉 Clique sur le bouton "Je génère mon matching" pour découvrir si ce poste te correspond vraiment.',
         step: currentState,
         lastQuestion: null,
         expectsAnswer: false,
@@ -2356,7 +2392,8 @@ Toute sortie hors règles = invalide.`;
       };
     }
 
-    // Passer à matching
+    // Event START_MATCHING reçu → Passer à matching
+    console.log('[AXIOM_EXECUTOR] Event START_MATCHING reçu — génération matching');
     currentState = STEP_99_MATCHING;
     candidateStore.updateUIState(candidate.candidateId, {
       step: currentState,
@@ -2365,7 +2402,7 @@ Toute sortie hors règles = invalide.`;
       identityDone: true,
     });
 
-    logTransition(candidate.candidateId, stateIn, currentState, 'message');
+    logTransition(candidate.candidateId, stateIn, currentState, 'event');
 
     // Enchaîner immédiatement avec matching
     return await executeAxiom({

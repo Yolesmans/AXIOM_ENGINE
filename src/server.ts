@@ -22,6 +22,7 @@ import {
   BLOC_08,
   BLOC_09,
   BLOC_10,
+  WAIT_BLOC10_YES,
   STEP_99_MATCH_READY,
   STEP_99_MATCHING,
   DONE_MATCHING,
@@ -88,8 +89,10 @@ function logRequestState(candidate: AxiomCandidate, label?: string): void {
 // PRIORITÉ A : Empêcher les retours en arrière
 // Dérive l'état depuis l'historique du candidat si UI est null
 function deriveStepFromHistory(candidate: AxiomCandidate): string {
-  // Règle 0 (PRIORITAIRE) : Préserver l'état d'attente du bouton Continuer
+  // Règle 0 (PRIORITAIRE) : Préserver les états d'attente de bouton/verrou
   if (candidate.session.ui?.step === STEP_WAIT_BLOC_3) return STEP_WAIT_BLOC_3;
+  if (candidate.session.ui?.step === WAIT_BLOC10_YES) return WAIT_BLOC10_YES;
+  if (candidate.session.ui?.step === STEP_99_MATCH_READY) return STEP_99_MATCH_READY;
   // Règle 1 : Si currentBlock > 0 → candidat est dans un bloc
   if (candidate.session.currentBlock > 0) return `BLOC_${String(candidate.session.currentBlock).padStart(2, '0')}`;
   // Règle 2 : Si réponses présentes ou tone choisi → candidat au préambule ou après
@@ -109,6 +112,10 @@ function mapStepToState(step: string): string {
   }
 
   if ([BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10].includes(step as any)) {
+    return "collecting";
+  }
+
+  if (step === WAIT_BLOC10_YES) {
     return "collecting";
   }
 
@@ -798,6 +805,31 @@ app.post("/axiom", async (req: Request, res: Response) => {
         response: result.response || '',
         step: result.step,
         expectsAnswer: true,
+        autoContinue: false
+      });
+    }
+
+    // HANDLER EXPLICITE START_MATCHING (Génération matching)
+    if (event === 'START_MATCHING') {
+      console.log('[SERVER] Event START_MATCHING reçu — génération matching');
+      const result = await executeWithAutoContinue(candidate, null, 'START_MATCHING');
+      const updated = await candidateStore.getAsync(candidate.candidateId);
+      
+      if (updated) {
+        try {
+          const trackingRow = candidateToLiveTrackingRow(updated);
+          await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+          console.log('[SERVER] Google Sheet mis à jour après matching');
+        } catch (e) { console.error('Sheet Error:', e); }
+      }
+
+      return res.status(200).json({
+        sessionId: candidate.candidateId,
+        currentBlock: updated?.session.currentBlock || 10,
+        state: 'matching',
+        response: result.response || '',
+        step: result.step,
+        expectsAnswer: false,
         autoContinue: false
       });
     }
@@ -1594,6 +1626,34 @@ app.post("/axiom/stream", async (req: Request, res: Response) => {
         response: streamedText || result.response || '',
         step: result.step,
         expectsAnswer: true,
+        autoContinue: false
+      });
+      res.end();
+      return;
+    }
+
+    // 5.3) HANDLER EXPLICITE START_MATCHING (Génération matching)
+    if (event === 'START_MATCHING') {
+      console.log('[SERVER] Event START_MATCHING reçu — génération matching');
+      const result = await executeWithAutoContinue(candidate, null, 'START_MATCHING', onChunk, onUx);
+      const updated = await candidateStore.getAsync(candidate.candidateId);
+      
+      if (updated) {
+        try {
+          const trackingRow = candidateToLiveTrackingRow(updated);
+          await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+          console.log('[SERVER] Google Sheet mis à jour après matching');
+        } catch (e) { console.error('Sheet Error:', e); }
+      }
+
+      writeEvent('done', { 
+        type: 'done', 
+        sessionId: candidate.candidateId,
+        currentBlock: updated?.session.currentBlock || 10,
+        state: 'matching',
+        response: streamedText || result.response || '',
+        step: result.step,
+        expectsAnswer: false,
         autoContinue: false
       });
       res.end();
