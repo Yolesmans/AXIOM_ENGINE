@@ -88,33 +88,15 @@ function logRequestState(candidate: AxiomCandidate, label?: string): void {
 // PRIORITÉ A : Empêcher les retours en arrière
 // Dérive l'état depuis l'historique du candidat si UI est null
 function deriveStepFromHistory(candidate: AxiomCandidate): string {
-  // Règle 0 (PRIORITAIRE) : Préserver l'état d'attente du bouton Continuer pour éviter le blocage UI
-  // Si le store est déjà en Bloc 3 mais que l'UI est toujours en attente du bouton, on renvoie l'état d'attente.
-  if (candidate.session.ui?.step === STEP_WAIT_BLOC_3) {
-    return STEP_WAIT_BLOC_3;
-  }
-
+  // Règle 0 (PRIORITAIRE) : Préserver l'état d'attente du bouton Continuer
+  if (candidate.session.ui?.step === STEP_WAIT_BLOC_3) return STEP_WAIT_BLOC_3;
   // Règle 1 : Si currentBlock > 0 → candidat est dans un bloc
-  if (candidate.session.currentBlock > 0) {
-    return `BLOC_${String(candidate.session.currentBlock).padStart(2, '0')}`;
-  }
-  
-  // Règle 2 : Si réponses présentes → candidat a dépassé le préambule
-  if (candidate.answers.length > 0) {
-    return STEP_03_BLOC1;
-  }
-  
-  // Règle 3 : Si tone choisi → candidat est au préambule ou après
-  if (candidate.tonePreference) {
-    return STEP_03_BLOC1;
-  }
-  
-  // Règle 4 : Si identité complétée → candidat est au tone
-  if (candidate.identity.completedAt) {
-    return STEP_02_TONE;
-  }
-  
-  // Règle 5 : Sinon → nouveau candidat, identité
+  if (candidate.session.currentBlock > 0) return `BLOC_${String(candidate.session.currentBlock).padStart(2, '0')}`;
+  // Règle 2 : Si réponses présentes ou tone choisi → candidat au préambule ou après
+  if (candidate.answers.length > 0 || candidate.tonePreference) return STEP_03_BLOC1;
+  // Règle 3 : Si identité complétée → candidat est au tone
+  if (candidate.identity.completedAt) return STEP_02_TONE;
+  // Règle 4 : Sinon → nouveau candidat, identité
   return STEP_01_IDENTITY;
 }
 
@@ -798,46 +780,26 @@ app.post("/axiom", async (req: Request, res: Response) => {
 
     // HANDLER EXPLICITE START_BLOC_3 (Transition 2B → 3)
     if (event === 'START_BLOC_3') {
-      console.log('[SERVER][POST] Event START_BLOC_3 reçu - Déclenchement transition Bloc 3');
-      
-      // Exécute la logique métier via l'executor (récupère Q1 du Bloc 3)
+      console.log('[SERVER] Transition BLOC 3 amorcée');
       const result = await executeWithAutoContinue(candidate, null, 'START_BLOC_3');
+      const updated = await candidateStore.getAsync(candidate.candidateId);
       
-      // Rechargement du candidat pour synchroniser le tracking
-      const candidateIdAfterB3 = candidate.candidateId;
-      candidate = candidateStore.get(candidateIdAfterB3);
-      if (!candidate) {
-        candidate = await candidateStore.getAsync(candidateIdAfterB3);
-      }
-      if (!candidate) {
-        return res.status(500).json({
-          error: 'INTERNAL_ERROR',
-          message: 'Candidate not found after START_BLOC_3'
-        });
-      }
-      
-      try {
-        const trackingRow = candidateToLiveTrackingRow(candidate);
-        await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
-        console.log('[SERVER] Google Sheet synchronisé pour le début du Bloc 3');
-      } catch (err) {
-        console.error('[SERVER] Erreur tracking START_BLOC_3:', err);
+      if (updated) {
+        try {
+          const trackingRow = candidateToLiveTrackingRow(updated);
+          await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+        } catch (e) { console.error('Sheet Error:', e); }
       }
 
-      // Payload de sortie forçant l'affichage de la question et la réactivation du chat
-      const payload = {
+      return res.status(200).json({
         sessionId: candidate.candidateId,
-        currentBlock: candidate.session.currentBlock,
+        currentBlock: updated?.session.currentBlock || 3,
         state: 'collecting',
         response: result.response || '',
-        step: result.step, // Retourne BLOC_03
-        expectsAnswer: true, // Crucial pour ré-afficher l'input texte
-        autoContinue: false,
-      };
-
-      console.log('[SERVER][POST] Transition 2B->3 terminée - Step:', result.step);
-
-      return res.status(200).json(payload);
+        step: result.step,
+        expectsAnswer: true,
+        autoContinue: false
+      });
     }
     
     // PHASE 2 : Déléguer BLOC 1 à l'orchestrateur (LOT 1 : uniquement si BLOC 1 déjà démarré)
@@ -1613,45 +1575,27 @@ app.post("/axiom/stream", async (req: Request, res: Response) => {
 
     // 5.2) HANDLER EXPLICITE START_BLOC_3 (Transition 2B → 3)
     if (event === 'START_BLOC_3') {
-      console.log('[SERVER][SSE] Event START_BLOC_3 reçu - Déclenchement transition Bloc 3');
-      
-      // Exécute la logique métier via l'executor (récupère Q1 du Bloc 3)
+      console.log('[SERVER] Transition BLOC 3 amorcée');
       const result = await executeWithAutoContinue(candidate, null, 'START_BLOC_3', onChunk, onUx);
+      const updated = await candidateStore.getAsync(candidate.candidateId);
       
-      // Rechargement du candidat pour synchroniser le tracking
-      const candidateIdAfterB3 = candidate.candidateId;
-      candidate = candidateStore.get(candidateIdAfterB3);
-      if (!candidate) {
-        candidate = await candidateStore.getAsync(candidateIdAfterB3);
-      }
-      if (!candidate) {
-        writeEvent('error', { error: 'INTERNAL_ERROR', message: 'Candidate not found after START_BLOC_3' });
-        res.end();
-        return;
-      }
-      
-      try {
-        const trackingRow = candidateToLiveTrackingRow(candidate);
-        await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
-        console.log('[SERVER] Google Sheet synchronisé pour le début du Bloc 3');
-      } catch (err) {
-        console.error('[SERVER] Erreur tracking START_BLOC_3:', err);
+      if (updated) {
+        try {
+          const trackingRow = candidateToLiveTrackingRow(updated);
+          await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+        } catch (e) { console.error('Sheet Error:', e); }
       }
 
-      // Payload de sortie forçant l'affichage de la question et la réactivation du chat
-      const payload = {
+      writeEvent('done', { 
+        type: 'done', 
         sessionId: candidate.candidateId,
-        currentBlock: candidate.session.currentBlock,
+        currentBlock: updated?.session.currentBlock || 3,
         state: 'collecting',
         response: streamedText || result.response || '',
-        step: result.step, // Retourne BLOC_03
-        expectsAnswer: true, // Crucial pour ré-afficher l'input texte
-        autoContinue: false,
-      };
-
-      console.log('[SERVER][SSE] Transition 2B->3 terminée - Step:', result.step);
-
-      writeEvent('done', { type: 'done', ...payload });
+        step: result.step,
+        expectsAnswer: true,
+        autoContinue: false
+      });
       res.end();
       return;
     }
