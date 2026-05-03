@@ -2561,285 +2561,347 @@ function QRCodeOverlay({ user, onExit }: { user: UserProfile; onExit: () => void
                    </motion.div>
                 )}
 
-                {/* STEP 1: VALEUR CONCRÈTE */}
-                {step === 1 && (
+                {/* STEP 1: TON VRAI PROFIL — CE QUE LE RECRUTEUR VOIT */}
+                {step === 1 && (() => {
+                  const adn1 = user.adn || REAL_PROFILE_DATA;
+                  return (
                    <motion.div
                      key="vision"
-                     initial={{ opacity: 0, y: 40 }}
+                     initial={{ opacity: 0, y: 30 }}
                      animate={{ opacity: 1, y: 0 }}
-                     exit={{ opacity: 0, y: -40 }}
-                     className="grid grid-cols-1 lg:grid-cols-2 gap-16 lg:gap-24 items-center max-w-7xl"
+                     exit={{ opacity: 0, y: -30 }}
+                     className="w-full max-w-7xl grid grid-cols-1 lg:grid-cols-[1fr_1.4fr] gap-10 lg:gap-16 items-start"
                    >
-                      {/* GAUCHE : Valeur + Bullets */}
-                      <div className="space-y-10">
-                         <div className="space-y-6">
-                            <div className="inline-flex items-center gap-3 px-4 py-2 bg-reveliom-purple/5 rounded-full ring-1 ring-reveliom-purple/10">
+                      {/* GAUCHE : Hook + CTA */}
+                      <div className="space-y-10 lg:sticky lg:top-20">
+                         <div className="space-y-5">
+                            <div className="inline-flex items-center gap-2 px-4 py-2 bg-reveliom-purple/5 rounded-full ring-1 ring-reveliom-purple/10">
                                <ShieldCheck className="w-4 h-4 text-reveliom-purple" />
-                               <span className="text-[10px] font-black uppercase tracking-[0.3em] text-reveliom-purple">Signature Certifiée REVELIOM</span>
+                               <span className="text-[10px] font-black uppercase tracking-[0.3em] text-reveliom-purple">Ce que voit le recruteur</span>
                             </div>
-                            <h2 className="text-5xl sm:text-7xl font-serif font-black text-slate-900 leading-[0.9] tracking-tighter">
-                               Ton profil<br />
-                               <span className="text-reveliom-purple italic font-light">vaut + qu'un CV.</span>
+                            <h2 className="text-4xl sm:text-6xl font-serif font-black text-slate-900 leading-[0.95] tracking-tighter">
+                               Ton profil.<br />
+                               <span className="text-reveliom-purple italic font-light">100× mieux<br />qu'un CV.</span>
                             </h2>
-                            <p className="text-lg text-slate-500 font-serif italic leading-snug">
-                               40 minutes de vrai diagnostic.<br />
-                               <span className="text-slate-900 font-black not-italic">Un lien. Un QR code. Tout le reste est obsolète.</span>
+                            <p className="text-base text-slate-500 font-serif italic leading-relaxed">
+                               À droite, exactement ce qu'un recruteur voit en flashant ton QR code.<br />
+                               <span className="text-slate-900 font-black not-italic">Aucune lettre de motivation ne peut rivaliser avec ça.</span>
                             </p>
-                         </div>
-
-                         {/* 4 Value bullets */}
-                         <div className="space-y-5">
-                            {[
-                              { icon: <Zap className="w-4 h-4" />, title: "Lisible en 90 secondes", text: "Un recruteur voit ton fonctionnement réel, pas ton image." },
-                              { icon: <ShieldCheck className="w-4 h-4" />, title: "Zéro biais d'apparence", text: "Ton âge, ton école, ta photo — hors jeu. Ta structure, au premier plan." },
-                              { icon: <Fingerprint className="w-4 h-4" />, title: "40+ minutes de vrai diagnostic", text: "Aucune autre méthode ne génère ce niveau de précision." },
-                              { icon: <Target className="w-4 h-4" />, title: "Un seul lien pour postuler", text: "Ce QR remplace ta lettre de motivation. Pour toujours." },
-                            ].map((item, i) => (
-                              <motion.div
-                                key={i}
-                                initial={{ opacity: 0, x: -20 }}
-                                animate={{ opacity: 1, x: 0 }}
-                                transition={{ delay: 0.3 + i * 0.1 }}
-                                className="flex items-start gap-5 group"
-                              >
-                                 <div className="w-10 h-10 rounded-2xl bg-slate-50 border border-slate-100 flex items-center justify-center shrink-0 text-reveliom-purple group-hover:bg-reveliom-purple group-hover:text-white transition-all duration-300">
-                                    {item.icon}
-                                 </div>
-                                 <div className="pt-1">
-                                    <p className="font-black text-slate-900 text-sm">{item.title}</p>
-                                    <p className="text-slate-400 text-xs font-serif italic mt-0.5 leading-relaxed">{item.text}</p>
-                                 </div>
-                              </motion.div>
-                            ))}
-                         </div>
-
-                         <button
-                           onClick={() => setStep(2)}
-                           className="group px-12 py-6 bg-slate-900 text-white rounded-full font-black uppercase tracking-widest text-[11px] shadow-2xl hover:bg-reveliom-purple transition-all flex items-center gap-4"
-                         >
-                            Voir comment le placer sur mon CV
-                            <ArrowRight className="w-4 h-4 group-hover:translate-x-2 transition-transform" />
-                         </button>
-                      </div>
-
-                      {/* DROITE : Carte profil preview */}
-                      <div className="relative">
-                         <div className="absolute inset-0 bg-reveliom-purple/10 blur-[100px] animate-pulse" />
-                         <motion.div
-                           initial={{ opacity: 0, scale: 0.95, y: 20 }}
-                           animate={{ opacity: 1, scale: 1, y: 0 }}
-                           transition={{ delay: 0.4, type: "spring", stiffness: 100 }}
-                           className="relative bg-white rounded-[3rem] shadow-[0_50px_100px_-20px_rgba(0,0,0,0.12)] border border-slate-100 p-8 space-y-8"
-                         >
-                            {/* Header carte */}
-                            <div className="flex items-center gap-4">
-                               <div className="relative shrink-0">
-                                  <div className="w-16 h-16 rounded-2xl border-2 border-reveliom-purple/30 bg-white p-1.5 shadow-md">
-                                     <QRCodeSVG value={profileUrl} size={48} fgColor="#7B5BF5" bgColor="white" level="M" />
-                                  </div>
-                                  <motion.div
-                                    animate={{ scale: [1, 1.15, 1] }}
-                                    transition={{ repeat: Infinity, duration: 2 }}
-                                    className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-emerald-500 rounded-full border-2 border-white flex items-center justify-center"
-                                  >
-                                     <Check className="w-2.5 h-2.5 text-white" />
-                                  </motion.div>
-                               </div>
-                               <div className="flex-1 min-w-0">
-                                  <p className="font-black text-slate-900 text-lg truncate">{user.displayName}</p>
-                                  <p className="text-reveliom-purple text-[10px] font-black uppercase tracking-widest truncate">
-                                     {(user.adn || REAL_PROFILE_DATA).positionnement?.split(' ').slice(0,4).join(' ')}…
-                                  </p>
-                               </div>
-                            </div>
-
-                            {/* Métriques */}
-                            <div className="grid grid-cols-3 gap-3">
-                               {[
-                                 { label: "Diagnostic", value: "V8.4" },
-                                 { label: "Précision", value: "94%" },
-                                 { label: "Statut", value: "Actif" },
-                               ].map((m, i) => (
-                                 <div key={i} className="bg-slate-50 rounded-2xl p-3 text-center border border-slate-100">
-                                    <p className="text-xs font-black text-slate-900">{m.value}</p>
-                                    <p className="text-[8px] font-bold text-slate-400 uppercase tracking-wider mt-0.5">{m.label}</p>
-                                 </div>
-                               ))}
-                            </div>
-
-                            {/* Extrait synthèse */}
-                            <div className="bg-slate-900 rounded-2xl p-5 space-y-3">
-                               <p className="text-[8px] font-black uppercase tracking-widest text-slate-400">Lecture globale</p>
-                               <p className="text-white text-xs font-serif italic leading-relaxed line-clamp-3">
-                                  "{(user.adn || REAL_PROFILE_DATA).lecture_globale?.substring(0, 120)}…"
-                               </p>
-                            </div>
-
-                            {/* Badge certifié */}
-                            <div className="flex items-center justify-between">
-                               <div className="flex items-center gap-2">
-                                  <ShieldCheck className="w-4 h-4 text-emerald-500" />
-                                  <span className="text-[8px] font-black uppercase tracking-widest text-slate-400">Certifié REVELIOM</span>
-                               </div>
-                               <span className="text-[8px] font-black text-slate-300 uppercase tracking-widest">ID: MIR-{user.displayName?.substring(0,3).toUpperCase()}-2026</span>
-                            </div>
-                         </motion.div>
-                      </div>
-                   </motion.div>
-                )}
-
-                {/* STEP 2: CV MOCKUP RÉALISTE + DOWNLOAD */}
-                {step === 2 && (
-                   <motion.div
-                     key="action"
-                     initial={{ opacity: 0, scale: 1.02 }}
-                     animate={{ opacity: 1, scale: 1 }}
-                     exit={{ opacity: 0, scale: 0.98 }}
-                     className="max-w-7xl w-full grid grid-cols-1 lg:grid-cols-5 gap-12 lg:gap-20 items-start"
-                   >
-                      {/* GAUCHE : Instructions + Buttons */}
-                      <div className="lg:col-span-2 space-y-10 text-left">
-                         <div className="space-y-5">
-                            <h2 className="text-4xl sm:text-5xl font-serif font-black text-slate-900 leading-tight">
-                               3 étapes.<br />
-                               <span className="text-reveliom-purple italic font-light">Ton CV transformé.</span>
-                            </h2>
-                            <p className="text-base text-slate-400 font-serif italic leading-relaxed">
-                               Remplace ta photo par ton QR REVELIOM. Le recruteur flashe — ton profil complet s'ouvre.
-                            </p>
-                         </div>
-
-                         <div className="space-y-6">
-                            <TutorialPoint num="01" title="Télécharge ton QR REVELIOM" text="Clique sur le bouton ci-dessous — PNG haute résolution, prêt à l'impression." />
-                            <TutorialPoint num="02" title="Ouvre ton CV (Word, Canva, Pages…)" text="Trouve l'emplacement de ta photo en haut à gauche de ton document." />
-                            <TutorialPoint num="03" title="Remplace ta photo par le QR" text="Même taille, même position. Un recruteur qui flashe accède à ton profil complet." />
-                         </div>
-
-                         {/* QR caché pour génération PNG */}
-                         <div className="sr-only" aria-hidden="true">
-                            <QRCodeSVG
-                              id="reveliom-qr-download"
-                              value={profileUrl}
-                              size={512}
-                              fgColor="#0f172a"
-                              bgColor="white"
-                              level="H"
-                            />
                          </div>
 
                          <div className="space-y-4">
                             <button
-                              onClick={handleDownload}
-                              className="w-full py-5 bg-slate-900 text-white rounded-full font-black uppercase tracking-widest text-[11px] shadow-2xl hover:bg-reveliom-purple transition-all flex items-center justify-center gap-4"
+                              onClick={() => setStep(2)}
+                              className="group w-full px-10 py-6 bg-slate-900 text-white rounded-full font-black uppercase tracking-widest text-[11px] shadow-2xl hover:bg-reveliom-purple transition-all flex items-center justify-center gap-4"
                             >
-                               <Download className="w-5 h-5" />
-                               Télécharger mon QR code (PNG)
+                               Placer ce QR sur mon CV
+                               <ArrowRight className="w-4 h-4 group-hover:translate-x-2 transition-transform" />
                             </button>
                             <button
                               onClick={() => setStep(3)}
-                              className="w-full py-4 bg-white border-2 border-slate-200 text-slate-500 rounded-full font-black uppercase tracking-widest text-[11px] hover:border-reveliom-purple hover:text-reveliom-purple transition-all flex items-center justify-center gap-3"
+                              className="group w-full px-10 py-5 bg-white border-2 border-slate-200 text-slate-600 rounded-full font-black uppercase tracking-widest text-[11px] hover:border-reveliom-purple hover:text-reveliom-purple transition-all flex items-center justify-center gap-3"
                             >
-                               Voir mon profil complet
+                               Voir mon profil en plein écran
                                <Eye className="w-4 h-4" />
                             </button>
                          </div>
+
+                         {/* Proof points */}
+                         <div className="border-t border-slate-100 pt-8 space-y-3">
+                            {[
+                              "Un recruteur lit tout ça en 90 secondes",
+                              "Zéro biais d'apparence ou d'école",
+                              "Produit après 40+ minutes de diagnostic réel",
+                            ].map((t, i) => (
+                              <div key={i} className="flex items-center gap-3">
+                                 <Check className="w-4 h-4 text-emerald-500 shrink-0" />
+                                 <p className="text-xs text-slate-400 font-serif italic">{t}</p>
+                              </div>
+                            ))}
+                         </div>
                       </div>
 
-                      {/* DROITE : CV Mockup réaliste */}
-                      <div className="lg:col-span-3 relative">
-                         <div className="absolute -inset-8 bg-reveliom-purple/5 blur-[60px] rounded-full pointer-events-none" />
-                         <motion.div
-                           whileHover={{ y: -6, boxShadow: "0 60px 100px -20px rgba(0,0,0,0.15)" }}
-                           className="relative bg-white rounded-[2rem] shadow-2xl border border-slate-100 overflow-hidden"
-                         >
-                            {/* CV Header — réaliste */}
-                            <div className="bg-gradient-to-r from-slate-50 to-white p-6 sm:p-8 border-b border-slate-100">
-                               <div className="flex items-start gap-5">
-                                  {/* QR à la place de la photo — ANNOTATION */}
-                                  <div className="relative shrink-0">
-                                     <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-xl border-2 border-reveliom-purple bg-white p-1.5 shadow-lg">
-                                        <QRCodeSVG value={profileUrl} size={80} fgColor="#7B5BF5" bgColor="white" level="M" />
-                                     </div>
-                                     {/* Annotation pulsante */}
-                                     <motion.div
-                                       animate={{ y: [0, -4, 0] }}
-                                       transition={{ repeat: Infinity, duration: 2, ease: "easeInOut" }}
-                                       className="absolute -top-9 left-1/2 -translate-x-1/2 whitespace-nowrap z-10"
-                                     >
-                                        <div className="flex flex-col items-center gap-1">
-                                           <div className="bg-reveliom-purple text-white text-[8px] font-black uppercase tracking-wider px-3 py-1.5 rounded-full shadow-lg">
-                                              ↓ Ta photo, ici
-                                           </div>
+                      {/* DROITE : VRAI PROFIL COMPLET (mini CandidateADNSignature) */}
+                      <motion.div
+                        initial={{ opacity: 0, x: 30 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: 0.3 }}
+                        className="relative"
+                      >
+                         {/* Glow */}
+                         <div className="absolute -inset-6 bg-reveliom-purple/8 blur-[60px] rounded-[3rem] pointer-events-none" />
+
+                         <div className="relative rounded-[2.5rem] overflow-hidden shadow-[0_40px_80px_-20px_rgba(0,0,0,0.18)] border border-slate-200 bg-white">
+
+                            {/* ── HEADER DARK ── */}
+                            <div className="bg-slate-900 p-6 sm:p-8 relative overflow-hidden">
+                               <div className="absolute top-0 right-0 w-40 h-40 bg-reveliom-purple/20 blur-[60px] rounded-full pointer-events-none" />
+                               <div className="relative z-10 space-y-5">
+                                  {/* Badges */}
+                                  <div className="flex flex-wrap gap-2">
+                                     <div className="px-2.5 py-1 bg-white/10 text-white/60 rounded text-[7px] font-black uppercase tracking-[0.3em]">V8.4 / CONFIDENTIAL</div>
+                                     <div className="px-2.5 py-1 bg-emerald-500/20 text-emerald-400 rounded text-[7px] font-black uppercase tracking-[0.3em] border border-emerald-500/30">✓ Certifié REVELIOM</div>
+                                  </div>
+                                  {/* Identité */}
+                                  <div className="flex items-center gap-4">
+                                     <div className="relative shrink-0">
+                                        <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl overflow-hidden border-2 border-white/20 bg-slate-700 flex items-center justify-center">
+                                           {user.photoURL
+                                             ? <img src={user.photoURL} alt={user.displayName} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                                             : <span className="text-2xl font-serif font-black text-white/40">{firstLetter}</span>
+                                           }
                                         </div>
-                                     </motion.div>
-                                  </div>
-                                  {/* Infos candidat */}
-                                  <div className="flex-1 min-w-0 space-y-3 pt-1">
-                                     <div>
-                                        <div className="h-5 w-36 bg-slate-800 rounded-md opacity-80" />
-                                        <div className="h-2.5 w-28 bg-reveliom-purple/30 rounded mt-1.5" />
+                                        <div className="absolute -bottom-1.5 -right-1.5 w-5 h-5 bg-white rounded-lg shadow-md p-0.5">
+                                           <QRCodeSVG value={profileUrl} size={16} fgColor="#7B5BF5" bgColor="white" level="M" />
+                                        </div>
                                      </div>
-                                     <div className="flex flex-wrap gap-x-4 gap-y-1.5">
-                                        <div className="h-2 w-24 bg-slate-100 rounded-full" />
-                                        <div className="h-2 w-20 bg-slate-100 rounded-full" />
-                                        <div className="h-2 w-28 bg-slate-100 rounded-full" />
+                                     <div className="flex-1 min-w-0">
+                                        <p className="text-white font-black text-xl sm:text-2xl leading-none truncate">{user.displayName}</p>
+                                        <p className="text-reveliom-purple/80 text-[10px] font-black uppercase tracking-widest mt-1">ID: MIR-{user.displayName?.substring(0,3).toUpperCase()}-2026</p>
                                      </div>
-                                     <div className="h-px w-full bg-slate-100" />
-                                     <div className="h-2 w-48 bg-slate-50 rounded-full" />
                                   </div>
+                                  {/* Positionnement */}
+                                  <p className="text-white/90 font-serif font-black italic text-base sm:text-lg leading-snug border-l-2 border-reveliom-purple/50 pl-4">
+                                     "{adn1.positionnement}"
+                                  </p>
                                </div>
                             </div>
 
-                            {/* CV Body */}
-                            <div className="p-6 sm:p-8 space-y-6">
-                               {/* Section Expérience */}
+                            {/* ── LECTURE GLOBALE ── */}
+                            <div className="bg-slate-800 px-6 sm:px-8 py-5">
+                               <p className="text-[8px] font-black uppercase tracking-widest text-slate-500 mb-2">Lecture globale</p>
+                               <p className="text-white/80 text-sm font-serif italic leading-relaxed">{adn1.lecture_globale}</p>
+                            </div>
+
+                            {/* ── BOOSTERS ── */}
+                            <div className="bg-white px-6 sm:px-8 py-6 space-y-4 border-b border-slate-100">
+                               <p className="text-[8px] font-black uppercase tracking-widest text-slate-400">Moteurs actifs</p>
                                <div className="space-y-3">
-                                  <div className="flex items-center gap-3">
-                                     <div className="h-2.5 w-20 bg-slate-700 rounded opacity-70" />
-                                     <div className="h-px flex-1 bg-slate-100" />
+                                  {(adn1.boosters || []).map((b: any, i: number) => (
+                                    <div key={i} className="space-y-1.5">
+                                       <div className="flex justify-between items-center">
+                                          <span className="text-xs font-black text-slate-700 uppercase tracking-wider">{b.label}</span>
+                                          <span className="text-xs font-black text-reveliom-purple">{b.value}%</span>
+                                       </div>
+                                       <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
+                                          <motion.div
+                                            initial={{ width: 0 }}
+                                            animate={{ width: `${b.value}%` }}
+                                            transition={{ duration: 1.2, delay: 0.5 + i * 0.15, ease: "easeOut" }}
+                                            className="h-full bg-reveliom-purple rounded-full"
+                                          />
+                                       </div>
+                                    </div>
+                                  ))}
+                               </div>
+                            </div>
+
+                            {/* ── FORCES & LIMITES ── */}
+                            <div className="grid grid-cols-2 divide-x divide-slate-100">
+                               <div className="px-5 py-5 space-y-2">
+                                  <div className="flex items-center gap-1.5">
+                                     <ArrowUpRight className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                                     <p className="text-[8px] font-black uppercase tracking-widest text-emerald-600">Leviers</p>
                                   </div>
-                                  <div className="pl-3 border-l-2 border-reveliom-purple/20 space-y-2">
-                                     <div className="flex justify-between items-center">
-                                        <div className="h-3 w-32 bg-slate-100 rounded" />
-                                        <div className="h-2 w-16 bg-slate-50 rounded" />
-                                     </div>
-                                     <div className="h-2 w-full bg-slate-50 rounded" />
-                                     <div className="h-2 w-5/6 bg-slate-50 rounded" />
-                                     <div className="h-2 w-4/6 bg-slate-50 rounded" />
+                                  <p className="text-xs text-slate-700 font-serif leading-relaxed">{adn1.forces}</p>
+                               </div>
+                               <div className="px-5 py-5 space-y-2 bg-slate-50/50">
+                                  <div className="flex items-center gap-1.5">
+                                     <ShieldAlert className="w-3.5 h-3.5 text-reveliom-purple shrink-0" />
+                                     <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Vigilances</p>
                                   </div>
-                                  <div className="pl-3 border-l-2 border-slate-100 space-y-2 mt-3">
-                                     <div className="flex justify-between items-center">
-                                        <div className="h-3 w-28 bg-slate-100 rounded" />
-                                        <div className="h-2 w-14 bg-slate-50 rounded" />
+                                  <p className="text-xs text-slate-500 font-serif italic leading-relaxed">{adn1.limites}</p>
+                               </div>
+                            </div>
+
+                            {/* ── MOTEUR ── */}
+                            <div className="bg-reveliom-purple/5 border-t border-reveliom-purple/10 px-6 sm:px-8 py-5 space-y-2">
+                               <div className="flex items-center gap-2">
+                                  <Zap className="w-3.5 h-3.5 text-reveliom-purple" />
+                                  <p className="text-[8px] font-black uppercase tracking-widest text-reveliom-purple">Ce qui le met en mouvement</p>
+                               </div>
+                               <p className="text-sm text-slate-700 font-serif italic leading-relaxed">{adn1.mouvement}</p>
+                            </div>
+
+                            {/* ── FOOTER CERTIF ── */}
+                            <div className="px-6 sm:px-8 py-4 flex items-center justify-between border-t border-slate-100 bg-white">
+                               <div className="flex items-center gap-2">
+                                  <ShieldCheck className="w-4 h-4 text-emerald-500" />
+                                  <span className="text-[8px] font-black uppercase tracking-widest text-slate-400">Diagnostic REVELIOM V8 — Triangulation complète</span>
+                               </div>
+                               <div className="w-10 h-10 bg-white border border-slate-100 rounded-xl p-1 shadow-sm">
+                                  <QRCodeSVG value={profileUrl} size={32} fgColor="#7B5BF5" bgColor="white" level="M" />
+                               </div>
+                            </div>
+                         </div>
+                      </motion.div>
+                   </motion.div>
+                  );
+                })()}
+
+                {/* STEP 2: AVANT / APRÈS — UNE IMAGE VAUT 1000 MOTS */}
+                {step === 2 && (
+                   <motion.div
+                     key="action"
+                     initial={{ opacity: 0, y: 20 }}
+                     animate={{ opacity: 1, y: 0 }}
+                     exit={{ opacity: 0, y: -20 }}
+                     className="w-full max-w-7xl space-y-10"
+                   >
+                      {/* Titre */}
+                      <div className="text-center space-y-3">
+                         <h2 className="text-3xl sm:text-5xl font-serif font-black text-slate-900 leading-tight">
+                            Remplace ta photo.<br />
+                            <span className="text-reveliom-purple italic font-light">C'est tout.</span>
+                         </h2>
+                         <p className="text-slate-400 font-serif italic text-base">Le recruteur flashe le QR — ton profil complet s'ouvre en 2 secondes.</p>
+                      </div>
+
+                      {/* QR caché pour génération PNG */}
+                      <div className="sr-only" aria-hidden="true">
+                         <QRCodeSVG id="reveliom-qr-download" value={profileUrl} size={512} fgColor="#0f172a" bgColor="white" level="H" />
+                      </div>
+
+                      {/* AVANT / APRÈS */}
+                      <div className="grid grid-cols-[1fr_auto_1fr] gap-4 sm:gap-8 items-center">
+
+                         {/* ── AVANT ── */}
+                         <motion.div
+                           initial={{ opacity: 0, x: -20 }}
+                           animate={{ opacity: 1, x: 0 }}
+                           transition={{ delay: 0.2 }}
+                           className="relative"
+                         >
+                            <div className="absolute -top-4 left-1/2 -translate-x-1/2 px-4 py-1.5 bg-slate-200 text-slate-500 rounded-full text-[10px] font-black uppercase tracking-widest">
+                               AVANT
+                            </div>
+                            <div className="mt-4 bg-white rounded-2xl shadow-md border border-slate-200 overflow-hidden opacity-70">
+                               {/* Header CV avec PHOTO */}
+                               <div className="bg-slate-50 p-4 sm:p-5 flex items-start gap-3 border-b border-slate-100">
+                                  {/* Photo classique */}
+                                  <div className="relative shrink-0 w-14 h-14 sm:w-16 sm:h-16 rounded-lg bg-slate-200 flex items-center justify-center">
+                                     <User className="w-8 h-8 text-slate-300" />
+                                     {/* Croix rouge */}
+                                     <div className="absolute inset-0 flex items-center justify-center">
+                                        <X className="w-10 h-10 text-red-400 opacity-80 stroke-[2.5]" />
                                      </div>
-                                     <div className="h-2 w-full bg-slate-50 rounded" />
-                                     <div className="h-2 w-3/4 bg-slate-50 rounded" />
+                                  </div>
+                                  <div className="flex-1 space-y-2 pt-1">
+                                     <div className="h-4 w-28 bg-slate-200 rounded" />
+                                     <div className="h-2.5 w-20 bg-slate-100 rounded" />
+                                     <div className="flex gap-2 mt-2">
+                                        <div className="h-2 w-14 bg-slate-100 rounded-full" />
+                                        <div className="h-2 w-16 bg-slate-100 rounded-full" />
+                                     </div>
                                   </div>
                                </div>
-
-                               {/* Section Compétences */}
-                               <div className="space-y-3">
-                                  <div className="flex items-center gap-3">
-                                     <div className="h-2.5 w-24 bg-slate-700 rounded opacity-70" />
-                                     <div className="h-px flex-1 bg-slate-100" />
+                               <div className="p-4 space-y-3">
+                                  <div className="h-2.5 w-20 bg-slate-200 rounded" />
+                                  <div className="space-y-1.5 pl-2 border-l-2 border-slate-100">
+                                     <div className="h-2 w-full bg-slate-100 rounded" />
+                                     <div className="h-2 w-5/6 bg-slate-100 rounded" />
+                                     <div className="h-2 w-4/6 bg-slate-100 rounded" />
                                   </div>
-                                  <div className="flex flex-wrap gap-2">
-                                     {["Leadership", "Analyse", "Communication", "Stratégie", "Gestion de projet"].map((s) => (
-                                       <div key={s} className="px-3 py-1 bg-slate-50 border border-slate-100 rounded-full text-[8px] font-black text-slate-400 uppercase tracking-wider">{s}</div>
+                                  <div className="h-2.5 w-24 bg-slate-200 rounded mt-4" />
+                                  <div className="flex flex-wrap gap-1.5">
+                                     {["…", "…", "…"].map((s, i) => (
+                                       <div key={i} className="px-2.5 py-0.5 bg-slate-100 rounded-full text-[7px] text-slate-300 font-black uppercase tracking-wider w-14" />
                                      ))}
                                   </div>
                                </div>
-                            </div>
-
-                            {/* CV Footer */}
-                            <div className="px-6 sm:px-8 pb-5 flex items-center justify-between border-t border-slate-50 pt-4">
-                               <div className="flex items-center gap-2">
-                                  <div className="w-3 h-3 rounded-full bg-reveliom-purple" />
-                                  <span className="text-[7px] font-black text-reveliom-purple/60 uppercase tracking-widest">REVELIOM CERTIFIED</span>
-                               </div>
-                               <span className="text-[7px] text-slate-300 font-mono">profil.reveliom.com</span>
+                               {/* Label bas */}
+                               <div className="px-4 pb-3 text-[8px] font-black text-red-400/60 uppercase tracking-widest">CV standard — photo jugée en 3 secondes</div>
                             </div>
                          </motion.div>
+
+                         {/* ── FLÈCHE ── */}
+                         <motion.div
+                           initial={{ opacity: 0, scale: 0.5 }}
+                           animate={{ opacity: 1, scale: 1 }}
+                           transition={{ delay: 0.5 }}
+                           className="flex flex-col items-center gap-2 shrink-0"
+                         >
+                            <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-slate-900 flex items-center justify-center shadow-xl">
+                               <ArrowRight className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
+                            </div>
+                            <span className="text-[8px] font-black text-slate-300 uppercase tracking-widest hidden sm:block">Remplace</span>
+                         </motion.div>
+
+                         {/* ── APRÈS ── */}
+                         <motion.div
+                           initial={{ opacity: 0, x: 20 }}
+                           animate={{ opacity: 1, x: 0 }}
+                           transition={{ delay: 0.35 }}
+                           className="relative"
+                         >
+                            <div className="absolute -top-4 left-1/2 -translate-x-1/2 px-4 py-1.5 bg-reveliom-purple text-white rounded-full text-[10px] font-black uppercase tracking-widest">
+                               APRÈS
+                            </div>
+                            {/* Glow violet */}
+                            <div className="absolute -inset-3 bg-reveliom-purple/15 blur-2xl rounded-3xl pointer-events-none" />
+                            <div className="relative mt-4 bg-white rounded-2xl shadow-xl border-2 border-reveliom-purple overflow-hidden">
+                               {/* Header CV avec QR */}
+                               <div className="bg-gradient-to-r from-reveliom-purple/5 to-white p-4 sm:p-5 flex items-start gap-3 border-b border-reveliom-purple/10">
+                                  {/* QR à la place de la photo */}
+                                  <div className="relative shrink-0">
+                                     <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-lg border-2 border-reveliom-purple bg-white p-1 shadow-md">
+                                        <QRCodeSVG value={profileUrl} size={52} fgColor="#7B5BF5" bgColor="white" level="M" />
+                                     </div>
+                                     {/* Pulse ring */}
+                                     <motion.div
+                                       animate={{ scale: [1, 1.4, 1], opacity: [0.6, 0, 0.6] }}
+                                       transition={{ repeat: Infinity, duration: 2 }}
+                                       className="absolute inset-0 rounded-lg border-2 border-reveliom-purple"
+                                     />
+                                  </div>
+                                  <div className="flex-1 space-y-2 pt-1">
+                                     <div className="h-4 w-28 bg-slate-800 rounded opacity-80" />
+                                     <div className="h-2.5 w-20 bg-reveliom-purple/30 rounded" />
+                                     <div className="flex gap-2 mt-2">
+                                        <div className="h-2 w-14 bg-slate-100 rounded-full" />
+                                        <div className="h-2 w-16 bg-slate-100 rounded-full" />
+                                     </div>
+                                  </div>
+                               </div>
+                               <div className="p-4 space-y-3">
+                                  <div className="h-2.5 w-20 bg-slate-200 rounded" />
+                                  <div className="space-y-1.5 pl-2 border-l-2 border-reveliom-purple/20">
+                                     <div className="h-2 w-full bg-slate-100 rounded" />
+                                     <div className="h-2 w-5/6 bg-slate-100 rounded" />
+                                     <div className="h-2 w-4/6 bg-slate-100 rounded" />
+                                  </div>
+                                  <div className="h-2.5 w-24 bg-slate-200 rounded mt-4" />
+                                  <div className="flex flex-wrap gap-1.5">
+                                     {["…", "…", "…"].map((s, i) => (
+                                       <div key={i} className="px-2.5 py-0.5 bg-reveliom-purple/10 rounded-full text-[7px] text-reveliom-purple font-black uppercase tracking-wider w-14" />
+                                     ))}
+                                  </div>
+                               </div>
+                               {/* Label bas — scan call to action */}
+                               <div className="px-4 pb-3 flex items-center gap-2">
+                                  <QrCode className="w-3 h-3 text-reveliom-purple" />
+                                  <span className="text-[8px] font-black text-reveliom-purple uppercase tracking-widest">Scan → profil complet en 2 secondes</span>
+                               </div>
+                            </div>
+                         </motion.div>
+                      </div>
+
+                      {/* CTA */}
+                      <div className="flex flex-col sm:flex-row gap-4 justify-center pt-2">
+                         <button
+                           onClick={handleDownload}
+                           className="flex-1 sm:max-w-xs py-5 bg-slate-900 text-white rounded-full font-black uppercase tracking-widest text-[11px] shadow-2xl hover:bg-reveliom-purple transition-all flex items-center justify-center gap-4"
+                         >
+                            <Download className="w-5 h-5" />
+                            Télécharger mon QR code (PNG)
+                         </button>
+                         <button
+                           onClick={() => setStep(3)}
+                           className="flex-1 sm:max-w-xs py-5 bg-white border-2 border-slate-200 text-slate-600 rounded-full font-black uppercase tracking-widest text-[11px] hover:border-reveliom-purple hover:text-reveliom-purple transition-all flex items-center justify-center gap-3"
+                         >
+                            Voir mon profil complet
+                            <Eye className="w-4 h-4" />
+                         </button>
                       </div>
                    </motion.div>
                 )}
