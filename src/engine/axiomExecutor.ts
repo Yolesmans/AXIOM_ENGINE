@@ -1,4 +1,4 @@
-import { callOpenAI, callOpenAIStream } from '../services/openaiClient.js';
+import { callOpenAI, callOpenAIStream } from '../services/geminiClient.js';
 import type { AxiomCandidate } from '../types/candidate.js';
 import type { AnswerRecord } from '../types/answer.js';
 import { candidateStore } from '../store/sessionStore.js';
@@ -14,7 +14,7 @@ import { getStaticQuestion, EXPECTED_ANSWERS_FOR_MIRROR } from './staticQuestion
 
 
 function extractPreambuleFromPrompt(prompt: string): string {
-  const match = prompt.match(/PRÉAMBULE MÉTIER[^]*?(?=🔒|🟢|$)/i);
+  const match = prompt.match(/PRÉAMBULE REVELIOM — AFFICHAGE OBLIGATOIRE[^]*?(?=🔒|🟢|$)/i);
 
   if (match && match[0]) {
     return match[0]
@@ -960,7 +960,9 @@ export const BLOC_01 = 'BLOC_01';
 // ============================================
 // HELPER : Construction historique conversationnel pour OpenAI
 // ============================================
-const MAX_CONV_MESSAGES = 40;
+// 9 blocs × 5Q = 45 échanges + ~9 miroirs + transitions = ~65+ messages minimum
+// → 100 pour garantir la mémoire cumulative complète jusqu'au BLOC 10
+const MAX_CONV_MESSAGES = 100;
 
 function buildConversationHistory(candidate: AxiomCandidate): Array<{ role: string; content: string }> {
   const messages: Array<{ role: string; content: string }> = [];
@@ -1028,7 +1030,14 @@ function deriveStepFromHistory(candidate: AxiomCandidate): string {
 // ============================================
 function deriveStateFromConversationHistory(candidate: AxiomCandidate): string {
   const history = candidate.conversationHistory || [];
-  
+
+  // EXCEPTION — États manuels (gates explicites) : ne pas overrider depuis l'historique
+  // Ces états sont définis manuellement par le FSM et doivent être préservés jusqu'à transition explicite
+  const uiStep = candidate.session.ui?.step;
+  if (uiStep === WAIT_BLOC10_YES || uiStep === STEP_99_MATCH_READY || uiStep === STEP_99_MATCHING) {
+    return uiStep;
+  }
+
   // Si aucun historique → STEP_01_IDENTITY
   if (history.length === 0) {
     return STEP_01_IDENTITY;
@@ -1391,7 +1400,7 @@ export async function executeAxiom(
     if (!userMessage) {
       // Première question tone
       const toneQuestion =
-        'Bienvenue dans AXIOM.\n' +
+        'Bienvenue dans REVELIOM.\n' +
         'On va découvrir qui tu es vraiment — pas ce qu\'il y a sur ton CV.\n' +
         'Promis : je ne te juge pas. Je veux juste comprendre comment tu fonctionnes.\n\n' +
         'On commence tranquille.\n' +
@@ -1483,9 +1492,9 @@ export async function executeAxiom(
         { role: 'system', content: FULL_AXIOM_PROMPT },
         {
           role: 'system',
-          content: `RÈGLE ABSOLUE AXIOM :
+          content: `RÈGLE ABSOLUE REVELIOM :
 Tu es en état STEP_03_PREAMBULE.
-Tu dois afficher LE PRÉAMBULE MÉTIER COMPLET tel que défini dans le prompt.
+Tu dois afficher LE PRÉAMBULE REVELIOM COMPLET tel que défini dans le prompt.
 Tu NE POSES PAS de question.
 Tu affiches uniquement le préambule, mot pour mot selon les instructions.
 AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
@@ -1511,9 +1520,9 @@ AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
           { role: 'system', content: FULL_AXIOM_PROMPT },
           {
             role: 'system',
-            content: `RÈGLE ABSOLUE AXIOM :
+            content: `RÈGLE ABSOLUE REVELIOM :
 Tu es en état STEP_03_PREAMBULE.
-Tu dois afficher LE PRÉAMBULE MÉTIER COMPLET tel que défini dans le prompt.
+Tu dois afficher LE PRÉAMBULE REVELIOM COMPLET tel que défini dans le prompt.
 Tu NE POSES PAS de question.
 Tu affiches uniquement le préambule, mot pour mot selon les instructions.
 AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
@@ -1540,33 +1549,37 @@ AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
       if (extractedPreambule) {
         aiText = extractedPreambule;
       } else {
-        // Fallback minimal (texte du prompt)
+        // Fallback minimal — PRÉAMBULE REVELIOM V8 (texte exact du CDC)
         aiText =
-          'Avant de commencer vraiment, je te pose simplement le cadre.\n\n' +
-          'Le métier concerné est celui de courtier en énergie.\n\n' +
-          'Il consiste à accompagner des entreprises dans la gestion de leurs contrats d\'électricité et de gaz :\n' +
-          '• analyse de l\'existant,\n' +
-          '• renégociation auprès des fournisseurs,\n' +
-          '• sécurisation des prix,\n' +
-          '• suivi dans la durée.\n\n' +
-          'Le client final ne paie rien directement.\n' +
-          'La rémunération est versée par les fournisseurs, à la signature et sur la durée du contrat.\n\n' +
-          'Il n\'y a aucune garantie.\n' +
-          'Certains gagnent peu. D\'autres gagnent très bien.\n\n' +
-          'La différence ne vient ni du marché, ni du produit, ni de la chance,\n' +
-          'mais de la constance, de l\'autonomie, et de la capacité à tenir dans un cadre exigeant.\n\n' +
-          'C\'est précisément pour ça qu\'AXIOM existe.\n\n' +
-          'AXIOM n\'est ni un test, ni un jugement, ni une sélection déguisée.\n\n' +
-          'Il n\'est pas là pour te vendre ce métier, ni pour te faire entrer dans une case.\n\n' +
-          'Son rôle est simple :\n' +
-          'prendre le temps de comprendre comment tu fonctionnes réellement dans le travail,\n' +
-          'et te donner une lecture lucide de ce que ce cadre exige au quotidien.\n\n' +
-          'Pour certains profils, c\'est un terrain d\'expression très fort.\n' +
-          'Pour d\'autres, tout aussi solides, d\'autres environnements sont simplement plus cohérents.\n\n' +
-          'AXIOM est là pour apporter de la clarté :\n' +
-          '• sans pression,\n' +
-          '• sans promesse,\n' +
-          '• sans te pousser dans une direction.';
+          'REVELIOM n\'est pas un test.\n' +
+          'Ce n\'est pas un jugement.\n' +
+          'Et ce n\'est pas une sélection déguisée.\n\n' +
+          'Ici, il n\'y a rien à réussir,\n' +
+          'rien à prouver,\n' +
+          'rien à jouer.\n\n' +
+          'Chaque personne a sa manière de fonctionner,\n' +
+          'sa manière d\'apprendre,\n' +
+          'sa manière d\'avancer,\n' +
+          'et sa propre valeur.\n\n' +
+          'Le but n\'est pas de dire si tu es fait ou pas pour quelque chose.\n' +
+          'Le but est simplement de comprendre comment tu fonctionnes vraiment,\n' +
+          'quand tu es naturel,\n' +
+          'quand tu es sous pression,\n' +
+          'quand tu es motivé,\n' +
+          'et quand tu t\'épuises.\n\n' +
+          'Tes réponses ne servent pas à te mettre dans une case.\n' +
+          'Elles servent à construire une lecture fidèle de qui tu es dans le travail.\n\n' +
+          'Tu peux répondre simplement,\n' +
+          'sans chercher la bonne réponse,\n' +
+          'sans essayer de deviner ce qu\'il faudrait dire.\n\n' +
+          'Il n\'y a rien à cacher,\n' +
+          'et rien à défendre.\n\n' +
+          'Tout ce que tu dis ici reste dans ce cadre,\n' +
+          'et sert uniquement à mieux comprendre\n' +
+          'ce qui te correspond vraiment,\n' +
+          'et ce qui ne te correspond pas.\n\n' +
+          'Prends ça comme une discussion honnête,\n' +
+          'avec quelqu\'un qui cherche juste à te voir tel que tu es.';
       }
     }
 
@@ -1600,9 +1613,10 @@ AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
   // ============================================
   // STEP_03_BLOC1 (wait_start_button)
   // ============================================
-  // Vérifier si préambule existe dans l'historique (source de vérité n°1)
-  const preambuleInHistory = candidate.conversationHistory?.find(m => m.kind === 'preambule');
-  const canStartBloc1 = currentState === STEP_03_BLOC1 || preambuleInHistory !== undefined;
+  // Vérifier si on est en attente du bouton START_BLOC_1
+  // NOTE : NE PAS utiliser preambuleInHistory ici — le préambule est TOUJOURS dans l'historique
+  // après BLOC 1, ce qui ferait intercepter TOUS les blocs suivants (BUG 4 root cause).
+  const canStartBloc1 = currentState === STEP_03_BLOC1;
   
   if (canStartBloc1) {
     // PARTIE 5 — Bouton "Je commence mon profil"
@@ -1761,11 +1775,27 @@ Toute sortie hors règles = invalide.`;
   // ============================================
   function areAllQuestionsAnswered(candidate: AxiomCandidate, blocNumber: number): boolean {
     const conversationHistory = candidate.conversationHistory || [];
-    
+
     // Réponses utilisateur dans ce bloc (exclure mirror_validation)
     const answersInBlock = conversationHistory.filter(
       m => m.role === 'user' && m.block === blocNumber && m.kind !== 'mirror_validation'
     );
+
+    // BLOC 4 : seuil dynamique — 6 si diplôme=Oui/A, 5 sinon
+    // La Q3 (index 2) est "As-tu des diplômes ?" → si réponse positive, on pose "Lesquels?" (compte comme réponse 4)
+    if (blocNumber === 4) {
+      const diplomeAnswer =
+        answersInBlock.length >= 3
+          ? (answersInBlock[2]?.content || '').trim().toLowerCase()
+          : '';
+      const diplomeYes =
+        diplomeAnswer === 'a' ||
+        diplomeAnswer === 'oui' ||
+        diplomeAnswer.includes('oui') ||
+        /^a[.\s]/.test(diplomeAnswer);
+      const expected = diplomeYes ? 6 : 5;
+      return answersInBlock.length >= expected;
+    }
 
     // Blocs 1 et 3-9 : seuil fixe pour déclencher le miroir (aligné sur le catalogue statique)
     if (blocNumber === 1 || (blocNumber >= 3 && blocNumber <= 9)) {
@@ -1807,10 +1837,98 @@ Toute sortie hors règles = invalide.`;
       ? areAllQuestionsAnswered(candidate, blocNumber)
       : false;
 
+    // DÉTECTION ANTICIPÉE — Validation miroir (AVANT shouldForceMirror)
+    // Si le dernier message assistant pour ce bloc est un miroir → c'est une validation, pas une réponse
+    const isAlreadyMirrorValidation = (() => {
+      if (!userMessage) return false;
+      const convHist = candidate.conversationHistory || [];
+      const lastMirrorInBlock = [...convHist].reverse().find(
+        m => m.role === 'assistant' && m.kind === 'mirror' && m.block === blocNumber
+      );
+      return lastMirrorInBlock !== undefined;
+    })();
+
+    // EARLY RETURN — Validation miroir : stocker + transition directe vers Q1 du bloc suivant
+    // Évite la régénération d'un miroir inutile et le double streaming
+    if (isAlreadyMirrorValidation && userMessage && blocNumber >= 1 && blocNumber <= 9 && blocNumber !== 2) {
+      console.log(`[AXIOM_EXECUTOR] ✅ Validation miroir BLOC ${blocNumber} → transition directe BLOC ${blocNumber + 1}`);
+
+      // Stocker comme mirror_validation
+      candidateStore.appendMirrorValidation(candidate.candidateId, blocNumber, userMessage);
+
+      // CAS SPÉCIAL : BLOC 9 → WAIT_BLOC10_YES (verrou synthèse finale)
+      // nextBlocNumber=10 dépasse la condition <= 9, on court-circuite vers le verrou
+      if (blocNumber === 9) {
+        const lockMessage =
+          `🔒 TRANSITION EXPLICITE — ACCÈS À LA SYNTHÈSE FINALE\n\nLes informations nécessaires à l'analyse sont maintenant collectées.\n\nAucune lecture globale n'a encore été produite.\n\n⚠️ VERROU TECHNIQUE FINAL\n\nDis-moi exactement "Oui" pour activer le BLOC 10 et découvrir ta synthèse complète.\n\nToute autre réponse maintient AXIOM en état de collecte inactive.\nAucune synthèse ne peut être produite sans ce mot exact.`;
+
+        candidateStore.updateUIState(candidate.candidateId, {
+          step: WAIT_BLOC10_YES,
+          lastQuestion: null,
+          tutoiement: ui.tutoiement || undefined,
+          identityDone: true,
+        });
+        candidateStore.updateSession(candidate.candidateId, { currentBlock: 10 });
+        candidateStore.appendAssistantMessage(candidate.candidateId, lockMessage, {
+          block: 10,
+          step: WAIT_BLOC10_YES,
+          kind: 'other',
+        });
+        logTransition(candidate.candidateId, stateIn, WAIT_BLOC10_YES, 'message');
+        return {
+          response: lockMessage,
+          step: WAIT_BLOC10_YES,
+          lastQuestion: null,
+          expectsAnswer: true,
+          autoContinue: false,
+        };
+      }
+
+      // État suivant
+      const nextBlocState = blocStates[blocNumber] as any; // e.g. blocNumber=3 → blocStates[3] = BLOC_04
+      const nextBlocNumber = blocNumber + 1;
+
+      // Servir Q1 du bloc suivant (statique si disponible)
+      let firstQuestion: string | null = null;
+      if (nextBlocNumber >= 1 && nextBlocNumber <= 9) {
+        firstQuestion = getStaticQuestion(nextBlocNumber, 0);
+      }
+      const responseText = firstQuestion || '';
+
+      // Mettre à jour l'état UI + currentBlock
+      candidateStore.updateUIState(candidate.candidateId, {
+        step: nextBlocState,
+        lastQuestion: responseText || null,
+        tutoiement: ui.tutoiement || undefined,
+        identityDone: true,
+      });
+      candidateStore.updateSession(candidate.candidateId, { currentBlock: nextBlocNumber });
+
+      // Stocker la question comme message assistant
+      if (responseText) {
+        candidateStore.appendAssistantMessage(candidate.candidateId, responseText, {
+          block: nextBlocNumber,
+          step: nextBlocState,
+          kind: 'question',
+        });
+      }
+
+      logTransition(candidate.candidateId, stateIn, nextBlocState, 'message');
+      return {
+        response: responseText,
+        step: nextBlocState,
+        lastQuestion: responseText || null,
+        expectsAnswer: !!responseText,
+        autoContinue: false,
+      };
+    }
+
     let aiText: string | null = null;
 
     // DÉCISION : Forcer prompt miroir si toutes questions répondues (BLOCS 1 et 3-9, pas 2A/2B)
+    // !isAlreadyMirrorValidation : ne pas regénérer un miroir si l'utilisateur valide déjà le précédent
     let shouldForceMirror =
+      !isAlreadyMirrorValidation &&
       (blocNumber === 1 || (blocNumber >= 3 && blocNumber <= 9)) && allQuestionsAnswered;
 
     // CORRECTION BLOC 3 : Si toutes réponses données mais pas encore de miroir généré
@@ -1818,8 +1936,8 @@ Toute sortie hors règles = invalide.`;
     const answersInBlockForLog = (candidate.conversationHistory || []).filter(
       m => m.role === 'user' && m.block === blocNumber && m.kind !== 'mirror_validation'
     ).length;
-    
-    if (blocNumber >= 1 && blocNumber <= 9 && blocNumber !== 2 && allQuestionsAnswered && userMessage) {
+
+    if (!isAlreadyMirrorValidation && blocNumber >= 1 && blocNumber <= 9 && blocNumber !== 2 && allQuestionsAnswered && userMessage) {
       shouldForceMirror = true;
       console.log(`[AXIOM_EXECUTOR] 🔥 Forçage miroir BLOC ${blocNumber} (toutes questions répondues)`);
       console.log(`[AXIOM_EXECUTOR] Réponses: ${answersInBlockForLog}/${EXPECTED_ANSWERS_FOR_MIRROR[blocNumber]}`);
@@ -1837,6 +1955,44 @@ Toute sortie hors règles = invalide.`;
         event: event ?? null,
       });
     }
+    // FIX 6 — Guard BLOC 9 → WAIT_BLOC10_YES (cas deriveState sauté trop tôt)
+    // Quand deriveStateFromConversationHistory voit le miroir BLOC 9 et retourne BLOC_10,
+    // mais que le verrou n'a pas encore été envoyé (uiStep != WAIT_BLOC10_YES),
+    // l'utilisateur est en train de valider le miroir BLOC 9 — retourner le verrou directement.
+    if (blocNumber === 10 && candidate.session.ui?.step !== WAIT_BLOC10_YES && userMessage) {
+      const convHist = candidate.conversationHistory || [];
+      const bloc9Mirror = [...convHist].reverse().find(
+        m => m.role === 'assistant' && m.kind === 'mirror' && m.block === 9
+      );
+      if (bloc9Mirror) {
+        console.log('[AXIOM_EXECUTOR] Fix6 — B9-VAL interceptée (deriveState=BLOC_10, uiStep≠WAIT_BLOC10_YES) → verrou');
+        const lockMessage =
+          `🔒 TRANSITION EXPLICITE — ACCÈS À LA SYNTHÈSE FINALE\n\nLes informations nécessaires à l'analyse sont maintenant collectées.\n\nAucune lecture globale n'a encore été produite.\n\n⚠️ VERROU TECHNIQUE FINAL\n\nDis-moi exactement "Oui" pour activer le BLOC 10 et découvrir ta synthèse complète.\n\nToute autre réponse maintient AXIOM en état de collecte inactive.\nAucune synthèse ne peut être produite sans ce mot exact.`;
+
+        candidateStore.appendMirrorValidation(candidate.candidateId, 9, userMessage);
+        candidateStore.updateUIState(candidate.candidateId, {
+          step: WAIT_BLOC10_YES,
+          lastQuestion: null,
+          tutoiement: ui.tutoiement || undefined,
+          identityDone: true,
+        });
+        candidateStore.updateSession(candidate.candidateId, { currentBlock: 10 });
+        candidateStore.appendAssistantMessage(candidate.candidateId, lockMessage, {
+          block: 10,
+          step: WAIT_BLOC10_YES,
+          kind: 'other',
+        });
+        logTransition(candidate.candidateId, stateIn, WAIT_BLOC10_YES, 'message');
+        return {
+          response: lockMessage,
+          step: WAIT_BLOC10_YES,
+          lastQuestion: null,
+          expectsAnswer: true,
+          autoContinue: false,
+        };
+      }
+    }
+
     // DÉCISION : Synthèse finale BLOC 10 → utiliser nouvelle architecture directement
     const shouldForceSynthesis = blocNumber === 10 && allQuestionsAnswered;
     
@@ -1861,15 +2017,57 @@ Toute sortie hors règles = invalide.`;
       }
     }
 
+    // Flag : question injectée statiquement (évite la détection miroir erronée à la ligne ~2232)
+    let isStaticQuestion = false;
+
+    // BLOC 4 — follow-up conditionnel Q3 (diplôme = Oui/A) : poser "Lesquels ?"
+    // Injecté AVANT la logique générique pour intercaler la question entre Q3 et Q4
+    if (!aiText && blocNumber === 4 && !shouldForceMirror) {
+      const answersInBlock4 = (candidate.conversationHistory || []).filter(
+        m => m.role === 'user' && m.block === 4 && m.kind !== 'mirror_validation'
+      );
+      if (answersInBlock4.length === 3) {
+        const diplomeAnswer = (answersInBlock4[2]?.content || '').trim().toLowerCase();
+        const diplomeYes =
+          diplomeAnswer === 'a' ||
+          diplomeAnswer === 'oui' ||
+          diplomeAnswer.includes('oui') ||
+          /^a[.\s]/.test(diplomeAnswer);
+        if (diplomeYes) {
+          aiText = 'Lesquels ? (courte réponse suffit)';
+          isStaticQuestion = true;
+          console.log('[AXIOM_EXECUTOR] BLOC 4 — follow-up diplôme "Lesquels ?" injecté');
+        }
+      }
+    }
+
     // Questions statiques BLOC 1 et 3-9 : 0 token, réponse instantanée (pas d'appel LLM)
     if (!aiText && blocNumber >= 1 && blocNumber <= 9 && blocNumber !== 2 && !shouldForceMirror) {
       const conversationHistoryForBlock = candidate.conversationHistory || [];
       const answersInBlockForQuestion = conversationHistoryForBlock.filter(
         m => m.role === 'user' && m.block === blocNumber && m.kind !== 'mirror_validation'
       );
-      const nextQuestion = getStaticQuestion(blocNumber, answersInBlockForQuestion.length);
+
+      // BLOC 4 : quand diplôme=A, "Lesquels?" est injectée entre Q2 et Q3 (question non-statique).
+      // Sa réponse est stockée dans conversationHistory, ce qui décale l'index statique de +1.
+      // On applique un offset de -1 pour retrouver le bon index (Q3 → index 3, Q4 → index 4).
+      let staticIndex = answersInBlockForQuestion.length;
+      if (blocNumber === 4 && answersInBlockForQuestion.length > 3) {
+        const diplomeAnswer = (answersInBlockForQuestion[2]?.content || '').trim().toLowerCase();
+        const diplomeYes =
+          diplomeAnswer === 'a' ||
+          diplomeAnswer === 'oui' ||
+          diplomeAnswer.includes('oui') ||
+          /^a[.\s]/.test(diplomeAnswer);
+        if (diplomeYes) {
+          staticIndex = answersInBlockForQuestion.length - 1;
+        }
+      }
+
+      const nextQuestion = getStaticQuestion(blocNumber, staticIndex);
       if (nextQuestion) {
         aiText = nextQuestion;
+        isStaticQuestion = true;
       }
     }
 
@@ -1967,7 +2165,11 @@ Toute sortie hors règles = invalide.`;
           { role: 'system', content: blocSystemContent },
           ...messages,
         ];
-        if (onChunk) {
+        // Quand shouldForceMirror=true : NE PAS streamer le LLM car la nouvelle architecture
+        // va streamer son propre miroir. Streamer les deux = double miroir visible dans le chat.
+        // Pour les questions (shouldForceMirror=false) : streamer directement.
+        const useLLMStream = onChunk && !shouldForceMirror;
+        if (useLLMStream) {
           const { fullText } = await callOpenAIStream({ messages: blocMessages }, onChunk);
           if (fullText.trim()) aiText = fullText.trim();
         } else {
@@ -2011,7 +2213,9 @@ Toute sortie hors règles = invalide.`;
           { role: 'system', content: retrySystemContent },
           ...messages,
         ];
-        if (onChunk) {
+        // Même logique : pas de stream LLM quand shouldForceMirror (nouvelle architecture streamera)
+        const useRetryStream = onChunk && !shouldForceMirror;
+        if (useRetryStream) {
           const { fullText } = await callOpenAIStream({ messages: retryMessages }, onChunk);
           if (fullText.trim()) aiText = fullText.trim();
         } else {
@@ -2067,9 +2271,15 @@ Toute sortie hors règles = invalide.`;
       );
     let isMirror = false;
     let expectsAnswer = isMirror ? true : (looksLikeQuestion || false);
-    
-    if (cleanMirrorText && blocNumber >= 1 && blocNumber <= 9 && !expectsAnswer) {
+
+    // FIX : questions statiques et "Lesquels?" ne doivent jamais être traitées comme des miroirs
+    // cleanMirrorText est initialisé à aiText, donc il contiendrait la question statique si on ne skippait pas
+    if (isStaticQuestion) {
+      expectsAnswer = true;
+      isMirror = false;
+    } else if (cleanMirrorText && blocNumber >= 1 && blocNumber <= 9 && (shouldForceMirror || !expectsAnswer)) {
       // C'est un miroir → utiliser nouvelle architecture séparée (blocs 1 et 3-9)
+      // shouldForceMirror garantit la génération même si LLM a renvoyé une phrase-question
       isMirror = true;
       
       try {
@@ -2150,19 +2360,14 @@ Toute sortie hors règles = invalide.`;
         candidateStore.appendMirrorValidation(candidate.candidateId, blocNumber, userMessage);
       } else {
         // Réponse normale à une question
+        // NOTE: conversationHistory déjà pré-stocké par server.ts avant l'appel executor
+        // appendUserMessage SUPPRIMÉ — évite le double-stockage qui décalait l'index des questions statiques
         const answerRecord: AnswerRecord = {
           block: blocNumber,
           message: userMessage,
           createdAt: new Date().toISOString(),
         };
         candidateStore.addAnswer(candidate.candidateId, answerRecord);
-        
-        // AUSSI stocker dans conversationHistory
-        candidateStore.appendUserMessage(candidate.candidateId, userMessage, {
-          block: blocNumber,
-          step: currentState,
-          kind: 'other',
-        });
       }
     }
 
@@ -2214,9 +2419,10 @@ Toute sortie hors règles = invalide.`;
       identityDone: true,
     });
     
-    // Mise à jour currentBlock pour BLOCS 3-10 (source de vérité unique)
+    // Mise à jour currentBlock pour BLOCS 2-10 (source de vérité unique)
     if (
       [
+        BLOC_02,
         BLOC_03,
         BLOC_04,
         BLOC_05,

@@ -1,15 +1,6 @@
-import OpenAI from 'openai';
-import { callOpenAIStream } from './openaiClient.js';
+import { callGemini, callOpenAIStream } from './geminiClient.js';
 import { validateMentorStyle } from './validateMentorStyle.js';
 import type { BlockType } from './interpretiveStructureGenerator.js';
-
-if (!process.env.OPENAI_API_KEY) {
-  throw new Error('OPENAI_API_KEY is required but not found in environment variables');
-}
-
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
 
 /** Blocs qui utilisent le format REVELIOM (1️⃣ Lecture implicite, 2️⃣ Déduction, 3️⃣ Validation) */
 const REVELIOM_BLOCK_TYPES: BlockType[] = ['block1', 'block3', 'block4', 'block5', 'block6', 'block7', 'block8', 'block9'];
@@ -44,6 +35,9 @@ export function transposeToSecondPerson(text: string): string {
   out = out.replace(/\bson\b/g, 'ton');
   out = out.replace(/\bsa\b/g, 'ta');
   out = out.replace(/\bses\b/g, 'tes');
+  // COI avant verbe : lui → te (ex: "lui permet" → "te permet", "lui donne" → "te donne")
+  out = out.replace(/\blui\s+(?=[a-zàâéèêëîïôùûüç])/gi, 'te ');
+  // Tonique résiduel : lui → toi (après préposition, fin de phrase)
   out = out.replace(/\blui\b/g, 'toi');
   return out;
 }
@@ -160,7 +154,7 @@ Incarnes cet angle en style mentor incarné. Tu n'as pas à expliquer, tu dois i
         const { fullText } = await callOpenAIStream(
           {
             messages: [{ role: 'system', content: systemContent }],
-            model: 'gpt-4o',
+            model: 'gpt-5.4-nano',
             temperature: 0.8,
             max_tokens: blockType === 'synthesis' || blockType === 'matching' ? 800 : 200,
           },
@@ -168,15 +162,12 @@ Incarnes cet angle en style mentor incarné. Tu n'as pas à expliquer, tu dois i
         );
         mentorText = fullText;
       } else {
-        const response = await client.chat.completions.create({
-          model: 'gpt-4o',
+        const content = await callGemini({
           messages: [{ role: 'system', content: systemContent }],
           temperature: 0.8,
-          max_tokens: blockType === 'synthesis' || blockType === 'matching' ? 800 : 200,
         });
-        const content = response.choices[0]?.message?.content;
         if (!content) {
-          throw new Error('No response content from OpenAI');
+          throw new Error('No response content from Gemini');
         }
         mentorText = content.trim();
       }
@@ -282,13 +273,14 @@ async function renderReveliomWithRawAngle(
   let retries = 0;
   const maxRetries = 1;
 
+  // suffix défini HORS de la boucle pour être accessible après validation (Fix anti-double-Validation-ouverte)
+  const suffix = '\n\n3️⃣ Validation ouverte\n\n' + VALIDATION_OUVERTE;
+
   while (retries <= maxRetries) {
     try {
       let deduction: string;
 
       if (onChunk) {
-        const suffix = '\n\n3️⃣ Validation ouverte\n\n' + VALIDATION_OUVERTE;
-
         if (!prefixAlreadySent) {
           const prefixDisplay = '1️⃣ Lecture implicite\n\n' + transposeToSecondPerson(mentorAngle) + '\n\n2️⃣ Déduction personnalisée\n\n';
           onChunk(prefixDisplay);
@@ -300,28 +292,24 @@ async function renderReveliomWithRawAngle(
               { role: 'system', content: REVELIOM_DEDUCTION_SYSTEM(positionalContext, mentorAngle) },
               { role: 'user', content: 'Déduction personnalisée (une phrase, max 25 mots) :' },
             ],
-            model: 'gpt-4o',
+            model: 'gpt-5.4-nano',
             temperature: 0.8,
             max_tokens: 120,
           },
           onChunk
         );
         deduction = deductionStreamed.trim();
-
-        onChunk(suffix);
+        // suffix NON envoyé ici — envoyé une seule fois après validation ci-dessous
       } else {
-        const response = await client.chat.completions.create({
-          model: 'gpt-4o',
+        const content = await callGemini({
           messages: [
             { role: 'system', content: REVELIOM_DEDUCTION_SYSTEM(positionalContext, mentorAngle) },
             { role: 'user', content: 'Déduction personnalisée (une phrase, max 25 mots) :' },
           ],
           temperature: 0.8,
-          max_tokens: 120,
         });
-        const content = response.choices[0]?.message?.content;
         if (!content) {
-          throw new Error('No response content from OpenAI');
+          throw new Error('No response content from Gemini');
         }
         deduction = content.trim();
       }
@@ -352,6 +340,8 @@ async function renderReveliomWithRawAngle(
       const rendered = transposeToSecondPerson(mentorText);
       if (validation.valid) {
         console.log(`[MENTOR_STYLE_RENDERER] Texte REVELIOM (angle brut section 1) validé (type: ${blockType})`);
+        // Envoyer suffix EXACTEMENT UNE FOIS quand valide
+        if (onChunk) onChunk(suffix);
         return rendered;
       }
       if (retries < maxRetries) {
@@ -360,6 +350,8 @@ async function renderReveliomWithRawAngle(
         continue;
       }
       console.warn(`[MENTOR_STYLE_RENDERER] Validation échouée après retries, utilisation texte assemblé`, validation.errors);
+      // Dernier retry : envoyer suffix EXACTEMENT UNE FOIS avant de retourner
+      if (onChunk) onChunk(suffix);
       return rendered;
     } catch (error: any) {
       if (retries < maxRetries) {
@@ -489,41 +481,65 @@ function getFormatInstructions(blockType: BlockType): string {
 - Conserver EXACTEMENT les limites de mots (20/25 mots)`;
 
     case 'block2b':
-      // Format synthèse BLOC 2B (4-6 lignes) — même doctrine stylistique que miroirs REVELIOM
-      return `⚠️ FORMAT STRICT OBLIGATOIRE — SYNTHÈSE BLOC 2B (MIROIR)
+      // FIX BUG 3 : Format miroir BLOC 2B = MÊME structure V8 que miroirs BLOCS 1 et 3-9
+      return `⚠️ FORMAT STRICT OBLIGATOIRE — MIROIR BLOC 2B (REVELIOM)
 
-- 4 à 6 lignes maximum. Synthèse continue, dense, INCARNÉE.
-- Basée UNIQUEMENT sur l'angle mentor. Révélation d'un moteur réel, pas un résumé.
-- Ton : mentor, causal, vécu. 2ᵉ personne UNIQUEMENT (tu / te / ton).
-- Croiser motifs + personnages + traits si contexte dispo. Faire ressortir : rapport au pouvoir, à la pression, aux relations, posture face à la responsabilité.
-- 1 point de vigilance réaliste, sans jugement.
-- PAS de format 1️⃣ 2️⃣ 3️⃣. PAS de validation ouverte.
+Le miroir DOIT suivre EXACTEMENT ce format — rien d'autre :
 
-❌ INTERDICTIONS (doctrine REVELIOM) :
-- Jamais descriptif RH, jamais bilan générique, jamais psychologisant.
-- Pas de "elle", "la personne", "cette personne" — tout en "tu".
-- Pas de "il est possible que", "tu sembles", "on voit que". Pas de concepts mous (motivation générale, personnalité, équilibre).
-- Le rendu doit provoquer "ok… je ne l'avais pas formulé comme ça", PAS "oui c'est ce que j'ai dit".`;
+1️⃣ Lecture implicite
+[UNE phrase, MAXIMUM 20 mots, lecture en creux — "Ce n'est probablement pas X, mais plutôt Y"]
+
+2️⃣ Déduction personnalisée
+[UNE phrase, MAXIMUM 25 mots, tension ou moteur implicite révélé]
+
+3️⃣ Validation ouverte
+"Dis-moi si ça te parle, ou s'il y a une nuance importante que je n'ai pas vue."
+
+⚠️ CONTRAINTES FORMAT :
+- Conserver EXACTEMENT le format (sections 1️⃣ 2️⃣ 3️⃣)
+- Conserver EXACTEMENT les limites de mots (20/25 mots)
+- Baser sur : motifs choisis + personnages + traits pour les 3 œuvres
+- Révéler le rapport au pouvoir, à la pression, aux relations, à la responsabilité
+
+❌ INTERDICTIONS ABSOLUES :
+- Jamais un paragraphe libre ou un texte de coaching de 100+ mots
+- Jamais "elle", "la personne", "cette personne" — tout en "tu"
+- Jamais de PAS de format 1️⃣ 2️⃣ 3️⃣ → structure OBLIGATOIRE`;
 
     case 'synthesis':
-      // Format synthèse finale (structure libre mais dense)
-      return `⚠️ FORMAT STRICT OBLIGATOIRE — SYNTHÈSE FINALE
+      // Format synthèse finale — structure obligatoire avec emoji markers (parsés par parseSynthesisText côté frontend)
+      return `⚠️ FORMAT OBLIGATOIRE — SYNTHÈSE FINALE REVELIOM
 
-- Synthèse continue, dense, incarnée, structurante
-- Basée UNIQUEMENT sur : l'angle mentor
-- Incarnes l'angle en langage vécu et expérientiel
-- Tu n'as PAS à justifier l'angle, tu dois l'incarner
-- Structure libre mais DOIT couvrir :
-  * Ce qui met vraiment en mouvement
-  * Comment tu tiens dans le temps
-  * Tes valeurs quand il faut agir
-  * Ce que révèlent tes projections
-  * Tes vraies forces… et tes vraies limites
-  * Ton positionnement professionnel naturel
-  * Lecture globale — synthèse émotionnelle courte (3-4 phrases)
-- PAS de format REVELIOM (1️⃣ 2️⃣ 3️⃣)
-- PAS de validation ouverte
-- Ton mentor, posé, honnête, jamais institutionnel`;
+Tu DOIS structurer ta réponse EXACTEMENT comme suit.
+Les emojis en début de section sont OBLIGATOIRES — ils sont utilisés pour parser le profil.
+
+🔥 Ce qui te met vraiment en mouvement
+[2-3 phrases incarnées sur le moteur interne — ce qui déclenche l'action, l'élan]
+
+🧱 Comment tu tiens dans le temps
+[2-3 phrases sur les patterns d'endurance, de régulation, de rythme]
+
+⚖️ Tes valeurs quand il faut agir
+[2-3 phrases sur les critères de décision et l'éthique d'action]
+
+🧩 Ce que révèlent tes projections
+[2-3 phrases sur les aspirations profondes déduites des réponses]
+
+🛠️ Tes vraies forces & tes vraies limites
+[2-3 phrases honnêtes — capital réel ET angles morts concrets]
+
+🎯 Ton positionnement professionnel naturel
+[2-3 phrases sur le rôle idéal, l'environnement de travail, les conditions de performance]
+
+🧠 Lecture globale
+[3-4 phrases de synthèse émotionnelle condensée — la lecture d'ensemble, le fil rouge]
+
+RÈGLES ABSOLUES :
+- JAMAIS "elle", "la personne", "cette personne" — toujours "tu/ton/ta/tes"
+- JAMAIS de validation ouverte (pas de "dis-moi si ça te parle")
+- JAMAIS de format 1️⃣ 2️⃣ 3️⃣ — uniquement les 7 sections ci-dessus avec leurs emojis
+- Ton mentor : posé, honnête, incarné, jamais institutionnel
+- Basé UNIQUEMENT sur les réponses et l'angle mentor transmis`;
 
     case 'matching':
       // Format matching (structure spécifique)
