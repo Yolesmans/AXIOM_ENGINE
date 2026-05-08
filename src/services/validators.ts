@@ -243,9 +243,9 @@ export function validateQuestion2A1(content: string): ValidationResult {
     };
   }
   
-  // Accepter "A. Série" / "A) Série" / "A Série" et idem pour B. Film
-  const hasSerie = /A\s*[\.\)]?\s*(Série|série)/i.test(content);
-  const hasFilm = /B\s*[\.\)]?\s*(Film|film)/i.test(content);
+  // Accepter "A. Série" / "A. Une série" / "A) Série" et idem pour B. Film / B. Un film
+  const hasSerie = /A\s*[\.\)]?\s*(Une\s+)?(Série|série)/i.test(content);
+  const hasFilm = /B\s*[\.\)]?\s*(Un\s+)?(Film|film)/i.test(content);
   
   if (!hasSerie || !hasFilm) {
     const missing: string[] = [];

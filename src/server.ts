@@ -1,5 +1,7 @@
 import './env.js';
 import express, { type Request, type Response } from "express";
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 import cors from "cors";
 import { candidateStore } from "./store/sessionStore.js";
 import { v4 as uuidv4 } from "uuid";
@@ -33,7 +35,7 @@ import { IdentitySchema } from "./validators/identity.js";
 import { candidateToLiveTrackingRow, googleSheetsLiveTrackingService } from "./services/googleSheetsService.js";
 import type { AnswerRecord } from "./types/answer.js";
 import type { AxiomCandidate } from "./types/candidate.js";
-import { callOpenAIStream } from "./services/openaiClient.js";
+import { callOpenAIStream } from "./services/geminiClient.js";
 import { parseMirrorSections } from "./services/parseMirrorSections.js";
 import { validateMirrorREVELIOM } from "./services/validateMirrorReveliom.js";
 
@@ -135,7 +137,20 @@ const app = express();
 // BODY PARSER
 app.use(express.json());
 
-// SERVIR FICHIERS STATIQUES UI (pour tests E2E locaux)
+// SERVIR LE FRONTEND REACT BUILTÉ (dist/frontend) EN PROD
+// En dev, Vite tourne sur port 5173 avec proxy vers ce serveur
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const frontendDist = join(__dirname, '..', 'dist', 'frontend');
+// index.html : no-cache pour que le browser charge toujours la dernière version
+app.use(express.static(frontendDist, {
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('index.html')) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    }
+  }
+}));
+// Fallback legacy ui-test (tests E2E)
 app.use(express.static('ui-test'));
 
 // CORS — AUTORISER VERCEL
@@ -373,6 +388,27 @@ app.get("/start", async (req: Request, res: Response) => {
       autoContinue: false,
     });
   }
+});
+
+// GET /history — Retourne conversationHistory pour le frontend (reconnect)
+app.get('/history', async (req: Request, res: Response) => {
+  const sessionId = (req.headers['x-session-id'] as string) || (req.query.sessionId as string) || '';
+  if (!sessionId) return res.status(400).json({ messages: [], currentBlock: 0 });
+
+  let candidate = candidateStore.get(sessionId);
+  if (!candidate) candidate = await candidateStore.getAsync(sessionId);
+  if (!candidate) return res.status(404).json({ messages: [], currentBlock: 0 });
+
+  // Mapper conversationHistory → format frontend { id, role: 'ai'|'user', text }
+  const messages = (candidate.conversationHistory || [])
+    .filter((m) => m.content?.trim())
+    .map((m, idx) => ({
+      id: idx + 1,
+      role: m.role === 'user' ? 'user' : 'ai',
+      text: m.content,
+    }));
+
+  return res.json({ messages, currentBlock: candidate.session.currentBlock });
 });
 
 // POST /axiom
@@ -1951,6 +1987,19 @@ app.post("/axiom/stream", async (req: Request, res: Response) => {
     });
     res.end();
   }
+});
+
+// SPA fallback — toutes les routes non-API servent le frontend React
+app.get('*', (_req, res) => {
+  const indexPath = join(frontendDist, 'index.html');
+  res.sendFile(indexPath, (err) => {
+    if (err) {
+      // Fallback ui-test si le frontend n'est pas buildé
+      res.sendFile(join(process.cwd(), 'ui-test', 'index.html'), (err2) => {
+        if (err2) res.status(404).send('Not found');
+      });
+    }
+  });
 });
 
 const PORT = Number(process.env.PORT) || 3000;

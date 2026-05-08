@@ -6,6 +6,26 @@ const postRegistry = {
             createdAt: new Date().toISOString(),
         },
     ],
+    demo: [
+        {
+            posteId: "dev",
+            label: "Développeur",
+            createdAt: new Date().toISOString(),
+        },
+        {
+            posteId: "commercial",
+            label: "Commercial",
+            createdAt: new Date().toISOString(),
+        },
+    ],
+    // Tenant générique pour l'interface React Firebase (Google AI Studio V1)
+    reveliom: [
+        {
+            posteId: "diagnostic",
+            label: "Diagnostic REVELIOM",
+            createdAt: new Date().toISOString(),
+        },
+    ],
 };
 export function getPostsForTenant(tenantId) {
     const posts = postRegistry[tenantId];

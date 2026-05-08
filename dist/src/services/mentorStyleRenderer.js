@@ -1,16 +1,51 @@
-import OpenAI from 'openai';
-import { callOpenAIStream } from './openaiClient.js';
+import { callGemini, callOpenAIStream } from './geminiClient.js';
 import { validateMentorStyle } from './validateMentorStyle.js';
-if (!process.env.OPENAI_API_KEY) {
-    throw new Error('OPENAI_API_KEY is required but not found in environment variables');
-}
-const client = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
-});
 /** Blocs qui utilisent le format REVELIOM (1️⃣ Lecture implicite, 2️⃣ Déduction, 3️⃣ Validation) */
 const REVELIOM_BLOCK_TYPES = ['block1', 'block3', 'block4', 'block5', 'block6', 'block7', 'block8', 'block9'];
 /** Phrase fixe section 3 — inchangée */
 const VALIDATION_OUVERTE = 'Dis-moi si ça te parle, ou s\'il y a une nuance importante que je n\'ai pas vue.';
+const BLOC_DEDUCTION_CONFIG = {
+    block1: {
+        sujet: 'moteur',
+        forme: '« Ce moteur tient tant que … — lorsque … , … »',
+        exemple: '« Ce moteur tient tant que tu sens que ton action change réellement quelque chose pour quelqu\'un — lorsque ce lien se dilue, ton engagement perd de sa force. »',
+    },
+    block3: {
+        sujet: 'exigence',
+        forme: '« Cette exigence s\'exprime pleinement quand … — elle se retourne contre toi quand … »',
+        exemple: '« Cette exigence s\'exprime pleinement quand tu as la main sur les règles du jeu et que tu peux agir selon tes propres critères — elle se retourne contre toi quand on t\'oblige à faire semblant que les règles ne comptent pas. »',
+    },
+    block4: {
+        sujet: 'compétence',
+        forme: '« Cette compétence s\'active vraiment quand … — elle se neutralise quand … »',
+        exemple: '« Cette compétence s\'active vraiment quand tu sais précisément à quoi elle sert et que le contexte lui laisse une prise réelle — elle se neutralise quand le cadre ne te donne aucun levier concret. »',
+    },
+    block5: {
+        sujet: 'trajectoire',
+        forme: '« Cette trajectoire avance quand … — elle dérive quand … »',
+        exemple: '« Cette trajectoire avance quand ce que tu construis te dépasse et a du sens au-delà de toi — elle dérive quand l\'horizon se réduit à une accumulation de tâches sans direction claire. »',
+    },
+    block6: {
+        sujet: 'cadre pratique',
+        forme: '« Ce cadre te libère quand … — il te pèse quand … »',
+        exemple: '« Ce cadre te libère quand les règles pratiques s\'adaptent à ton rythme réel et te laissent de la respiration — il te pèse quand les contraintes s\'accumulent sans contrepartie visible. »',
+    },
+    block7: {
+        sujet: 'identité professionnelle',
+        forme: '« Cette identité s\'affirme quand … — elle se brouille quand … »',
+        exemple: '« Cette identité s\'affirme quand tu exerces quelque chose que tu maîtrises vraiment et que l\'environnement te reconnaît pour ça — elle se brouille quand le rôle qu\'on t\'assigne ne correspond pas à ce que tu sais réellement faire. »',
+    },
+    block8: {
+        sujet: 'rapport à l\'autorité',
+        forme: '« Ce rapport à l\'autorité fonctionne quand … — il se tend quand … »',
+        exemple: '« Ce rapport à l\'autorité fonctionne quand la confiance se construit dans les deux sens et que le cadre est lisible — il se tend quand la hiérarchie devient un rapport de force plutôt qu\'un appui. »',
+    },
+    block9: {
+        sujet: 'dynamique sociale',
+        forme: '« Cette dynamique sociale s\'épanouit quand … — elle s\'épuise quand … »',
+        exemple: '« Cette dynamique sociale s\'épanouit quand tu peux choisir tes interactions et que l\'environnement te laisse doser ta présence — elle s\'épuise quand le collectif t\'impose un rythme ou une intensité que tu n\'as pas décidés. »',
+    },
+};
 /**
  * Transposition 3ᵉ → 2ᵉ personne pour le rendu utilisateur (REVELIOM).
  * Purement stylistique, déterministe, sans impact sémantique.
@@ -38,6 +73,9 @@ export function transposeToSecondPerson(text) {
     out = out.replace(/\bson\b/g, 'ton');
     out = out.replace(/\bsa\b/g, 'ta');
     out = out.replace(/\bses\b/g, 'tes');
+    // COI avant verbe : lui → te (ex: "lui permet" → "te permet", "lui donne" → "te donne")
+    out = out.replace(/\blui\s+(?=[a-zàâéèêëîïôùûüç])/gi, 'te ');
+    // Tonique résiduel : lui → toi (après préposition, fin de phrase)
     out = out.replace(/\blui\b/g, 'toi');
     return out;
 }
@@ -142,22 +180,19 @@ Incarnes cet angle en style mentor incarné. Tu n'as pas à expliquer, tu dois i
             if (onChunk) {
                 const { fullText } = await callOpenAIStream({
                     messages: [{ role: 'system', content: systemContent }],
-                    model: 'gpt-4o',
+                    model: 'gpt-5.4-nano',
                     temperature: 0.8,
                     max_tokens: blockType === 'synthesis' || blockType === 'matching' ? 800 : 200,
                 }, onChunk);
                 mentorText = fullText;
             }
             else {
-                const response = await client.chat.completions.create({
-                    model: 'gpt-4o',
+                const content = await callGemini({
                     messages: [{ role: 'system', content: systemContent }],
                     temperature: 0.8,
-                    max_tokens: blockType === 'synthesis' || blockType === 'matching' ? 800 : 200,
                 });
-                const content = response.choices[0]?.message?.content;
                 if (!content) {
-                    throw new Error('No response content from OpenAI');
+                    throw new Error('No response content from Gemini');
                 }
                 mentorText = content.trim();
             }
@@ -201,7 +236,9 @@ Incarnes cet angle en style mentor incarné. Tu n'as pas à expliquer, tu dois i
     }
     throw new Error('Failed to render mentor style after retries');
 }
-const REVELIOM_DEDUCTION_SYSTEM = (positionalContext, mentorAngle) => `${positionalContext}Tu es un mentor. Tu reçois un ANGLE déjà formulé (lecture en creux : "Ce n'est probablement pas X, mais Y.").
+const REVELIOM_DEDUCTION_SYSTEM = (positionalContext, mentorAngle, blockType) => {
+    const cfg = (blockType && BLOC_DEDUCTION_CONFIG[blockType]) ?? BLOC_DEDUCTION_CONFIG.block1;
+    return `${positionalContext}Tu es un mentor. Tu reçois un ANGLE déjà formulé (lecture en creux : "Ce n'est probablement pas X, mais Y.").
 
 ⚠️ RÈGLE STRICTE — SECTIONS
 
@@ -213,31 +250,31 @@ const REVELIOM_DEDUCTION_SYSTEM = (positionalContext, mentorAngle) => `${positio
 FORMAT OBLIGATOIRE — DÉDUCTION PERSONNALISÉE (NON NÉGOCIABLE)
 ═══════════════════════════════════════════════════════════════════
 
-Ta phrase DOIT suivre EXACTEMENT cette structure :
+Ta phrase DOIT suivre EXACTEMENT cette structure pour ce bloc (${cfg.sujet}) :
 
-« Ce moteur tient tant que … — lorsque … , … »
+${cfg.forme}
 
-• Première partie (après "tant que") : condition concrète où le moteur est vivant — en "tu", langage vécu.
+• Première partie : condition concrète où ce ${cfg.sujet} est vivant — en "tu", langage vécu.
 • Tiret long " — " (obligatoire).
-• Deuxième partie (après "lorsque") : ce qui dilue ou éteint — conséquence sur ton engagement.
+• Deuxième partie : ce qui dilue, éteint ou grippe — conséquence concrète sur ton fonctionnement.
 
 Ton : mentor, causal, incarné, vécu. Jamais psychologisant, jamais RH, jamais abstrait. Toujours en 2ᵉ personne (tu / te / ton).
 
-Exemple CANONIQUE :
-« Ce moteur tient tant que tu sens que ton action change réellement quelque chose pour quelqu'un — lorsque ce lien se dilue, ton engagement perd de sa force. »
+Exemple CANONIQUE pour ce bloc :
+${cfg.exemple}
 
 ❌ INTERDICTIONS ABSOLUES :
 - Ne PAS répéter ni reformuler l'angle (il est déjà en Lecture implicite).
 - Ne PAS lister des traits, ne PAS expliquer psychologiquement, ne PAS neutraliser.
-- Ne PAS produire de phrase qui ne suit pas la forme "Ce moteur tient tant que … — lorsque … , …".
-- Ne PAS employer "quand tu" en début de déduction.
+- Ne PAS produire de phrase qui ne suit pas la forme : ${cfg.forme}
 - Ne PAS employer "il est possible que", "tu sembles", "on voit que".
 - Ne PAS employer de concepts mous : motivation générale, personnalité, équilibre, etc.
 
 Angle (déjà utilisé en Lecture implicite — ne pas recopier) :
 ${mentorAngle}
 
-Produis UNIQUEMENT cette phrase (forme "Ce moteur tient tant que … — lorsque … , …"), sans numéro ni titre.`;
+Produis UNIQUEMENT cette phrase (${cfg.sujet}), sans numéro ni titre.`;
+};
 /**
  * Rendu REVELIOM avec Lecture implicite = angle brut (sans reformulation).
  * Le LLM ne produit que la section 2 (Déduction personnalisée).
@@ -247,40 +284,38 @@ async function renderReveliomWithRawAngle(mentorAngle, blockType, onChunk, prefi
     const positionalContext = buildPositionalContext(blockType);
     let retries = 0;
     const maxRetries = 1;
+    // suffix défini HORS de la boucle pour être accessible après validation (Fix anti-double-Validation-ouverte)
+    const suffix = '\n\n3️⃣ Validation ouverte\n\n' + VALIDATION_OUVERTE;
     while (retries <= maxRetries) {
         try {
             let deduction;
             if (onChunk) {
-                const suffix = '\n\n3️⃣ Validation ouverte\n\n' + VALIDATION_OUVERTE;
                 if (!prefixAlreadySent) {
                     const prefixDisplay = '1️⃣ Lecture implicite\n\n' + transposeToSecondPerson(mentorAngle) + '\n\n2️⃣ Déduction personnalisée\n\n';
                     onChunk(prefixDisplay);
                 }
                 const { fullText: deductionStreamed } = await callOpenAIStream({
                     messages: [
-                        { role: 'system', content: REVELIOM_DEDUCTION_SYSTEM(positionalContext, mentorAngle) },
+                        { role: 'system', content: REVELIOM_DEDUCTION_SYSTEM(positionalContext, mentorAngle, blockType) },
                         { role: 'user', content: 'Déduction personnalisée (une phrase, max 25 mots) :' },
                     ],
-                    model: 'gpt-4o',
+                    model: 'gpt-5.4-nano',
                     temperature: 0.8,
                     max_tokens: 120,
                 }, onChunk);
                 deduction = deductionStreamed.trim();
-                onChunk(suffix);
+                // suffix NON envoyé ici — envoyé une seule fois après validation ci-dessous
             }
             else {
-                const response = await client.chat.completions.create({
-                    model: 'gpt-4o',
+                const content = await callGemini({
                     messages: [
-                        { role: 'system', content: REVELIOM_DEDUCTION_SYSTEM(positionalContext, mentorAngle) },
+                        { role: 'system', content: REVELIOM_DEDUCTION_SYSTEM(positionalContext, mentorAngle, blockType) },
                         { role: 'user', content: 'Déduction personnalisée (une phrase, max 25 mots) :' },
                     ],
                     temperature: 0.8,
-                    max_tokens: 120,
                 });
-                const content = response.choices[0]?.message?.content;
                 if (!content) {
-                    throw new Error('No response content from OpenAI');
+                    throw new Error('No response content from Gemini');
                 }
                 deduction = content.trim();
             }
@@ -308,6 +343,9 @@ async function renderReveliomWithRawAngle(mentorAngle, blockType, onChunk, prefi
             const rendered = transposeToSecondPerson(mentorText);
             if (validation.valid) {
                 console.log(`[MENTOR_STYLE_RENDERER] Texte REVELIOM (angle brut section 1) validé (type: ${blockType})`);
+                // Envoyer suffix EXACTEMENT UNE FOIS quand valide
+                if (onChunk)
+                    onChunk(suffix);
                 return rendered;
             }
             if (retries < maxRetries) {
@@ -316,6 +354,9 @@ async function renderReveliomWithRawAngle(mentorAngle, blockType, onChunk, prefi
                 continue;
             }
             console.warn(`[MENTOR_STYLE_RENDERER] Validation échouée après retries, utilisation texte assemblé`, validation.errors);
+            // Dernier retry : envoyer suffix EXACTEMENT UNE FOIS avant de retourner
+            if (onChunk)
+                onChunk(suffix);
             return rendered;
         }
         catch (error) {
@@ -446,40 +487,64 @@ function getFormatInstructions(blockType) {
 - Conserver EXACTEMENT le format (sections 1️⃣ 2️⃣ 3️⃣)
 - Conserver EXACTEMENT les limites de mots (20/25 mots)`;
         case 'block2b':
-            // Format synthèse BLOC 2B (4-6 lignes) — même doctrine stylistique que miroirs REVELIOM
-            return `⚠️ FORMAT STRICT OBLIGATOIRE — SYNTHÈSE BLOC 2B (MIROIR)
+            // FIX BUG 3 : Format miroir BLOC 2B = MÊME structure V8 que miroirs BLOCS 1 et 3-9
+            return `⚠️ FORMAT STRICT OBLIGATOIRE — MIROIR BLOC 2B (REVELIOM)
 
-- 4 à 6 lignes maximum. Synthèse continue, dense, INCARNÉE.
-- Basée UNIQUEMENT sur l'angle mentor. Révélation d'un moteur réel, pas un résumé.
-- Ton : mentor, causal, vécu. 2ᵉ personne UNIQUEMENT (tu / te / ton).
-- Croiser motifs + personnages + traits si contexte dispo. Faire ressortir : rapport au pouvoir, à la pression, aux relations, posture face à la responsabilité.
-- 1 point de vigilance réaliste, sans jugement.
-- PAS de format 1️⃣ 2️⃣ 3️⃣. PAS de validation ouverte.
+Le miroir DOIT suivre EXACTEMENT ce format — rien d'autre :
 
-❌ INTERDICTIONS (doctrine REVELIOM) :
-- Jamais descriptif RH, jamais bilan générique, jamais psychologisant.
-- Pas de "elle", "la personne", "cette personne" — tout en "tu".
-- Pas de "il est possible que", "tu sembles", "on voit que". Pas de concepts mous (motivation générale, personnalité, équilibre).
-- Le rendu doit provoquer "ok… je ne l'avais pas formulé comme ça", PAS "oui c'est ce que j'ai dit".`;
+1️⃣ Lecture implicite
+[UNE phrase, MAXIMUM 20 mots, lecture en creux — "Ce n'est probablement pas X, mais plutôt Y"]
+
+2️⃣ Déduction personnalisée
+[UNE phrase, MAXIMUM 25 mots, tension ou moteur implicite révélé]
+
+3️⃣ Validation ouverte
+"Dis-moi si ça te parle, ou s'il y a une nuance importante que je n'ai pas vue."
+
+⚠️ CONTRAINTES FORMAT :
+- Conserver EXACTEMENT le format (sections 1️⃣ 2️⃣ 3️⃣)
+- Conserver EXACTEMENT les limites de mots (20/25 mots)
+- Baser sur : motifs choisis + personnages + traits pour les 3 œuvres
+- Révéler le rapport au pouvoir, à la pression, aux relations, à la responsabilité
+
+❌ INTERDICTIONS ABSOLUES :
+- Jamais un paragraphe libre ou un texte de coaching de 100+ mots
+- Jamais "elle", "la personne", "cette personne" — tout en "tu"
+- Jamais de PAS de format 1️⃣ 2️⃣ 3️⃣ → structure OBLIGATOIRE`;
         case 'synthesis':
-            // Format synthèse finale (structure libre mais dense)
-            return `⚠️ FORMAT STRICT OBLIGATOIRE — SYNTHÈSE FINALE
+            // Format synthèse finale — structure obligatoire avec emoji markers (parsés par parseSynthesisText côté frontend)
+            return `⚠️ FORMAT OBLIGATOIRE — SYNTHÈSE FINALE REVELIOM
 
-- Synthèse continue, dense, incarnée, structurante
-- Basée UNIQUEMENT sur : l'angle mentor
-- Incarnes l'angle en langage vécu et expérientiel
-- Tu n'as PAS à justifier l'angle, tu dois l'incarner
-- Structure libre mais DOIT couvrir :
-  * Ce qui met vraiment en mouvement
-  * Comment tu tiens dans le temps
-  * Tes valeurs quand il faut agir
-  * Ce que révèlent tes projections
-  * Tes vraies forces… et tes vraies limites
-  * Ton positionnement professionnel naturel
-  * Lecture globale — synthèse émotionnelle courte (3-4 phrases)
-- PAS de format REVELIOM (1️⃣ 2️⃣ 3️⃣)
-- PAS de validation ouverte
-- Ton mentor, posé, honnête, jamais institutionnel`;
+Tu DOIS structurer ta réponse EXACTEMENT comme suit.
+Les emojis en début de section sont OBLIGATOIRES — ils sont utilisés pour parser le profil.
+
+🔥 Ce qui te met vraiment en mouvement
+[2-3 phrases incarnées sur le moteur interne — ce qui déclenche l'action, l'élan]
+
+🧱 Comment tu tiens dans le temps
+[2-3 phrases sur les patterns d'endurance, de régulation, de rythme]
+
+⚖️ Tes valeurs quand il faut agir
+[2-3 phrases sur les critères de décision et l'éthique d'action]
+
+🧩 Ce que révèlent tes projections
+[2-3 phrases sur les aspirations profondes déduites des réponses]
+
+🛠️ Tes vraies forces & tes vraies limites
+[2-3 phrases honnêtes — capital réel ET angles morts concrets]
+
+🎯 Ton positionnement professionnel naturel
+[2-3 phrases sur le rôle idéal, l'environnement de travail, les conditions de performance]
+
+🧠 Lecture globale
+[3-4 phrases de synthèse émotionnelle condensée — la lecture d'ensemble, le fil rouge]
+
+RÈGLES ABSOLUES :
+- JAMAIS "elle", "la personne", "cette personne" — toujours "tu/ton/ta/tes"
+- JAMAIS de validation ouverte (pas de "dis-moi si ça te parle")
+- JAMAIS de format 1️⃣ 2️⃣ 3️⃣ — uniquement les 7 sections ci-dessus avec leurs emojis
+- Ton mentor : posé, honnête, incarné, jamais institutionnel
+- Basé UNIQUEMENT sur les réponses et l'angle mentor transmis`;
         case 'matching':
             // Format matching (structure spécifique)
             return `⚠️ FORMAT STRICT OBLIGATOIRE — MATCHING

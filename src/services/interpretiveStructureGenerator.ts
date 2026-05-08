@@ -1,12 +1,4 @@
-import OpenAI from 'openai';
-
-if (!process.env.OPENAI_API_KEY) {
-  throw new Error('OPENAI_API_KEY is required but not found in environment variables');
-}
-
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+import { callGemini } from './geminiClient.js';
 
 /**
  * Structure interprétative (froide, logique, non stylisée)
@@ -82,8 +74,7 @@ export async function generateInterpretiveStructure(
 
   while (retries <= maxRetries) {
     try {
-      const response = await client.chat.completions.create({
-        model: 'gpt-4o-mini',
+      const content = await callGemini({
         messages: [
           {
             role: 'system',
@@ -147,16 +138,14 @@ ${answersContext}
 ÉTAPE 2 : Décompose cette hypothèse en structure JSON (4 champs)
 
 Produis UNIQUEMENT un JSON valide avec TOUS les champs remplis de manière PRÉCISE et SPÉCIFIQUE, sans texte additionnel.`
-          }
+          },
+          { role: 'user', content: 'Génère la structure JSON.' },
         ],
         temperature: 0.3,
-        max_tokens: 300,
-        response_format: { type: 'json_object' },
       });
 
-      const content = response.choices[0]?.message?.content;
       if (!content) {
-        throw new Error('No response content from OpenAI');
+        throw new Error('No response content from Gemini');
       }
 
       // Parser le JSON

@@ -69,34 +69,37 @@ interface UserProfile {
   adn?: any;
 }
 
-// --- Mock Data ---
+// --- Profil de démonstration — Edhy (BLOC 10 réel, session du 28/01/2026) ---
+// Ce profil est remplacé par user.adn dès que le candidat termine son propre diagnostic.
 const REAL_PROFILE_DATA = {
-  name: "James",
-  mouvement: "Ce qui te fait avancer, ce n'est ni la compétition brute ni la reconnaissance sociale. C'est le moment où tu vois l'effet direct de ce que tu transmets : quand quelqu'un comprend, progresse, réussit grâce à toi.",
-  temps: "Tu fonctionnes par phases d'intensité, activées par un cadre clair. Sans structure ou sans retour, ton énergie retombe — non par manque de capacité, mais par absence de déclencheur.",
-  valeurs: "Tu agis d'abord en fonction de ce qui te semble juste. L'agressivité, la pression mal gérée et les jeux d'ego te coupent net.",
-  projections: "Attiré par des univers complexes, tu valorises les figures agissant dans l'ombre avec du recul. Maîtrise silencieuse des systèmes plutôt que domination spectaculaire.",
-  forces: "Rendre accessible ce qui est complexe, installer un climat de confiance, faire progresser les autres sans les écraser.",
-  limites: "Besoin d'un cadre externe ; l'automotivation pure te coûte. C'est une lucidité qui est une vraie force si prise en compte.",
-  positionnement: "Pédagogue-structurant : quelqu'un qui comprend, explique, accompagne, puis organise.",
-  lecture_globale: "Une architecture dominée par la transmission et la stratégie, habitée par une quête de justesse plus que de performance brute.",
+  name: "Edhy",
+  mouvement: "Ce qui te fait avancer, ce n'est ni la compétition brute ni la reconnaissance sociale en elle-même. C'est le moment où tu vois l'effet direct de ce que tu transmets : quand quelqu'un comprend, progresse, réussit grâce à toi. Tu te mets en marche quand tu sens que ton action a un impact réel sur les autres, pas quand tu poursuis un objectif abstrait.",
+  temps: "Tu n'es pas un moteur autonome permanent. Tu fonctionnes par phases d'intensité, activées par un cadre clair, une responsabilité visible ou une attente extérieure. Sans structure ou sans retour, ton énergie retombe — non par manque de capacité, mais par absence de déclencheur. À l'inverse, dans un cadre exigeant mais lisible, tu peux tenir longtemps et très solidement.",
+  valeurs: "Tu agis d'abord en fonction de ce qui te semble juste, pas de ce qui est simplement efficace ou déjà validé ailleurs. L'agressivité, la pression mal gérée et les jeux d'ego te coupent net. Tu préfères encaisser, observer, puis intervenir quand une limite claire est franchie, plutôt que réagir à chaud.",
+  projections: "Tu es attiré par des univers complexes, structurés, où le pouvoir passe par la compréhension, l'information et la stratégie, pas par la force ou l'exposition. Les figures que tu valorises agissent souvent dans l'ombre, avec du recul, du savoir, et un temps d'avance. Ce n'est pas la domination qui t'attire, mais la maîtrise silencieuse des systèmes.",
+  forces: "Ta force centrale : rendre accessible ce qui est complexe, installer un climat de confiance, faire progresser les autres sans les écraser. Patience et pédagogie au niveau référent — validées terrain.",
+  limites: "Ta limite n'est pas technique. Elle est structurelle : sans cadre externe, l'automotivation pure te coûte. Tu es lucide là-dessus — et cette lucidité est une vraie force, si elle est prise en compte dans l'environnement.",
+  positionnement: "Pédagogue-structurant : quelqu'un qui comprend, explique, accompagne, puis organise autour de lui. Pas fait pour rester longtemps seul dans l'exécution brute — mais pour former, encadrer, déléguer, à condition que les personnes en face soient réellement engagées.",
+  lecture_globale: "Tu es quelqu'un qui avance quand il se sent utile, légitime et inscrit dans un système qui a du sens. Tu as besoin de complexité, mais aussi de cadre. Quand ces deux éléments sont réunis, tu peux construire loin, calmement, et durablement. Quand ils manquent, tu t'éteins plus que tu n'échoues.",
   boosters: [
-    { label: "Transmission", value: 95 },
-    { label: "Impact Humain", value: 88 },
-    { label: "Structure Claire", value: 82 }
+    { label: "Impact direct sur les autres", value: 95 },
+    { label: "Transmission & pédagogie", value: 92 },
+    { label: "Cadre clair + responsabilités", value: 84 },
+    { label: "Systèmes complexes à maîtriser", value: 78 },
   ],
   freins: [
-    { label: "Jeux d'Ego", value: 75 },
-    { label: "Agressivité", value: 90 },
-    { label: "Flou Stratégique", value: 65 }
+    { label: "Absence de cadre ou de retour", value: 88 },
+    { label: "Pression agressive / jeux d'ego", value: 82 },
+    { label: "Exécution brute sans impact humain", value: 70 },
+    { label: "Objectifs abstraits & déconnectés", value: 62 },
   ],
   skills_data: [
-    { subject: 'Logique', A: 92, fullMark: 100 },
-    { subject: 'Empathie', A: 85, fullMark: 100 },
-    { subject: 'Adaptabilité', A: 78, fullMark: 100 },
-    { subject: 'Transmission', A: 95, fullMark: 100 },
-    { subject: 'Stratégie', A: 88, fullMark: 100 },
-    { subject: 'Patience', A: 90, fullMark: 100 },
+    { subject: 'Pédagogie', A: 95, fullMark: 100 },
+    { subject: 'Transmission', A: 92, fullMark: 100 },
+    { subject: 'Structuration', A: 80, fullMark: 100 },
+    { subject: 'Management', A: 78, fullMark: 100 },
+    { subject: 'Stratégie', A: 72, fullMark: 100 },
+    { subject: 'Autonomie', A: 55, fullMark: 100 },
   ]
 };
 
@@ -173,14 +176,42 @@ const DiagnosticChat = ({ user, profile, onComplete, onExit }: { user: UserProfi
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
-  // Unique session per DiagnosticChat mount — ensures a fresh FSM session each time
-  const sessionIdRef = useRef<string>(user.uid + '_' + Date.now());
+  // Session ID stable par utilisateur — stocké en localStorage pour permettre la reprise de session
+  // Effacé uniquement quand le diagnostic est complété (dans onComplete)
+  const _sessionKey = `axiom_session_id_${user.uid}`;
+  const _stored = localStorage.getItem(_sessionKey);
+  const _sessionId: string = _stored ?? `${user.uid}_${Date.now()}`;
+  if (!_stored) localStorage.setItem(_sessionKey, _sessionId);
+  const sessionIdRef = useRef<string>(_sessionId);
 
   // PREAMBULE_TEXT supprimé — le préambule vient du moteur AXIOM (API)
 
   const parseName = (displayName: string) => {
     const parts = (displayName || '').trim().split(' ');
     return { firstName: parts[0] ?? 'Utilisateur', lastName: parts.slice(1).join(' ') || 'REVELIOM' };
+  };
+
+  // Simulation de frappe pour les questions statiques (~150 chars/sec = typing fluide et visible)
+  const simulateTyping = (
+    text: string,
+    onProgress: (partial: string) => void,
+    onFinished: () => void,
+  ) => {
+    // N'animer que la partie question (avant les choix A./B./C.)
+    // Les choix apparaissent comme boutons après l'animation via extractChoices
+    const choiceStartIdx = text.search(/\n\s*[A-E]\.\s/);
+    const textToAnimate = choiceStartIdx >= 0 ? text.slice(0, choiceStartIdx) : text;
+
+    const CHARS_PER_TICK = 2;   // ralenti — 40 chars/sec (~2s pour 80 chars)
+    const MS_PER_TICK = 50;
+    let i = 0;
+    const tick = () => {
+      i = Math.min(i + CHARS_PER_TICK, textToAnimate.length);
+      onProgress(textToAnimate.slice(0, i));
+      if (i < textToAnimate.length) setTimeout(tick, MS_PER_TICK);
+      else onFinished();
+    };
+    setTimeout(tick, 0);
   };
 
   // Initialize session
@@ -190,13 +221,32 @@ const DiagnosticChat = ({ user, profile, onComplete, onExit }: { user: UserProfi
       setIsTyping(true);
       try {
         const { firstName, lastName } = parseName(user.displayName);
-        const { response, step } = await initAxiomSession({
+        const { response, step, isReconnect } = await initAxiomSession({
           sessionId: sessionIdRef.current,
           firstName,
           lastName,
           email: user.email,
         });
-        if (response) setMessages([{ id: Date.now(), role: 'ai', text: response }]);
+
+        if (isReconnect) {
+          // Reconnect : charger l'historique de la conversation depuis le serveur
+          try {
+            const histRes = await fetch('/history', {
+              headers: { 'x-session-id': sessionIdRef.current },
+            });
+            const histData = await histRes.json();
+            const history: Array<{ id: number; role: string; text: string }> = histData.messages || [];
+            setMessages(history.length > 0
+              ? history
+              : [{ id: Date.now(), role: 'ai', text: 'Session reprise. Tu peux continuer.' }]
+            );
+          } catch {
+            setMessages([{ id: Date.now(), role: 'ai', text: 'Session reprise. Tu peux continuer.' }]);
+          }
+        } else if (response) {
+          setMessages([{ id: Date.now(), role: 'ai', text: response }]);
+        }
+
         setFsmStep(step);
       } catch (e) {
         console.error("AXIOM Init Error:", e);
@@ -225,12 +275,40 @@ const DiagnosticChat = ({ user, profile, onComplete, onExit }: { user: UserProfi
       onDone: (event) => {
         const text = event.response || accumulated;
         setStreamingText("");
-        if (text) setMessages(prev => [...prev, { id: Date.now(), role: 'ai', text }]);
-        setFsmStep(event.step);
-        setIsTyping(false);
-        if (isDiagnosticComplete(event.step)) {
-          const synthese = parseSynthesisText(text);
-          setTimeout(() => onComplete(synthese, { sessionId: sessionIdRef.current, completedAt: new Date().toISOString() }), 2500);
+
+        if (!text) {
+          setIsTyping(false);
+          setFsmStep(event.step);
+          return;
+        }
+
+        if (accumulated.length === 0) {
+          // Question statique (pas de tokens streamés) → simuler la frappe
+          simulateTyping(
+            text,
+            (partial) => setStreamingText(partial),
+            () => {
+              setStreamingText("");
+              setMessages(prev => [...prev, { id: Date.now(), role: 'ai', text }]);
+              setIsTyping(false);
+              setFsmStep(event.step);
+              if (isDiagnosticComplete(event.step)) {
+                const synthese = parseSynthesisText(text);
+                localStorage.removeItem(`axiom_session_id_${user.uid}`);
+                setTimeout(() => onComplete(synthese, { sessionId: sessionIdRef.current, completedAt: new Date().toISOString() }), 2500);
+              }
+            }
+          );
+        } else {
+          // Message streamé normalement
+          setMessages(prev => [...prev, { id: Date.now(), role: 'ai', text }]);
+          setFsmStep(event.step);
+          setIsTyping(false);
+          if (isDiagnosticComplete(event.step)) {
+            const synthese = parseSynthesisText(text);
+            localStorage.removeItem(`axiom_session_id_${user.uid}`);
+            setTimeout(() => onComplete(synthese, { sessionId: sessionIdRef.current, completedAt: new Date().toISOString() }), 2500);
+          }
         }
       },
       onError: (msg) => {
@@ -255,12 +333,40 @@ const DiagnosticChat = ({ user, profile, onComplete, onExit }: { user: UserProfi
       onDone: (event) => {
         const text = event.response || accumulated;
         setStreamingText("");
-        if (text) setMessages(prev => [...prev, { id: Date.now() + 1, role: 'ai', text }]);
-        setFsmStep(event.step);
-        setIsTyping(false);
-        if (isDiagnosticComplete(event.step)) {
-          const synthese = parseSynthesisText(text);
-          setTimeout(() => onComplete(synthese, { sessionId: sessionIdRef.current, completedAt: new Date().toISOString() }), 2500);
+
+        if (!text) {
+          setIsTyping(false);
+          setFsmStep(event.step);
+          return;
+        }
+
+        if (accumulated.length === 0) {
+          // Question statique (pas de tokens streamés) → simuler la frappe
+          simulateTyping(
+            text,
+            (partial) => setStreamingText(partial),
+            () => {
+              setStreamingText("");
+              setMessages(prev => [...prev, { id: Date.now() + 1, role: 'ai', text }]);
+              setIsTyping(false);
+              setFsmStep(event.step);
+              if (isDiagnosticComplete(event.step)) {
+                const synthese = parseSynthesisText(text);
+                localStorage.removeItem(`axiom_session_id_${user.uid}`);
+                setTimeout(() => onComplete(synthese, { sessionId: sessionIdRef.current, completedAt: new Date().toISOString() }), 2500);
+              }
+            }
+          );
+        } else {
+          // Message streamé normalement
+          setMessages(prev => [...prev, { id: Date.now() + 1, role: 'ai', text }]);
+          setFsmStep(event.step);
+          setIsTyping(false);
+          if (isDiagnosticComplete(event.step)) {
+            const synthese = parseSynthesisText(text);
+            localStorage.removeItem(`axiom_session_id_${user.uid}`);
+            setTimeout(() => onComplete(synthese, { sessionId: sessionIdRef.current, completedAt: new Date().toISOString() }), 2500);
+          }
         }
       },
       onError: (msg) => {
@@ -282,14 +388,15 @@ const DiagnosticChat = ({ user, profile, onComplete, onExit }: { user: UserProfi
       .replace(/^.*PRÉAMBULE REVELIOM[^\n]*/im, '')   // ligne interne du prompt
       .replace(/^.*AFFICHAGE OBLIGATOIRE[^\n]*/im, '') // variante
       .replace(/^\s*[A-E]\.\s*.*$/gm, '')              // choix multiples inline
-      .replace(/^[🔒🟢].*/gm, '')                      // marqueurs internes
+      .replace(/^[🟢].*/gm, '')                         // marqueurs internes (🔒 retiré — message verrou est maintenant bienveillant)
       .trim();
 
   const isWaitingForStart = fsmStep === 'STEP_03_BLOC1';
   const isWaitingContinueBloc3 = fsmStep === 'STEP_WAIT_BLOC_3';
+  const isWaitingBloc10 = fsmStep === 'WAIT_BLOC10_YES';
   const lastAiMsg = [...messages].reverse().find(m => m.role === 'ai');
   const activeText = streamingText || lastAiMsg?.text || "";
-  const aiChoices = !isTyping && !isWaitingForStart && !isWaitingContinueBloc3 ? extractChoices(activeText) : [];
+  const aiChoices = !isTyping && !isWaitingForStart && !isWaitingContinueBloc3 && !isWaitingBloc10 ? extractChoices(activeText) : [];
 
   return (
     <motion.div
@@ -467,7 +574,46 @@ const DiagnosticChat = ({ user, profile, onComplete, onExit }: { user: UserProfi
               className="w-full py-4 bg-reveliom-purple text-white rounded-2xl font-bold text-[15px] tracking-wide hover:bg-reveliom-purple/90 active:scale-[0.98] transition-colors flex items-center justify-center gap-2"
             >
               <Sparkles className="w-4 h-4 fill-current" />
-              Je commence mon profil
+              Je poursuis mon profil
+            </motion.button>
+          )}
+
+          {/* Bouton BLOC 10 — Découverte du profil */}
+          {isWaitingBloc10 && !isTyping && (
+            <motion.button
+              initial={{ opacity: 0, y: 16, scale: 0.95 }}
+              animate={{
+                opacity: 1, y: 0, scale: 1,
+                boxShadow: [
+                  '0 0 0px rgba(124,58,237,0)',
+                  '0 8px 40px rgba(124,58,237,0.55)',
+                  '0 8px 24px rgba(124,58,237,0.30)',
+                  '0 8px 40px rgba(124,58,237,0.55)',
+                  '0 0 0px rgba(124,58,237,0)',
+                ]
+              }}
+              transition={{
+                opacity: { duration: 0.6, ease: 'easeOut' },
+                y: { duration: 0.6, ease: [0.34, 1.56, 0.64, 1] },
+                scale: { duration: 0.6, ease: [0.34, 1.56, 0.64, 1] },
+                boxShadow: { repeat: Infinity, duration: 3, ease: 'easeInOut' }
+              }}
+              onClick={() => handleSendMessage('Oui')}
+              className="w-full py-5 bg-reveliom-purple text-white rounded-2xl font-black text-[15px] tracking-wide hover:bg-reveliom-purple/90 active:scale-[0.97] transition-colors flex items-center justify-center gap-3 relative overflow-hidden group"
+            >
+              {/* Shimmer effect */}
+              <motion.div
+                className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent"
+                animate={{ x: ['-100%', '200%'] }}
+                transition={{ repeat: Infinity, duration: 2.5, ease: 'easeInOut', repeatDelay: 0.8 }}
+              />
+              <Sparkles className="w-5 h-5 fill-current shrink-0" />
+              <span className="relative z-10">Je découvre mon profil</span>
+              <motion.span
+                animate={{ x: [0, 4, 0] }}
+                transition={{ repeat: Infinity, duration: 1.5, ease: 'easeInOut' }}
+                className="text-white/70 relative z-10"
+              >→</motion.span>
             </motion.button>
           )}
 
@@ -789,7 +935,23 @@ function TabButton({ children, active, onClick }: { children: React.ReactNode, a
 // --- CANDIDATE VIEWS ---
 
 function CandidateEspace({ user, onLaunch, onGoADN, onShowQR, onUpdatePhoto }: { user: UserProfile; onLaunch: () => void; onGoADN: () => void; onShowQR: () => void; onUpdatePhoto: (url: string) => void }) {
-  const adnPercent = user.adn ? 100 : 40;
+  const [currentBlock, setCurrentBlock] = useState<number>(0);
+
+  // Récupérer la progression réelle depuis le serveur (session en cours)
+  useEffect(() => {
+    if (user.adn) return; // Profil déjà complet → 100%
+    const sessionId = localStorage.getItem(`axiom_session_id_${user.uid}`);
+    if (!sessionId) return;
+    fetch(`/start?tenant=reveliom&poste=diagnostic`, {
+      headers: { 'x-session-id': sessionId },
+    })
+      .then(r => r.json())
+      .then(data => { if (typeof data.currentBlock === 'number') setCurrentBlock(data.currentBlock); })
+      .catch(() => {});
+  }, [user.uid, user.adn]);
+
+  // % réel : profil complet = 100%, sinon (currentBlock / 10) * 100, min 10%
+  const adnPercent = user.adn ? 100 : Math.max(10, Math.round((currentBlock / 10) * 100));
 
   const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];

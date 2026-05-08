@@ -1,9 +1,12 @@
 import 'dotenv/config';
 import { z } from 'zod';
 
+const MOCK_ENABLED =
+  process.env.GEMINI_MOCK_ENABLED === 'true' || process.env.AXIOM_TEST_MODE === 'true';
+
 const EnvSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3001),
-  OPENAI_API_KEY: z.string().min(1),
+  OPENAI_API_KEY: MOCK_ENABLED ? z.string().optional() : z.string().min(1),
   GOOGLE_SHEETS_CREDENTIALS: z.string().optional(),
   GOOGLE_SHEETS_SPREADSHEET_ID: z.string().optional(),
   AXIOM_PUBLIC_URL: z.string().default('http://localhost:3001'),

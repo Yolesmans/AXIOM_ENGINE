@@ -1482,105 +1482,73 @@ export async function executeAxiom(
   // STEP_03_PREAMBULE
   // ============================================
   if (currentState === STEP_03_PREAMBULE) {
-    // Charger et exécuter le préambule STRICTEMENT
-    let aiText: string | null = null;
-    const messages = buildConversationHistory(candidate);
+    // PRÉAMBULE — appel LLM ciblé avec prompt court (adapte au ton tutoie/vouvoie)
+    // On n'envoie PAS getFullAxiomPrompt() ici pour éviter que le modèle le reproduise
+    const tone = ui.tutoiement || 'tutoiement';
+    const toneLabel = tone === 'vouvoiement' ? 'vouvoiement (vous)' : 'tutoiement (tu)';
+
+    const PREAMBULE_BASE =
+      'REVELIOM n\'est pas un test.\n' +
+      'Ce n\'est pas un jugement.\n' +
+      'Et ce n\'est pas une sélection déguisée.\n\n' +
+      'Ici, il n\'y a rien à réussir,\n' +
+      'rien à prouver,\n' +
+      'rien à jouer.\n\n' +
+      'Chaque personne a sa manière de fonctionner,\n' +
+      'sa manière d\'apprendre,\n' +
+      'sa manière d\'avancer,\n' +
+      'et sa propre valeur.\n\n' +
+      'Le but n\'est pas de dire si tu es fait ou pas pour quelque chose.\n' +
+      'Le but est simplement de comprendre comment tu fonctionnes vraiment,\n' +
+      'quand tu es naturel,\n' +
+      'quand tu es sous pression,\n' +
+      'quand tu es motivé,\n' +
+      'et quand tu t\'épuises.\n\n' +
+      'Tes réponses ne servent pas à te mettre dans une case.\n' +
+      'Elles servent à construire une lecture fidèle de qui tu es dans le travail.\n\n' +
+      'Tu peux répondre simplement,\n' +
+      'sans chercher la bonne réponse,\n' +
+      'sans essayer de deviner ce qu\'il faudrait dire.\n\n' +
+      'Il n\'y a rien à cacher,\n' +
+      'et rien à défendre.\n\n' +
+      'Tout ce que tu dis ici reste dans ce cadre,\n' +
+      'et sert uniquement à mieux comprendre\n' +
+      'ce qui te correspond vraiment,\n' +
+      'et ce qui ne te correspond pas.\n\n' +
+      'Prends ça comme une discussion honnête,\n' +
+      'avec quelqu\'un qui cherche juste à te voir tel que tu es.';
+
+    let aiText: string = PREAMBULE_BASE;
 
     try {
-      const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
+      const preambuleSystemPrompt =
+        `Tu es l'assistant REVELIOM. Le candidat a choisi le ${toneLabel}.\n` +
+        `Restitue le texte ci-dessous EXACTEMENT, mot pour mot, en adaptant uniquement les formules de politesse au ${toneLabel}.\n` +
+        `N'ajoute rien, ne supprime rien, ne reformule rien d'autre.\n` +
+        `Réponds UNIQUEMENT avec le texte adapté, sans introduction ni commentaire.`;
+
       const preambuleMessages = [
-        { role: 'system', content: FULL_AXIOM_PROMPT },
-        {
-          role: 'system',
-          content: `RÈGLE ABSOLUE REVELIOM :
-Tu es en état STEP_03_PREAMBULE.
-Tu dois afficher LE PRÉAMBULE REVELIOM COMPLET tel que défini dans le prompt.
-Tu NE POSES PAS de question.
-Tu affiches uniquement le préambule, mot pour mot selon les instructions.
-AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
-        },
-        ...messages,
+        { role: 'system', content: preambuleSystemPrompt },
+        { role: 'user', content: PREAMBULE_BASE },
       ];
+
       if (onChunk) {
-        const { fullText } = await callOpenAIStream({ messages: preambuleMessages }, onChunk);
+        const { fullText } = await callOpenAIStream({ messages: preambuleMessages, temperature: 0.1 }, onChunk);
         if (fullText.trim()) aiText = fullText.trim();
       } else {
-        const completion = await callOpenAI({ messages: preambuleMessages });
+        const completion = await callOpenAI({ messages: preambuleMessages, temperature: 0.1 });
         if (typeof completion === 'string' && completion.trim()) aiText = completion.trim();
       }
     } catch (e) {
-      console.error('[AXIOM_EXECUTION_ERROR]', e);
-    }
-
-    // Si échec → réessayer une fois
-    if (!aiText) {
-      try {
-        const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
-        const preambuleRetryMessages = [
-          { role: 'system', content: FULL_AXIOM_PROMPT },
-          {
-            role: 'system',
-            content: `RÈGLE ABSOLUE REVELIOM :
-Tu es en état STEP_03_PREAMBULE.
-Tu dois afficher LE PRÉAMBULE REVELIOM COMPLET tel que défini dans le prompt.
-Tu NE POSES PAS de question.
-Tu affiches uniquement le préambule, mot pour mot selon les instructions.
-AUCUNE reformulation, AUCUNE improvisation, AUCUNE question.`,
-          },
-          ...messages,
-        ];
-        if (onChunk) {
-          const { fullText } = await callOpenAIStream({ messages: preambuleRetryMessages }, onChunk);
-          if (fullText.trim()) aiText = fullText.trim();
-        } else {
-          const completion = await callOpenAI({ messages: preambuleRetryMessages });
-          if (typeof completion === 'string' && completion.trim()) aiText = completion.trim();
+      console.error('[PREAMBULE_ERROR] Fallback sur texte fixe', e);
+      // Fallback : streaming manuel du texte fixe
+      if (onChunk) {
+        for (const para of PREAMBULE_BASE.split('\n\n')) {
+          onChunk(para + '\n\n');
+          await new Promise(r => setTimeout(r, 60));
         }
-      } catch (e) {
-        console.error('[AXIOM_EXECUTION_ERROR_RETRY]', e);
       }
-    }
-
-    // Si toujours vide → utiliser le texte du prompt directement
-    if (!aiText) {
-      const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
-      const extractedPreambule = extractPreambuleFromPrompt(FULL_AXIOM_PROMPT);
-
-      if (extractedPreambule) {
-        aiText = extractedPreambule;
-      } else {
-        // Fallback minimal — PRÉAMBULE REVELIOM V8 (texte exact du CDC)
-        aiText =
-          'REVELIOM n\'est pas un test.\n' +
-          'Ce n\'est pas un jugement.\n' +
-          'Et ce n\'est pas une sélection déguisée.\n\n' +
-          'Ici, il n\'y a rien à réussir,\n' +
-          'rien à prouver,\n' +
-          'rien à jouer.\n\n' +
-          'Chaque personne a sa manière de fonctionner,\n' +
-          'sa manière d\'apprendre,\n' +
-          'sa manière d\'avancer,\n' +
-          'et sa propre valeur.\n\n' +
-          'Le but n\'est pas de dire si tu es fait ou pas pour quelque chose.\n' +
-          'Le but est simplement de comprendre comment tu fonctionnes vraiment,\n' +
-          'quand tu es naturel,\n' +
-          'quand tu es sous pression,\n' +
-          'quand tu es motivé,\n' +
-          'et quand tu t\'épuises.\n\n' +
-          'Tes réponses ne servent pas à te mettre dans une case.\n' +
-          'Elles servent à construire une lecture fidèle de qui tu es dans le travail.\n\n' +
-          'Tu peux répondre simplement,\n' +
-          'sans chercher la bonne réponse,\n' +
-          'sans essayer de deviner ce qu\'il faudrait dire.\n\n' +
-          'Il n\'y a rien à cacher,\n' +
-          'et rien à défendre.\n\n' +
-          'Tout ce que tu dis ici reste dans ce cadre,\n' +
-          'et sert uniquement à mieux comprendre\n' +
-          'ce qui te correspond vraiment,\n' +
-          'et ce qui ne te correspond pas.\n\n' +
-          'Prends ça comme une discussion honnête,\n' +
-          'avec quelqu\'un qui cherche juste à te voir tel que tu es.';
-      }
+      aiText = PREAMBULE_BASE;
     }
 
     // Transition immédiate vers wait_start_button
@@ -1860,7 +1828,14 @@ Toute sortie hors règles = invalide.`;
       // nextBlocNumber=10 dépasse la condition <= 9, on court-circuite vers le verrou
       if (blocNumber === 9) {
         const lockMessage =
-          `🔒 TRANSITION EXPLICITE — ACCÈS À LA SYNTHÈSE FINALE\n\nLes informations nécessaires à l'analyse sont maintenant collectées.\n\nAucune lecture globale n'a encore été produite.\n\n⚠️ VERROU TECHNIQUE FINAL\n\nDis-moi exactement "Oui" pour activer le BLOC 10 et découvrir ta synthèse complète.\n\nToute autre réponse maintient AXIOM en état de collecte inactive.\nAucune synthèse ne peut être produite sans ce mot exact.`;
+(() => {
+            const firstUserMsg = (candidate.conversationHistory || []).find(m => m.role === 'user');
+            const elapsedMin = firstUserMsg?.createdAt
+              ? Math.round((Date.now() - new Date(firstUserMsg.createdAt as string).getTime()) / 60000)
+              : 0;
+            const durationStr = elapsedMin >= 5 ? `${elapsedMin} minutes` : 'quelques dizaines de minutes';
+            return `Tu viens de consacrer ${durationStr} à répondre honnêtement à des questions que peu de gens prennent le temps de vraiment creuser.\n\nCe que tu as décrit — ta façon de fonctionner, tes moteurs, tes valeurs, ce que tu attends vraiment du travail — a une valeur réelle. Pas sur le papier. Dans la réalité.\n\nREVELIOM a maintenant tout ce qu'il faut pour produire une lecture complète, lucide et sans filtre de qui tu es professionnellement.\n\nTa synthèse est prête.`;
+          })();
 
         candidateStore.updateUIState(candidate.candidateId, {
           step: WAIT_BLOC10_YES,
@@ -1967,7 +1942,14 @@ Toute sortie hors règles = invalide.`;
       if (bloc9Mirror) {
         console.log('[AXIOM_EXECUTOR] Fix6 — B9-VAL interceptée (deriveState=BLOC_10, uiStep≠WAIT_BLOC10_YES) → verrou');
         const lockMessage =
-          `🔒 TRANSITION EXPLICITE — ACCÈS À LA SYNTHÈSE FINALE\n\nLes informations nécessaires à l'analyse sont maintenant collectées.\n\nAucune lecture globale n'a encore été produite.\n\n⚠️ VERROU TECHNIQUE FINAL\n\nDis-moi exactement "Oui" pour activer le BLOC 10 et découvrir ta synthèse complète.\n\nToute autre réponse maintient AXIOM en état de collecte inactive.\nAucune synthèse ne peut être produite sans ce mot exact.`;
+(() => {
+            const firstUserMsg = (candidate.conversationHistory || []).find(m => m.role === 'user');
+            const elapsedMin = firstUserMsg?.createdAt
+              ? Math.round((Date.now() - new Date(firstUserMsg.createdAt as string).getTime()) / 60000)
+              : 0;
+            const durationStr = elapsedMin >= 5 ? `${elapsedMin} minutes` : 'quelques dizaines de minutes';
+            return `Tu viens de consacrer ${durationStr} à répondre honnêtement à des questions que peu de gens prennent le temps de vraiment creuser.\n\nCe que tu as décrit — ta façon de fonctionner, tes moteurs, tes valeurs, ce que tu attends vraiment du travail — a une valeur réelle. Pas sur le papier. Dans la réalité.\n\nREVELIOM a maintenant tout ce qu'il faut pour produire une lecture complète, lucide et sans filtre de qui tu es professionnellement.\n\nTa synthèse est prête.`;
+          })();
 
         candidateStore.appendMirrorValidation(candidate.candidateId, 9, userMessage);
         candidateStore.updateUIState(candidate.candidateId, {

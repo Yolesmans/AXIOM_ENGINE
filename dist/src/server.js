@@ -1,10 +1,12 @@
 import './env.js';
 import express from "express";
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 import cors from "cors";
 import { candidateStore } from "./store/sessionStore.js";
 import { v4 as uuidv4 } from "uuid";
 import { getPostConfig } from "./store/postRegistry.js";
-import { executeWithAutoContinue, STEP_01_IDENTITY, STEP_02_TONE, STEP_03_PREAMBULE, STEP_03_BLOC1, STEP_WAIT_BLOC_3, BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10, STEP_99_MATCH_READY, STEP_99_MATCHING, DONE_MATCHING, } from "./engine/axiomExecutor.js";
+import { executeWithAutoContinue, STEP_01_IDENTITY, STEP_02_TONE, STEP_03_PREAMBULE, STEP_03_BLOC1, STEP_WAIT_BLOC_3, BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10, WAIT_BLOC10_YES, STEP_99_MATCH_READY, STEP_99_MATCHING, DONE_MATCHING, } from "./engine/axiomExecutor.js";
 import { BlockOrchestrator } from "./services/blockOrchestrator.js";
 import { z } from "zod";
 import { IdentitySchema } from "./validators/identity.js";
@@ -54,23 +56,23 @@ function logRequestState(candidate, label) {
 // PRIORITÉ A : Empêcher les retours en arrière
 // Dérive l'état depuis l'historique du candidat si UI est null
 function deriveStepFromHistory(candidate) {
+    // Règle 0 (PRIORITAIRE) : Préserver les états d'attente de bouton/verrou
+    if (candidate.session.ui?.step === STEP_WAIT_BLOC_3)
+        return STEP_WAIT_BLOC_3;
+    if (candidate.session.ui?.step === WAIT_BLOC10_YES)
+        return WAIT_BLOC10_YES;
+    if (candidate.session.ui?.step === STEP_99_MATCH_READY)
+        return STEP_99_MATCH_READY;
     // Règle 1 : Si currentBlock > 0 → candidat est dans un bloc
-    if (candidate.session.currentBlock > 0) {
+    if (candidate.session.currentBlock > 0)
         return `BLOC_${String(candidate.session.currentBlock).padStart(2, '0')}`;
-    }
-    // Règle 2 : Si réponses présentes → candidat a dépassé le préambule
-    if (candidate.answers.length > 0) {
+    // Règle 2 : Si réponses présentes ou tone choisi → candidat au préambule ou après
+    if (candidate.answers.length > 0 || candidate.tonePreference)
         return STEP_03_BLOC1;
-    }
-    // Règle 3 : Si tone choisi → candidat est au préambule ou après
-    if (candidate.tonePreference) {
-        return STEP_03_BLOC1;
-    }
-    // Règle 4 : Si identité complétée → candidat est au tone
-    if (candidate.identity.completedAt) {
+    // Règle 3 : Si identité complétée → candidat est au tone
+    if (candidate.identity.completedAt)
         return STEP_02_TONE;
-    }
-    // Règle 5 : Sinon → nouveau candidat, identité
+    // Règle 4 : Sinon → nouveau candidat, identité
     return STEP_01_IDENTITY;
 }
 // ============================================
@@ -81,6 +83,9 @@ function mapStepToState(step) {
         return "wait_start_button";
     }
     if ([BLOC_01, BLOC_02, BLOC_03, BLOC_04, BLOC_05, BLOC_06, BLOC_07, BLOC_08, BLOC_09, BLOC_10].includes(step)) {
+        return "collecting";
+    }
+    if (step === WAIT_BLOC10_YES) {
         return "collecting";
     }
     if (step === STEP_99_MATCH_READY) {
@@ -94,6 +99,21 @@ function mapStepToState(step) {
 const app = express();
 // BODY PARSER
 app.use(express.json());
+// SERVIR LE FRONTEND REACT BUILTÉ (dist/frontend) EN PROD
+// En dev, Vite tourne sur port 5173 avec proxy vers ce serveur
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const frontendDist = join(__dirname, '..', 'dist', 'frontend');
+// index.html : no-cache pour que le browser charge toujours la dernière version
+app.use(express.static(frontendDist, {
+    setHeaders: (res, filePath) => {
+        if (filePath.endsWith('index.html')) {
+            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+        }
+    }
+}));
+// Fallback legacy ui-test (tests E2E)
+app.use(express.static('ui-test'));
 // CORS — AUTORISER VERCEL
 app.use(cors({
     origin: [
@@ -124,6 +144,22 @@ const AxiomBodySchema = z.object({
 });
 app.get("/health", (_req, res) => {
     res.status(200).json({ ok: true });
+});
+// Endpoint pour reset du store en mode test
+app.post("/test/reset", (_req, res) => {
+    if (process.env.NODE_ENV !== 'test' && process.env.AXIOM_TEST_MODE !== 'true') {
+        return res.status(403).json({ error: 'Endpoint disponible uniquement en mode test' });
+    }
+    try {
+        // Clear tous les candidats du store
+        candidateStore.clear();
+        console.log('[TEST] CandidateStore reset ✅');
+        res.status(200).json({ ok: true, message: 'Store reset' });
+    }
+    catch (error) {
+        console.error('[TEST] Erreur reset store:', error);
+        res.status(500).json({ error: error.message });
+    }
 });
 app.get("/", (_req, res) => {
     res.status(200).json({ status: "alive" });
@@ -287,6 +323,26 @@ app.get("/start", async (req, res) => {
             autoContinue: false,
         });
     }
+});
+// GET /history — Retourne conversationHistory pour le frontend (reconnect)
+app.get('/history', async (req, res) => {
+    const sessionId = req.headers['x-session-id'] || req.query.sessionId || '';
+    if (!sessionId)
+        return res.status(400).json({ messages: [], currentBlock: 0 });
+    let candidate = candidateStore.get(sessionId);
+    if (!candidate)
+        candidate = await candidateStore.getAsync(sessionId);
+    if (!candidate)
+        return res.status(404).json({ messages: [], currentBlock: 0 });
+    // Mapper conversationHistory → format frontend { id, role: 'ai'|'user', text }
+    const messages = (candidate.conversationHistory || [])
+        .filter((m) => m.content?.trim())
+        .map((m, idx) => ({
+        id: idx + 1,
+        role: m.role === 'user' ? 'user' : 'ai',
+        text: m.content,
+    }));
+    return res.json({ messages, currentBlock: candidate.session.currentBlock });
 });
 // POST /axiom
 app.post("/axiom", async (req, res) => {
@@ -658,6 +714,55 @@ app.post("/axiom", async (req, res) => {
                 step: STEP_WAIT_BLOC_3,
                 expectsAnswer: false,
                 autoContinue: false,
+            });
+        }
+        // HANDLER EXPLICITE START_BLOC_3 (Transition 2B → 3)
+        if (event === 'START_BLOC_3') {
+            console.log('[SERVER] Transition BLOC 3 amorcée');
+            const result = await executeWithAutoContinue(candidate, null, 'START_BLOC_3');
+            const updated = await candidateStore.getAsync(candidate.candidateId);
+            if (updated) {
+                try {
+                    const trackingRow = candidateToLiveTrackingRow(updated);
+                    await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+                }
+                catch (e) {
+                    console.error('Sheet Error:', e);
+                }
+            }
+            return res.status(200).json({
+                sessionId: candidate.candidateId,
+                currentBlock: updated?.session.currentBlock || 3,
+                state: 'collecting',
+                response: result.response || '',
+                step: result.step,
+                expectsAnswer: true,
+                autoContinue: false
+            });
+        }
+        // HANDLER EXPLICITE START_MATCHING (Génération matching)
+        if (event === 'START_MATCHING') {
+            console.log('[SERVER] Event START_MATCHING reçu — génération matching');
+            const result = await executeWithAutoContinue(candidate, null, 'START_MATCHING');
+            const updated = await candidateStore.getAsync(candidate.candidateId);
+            if (updated) {
+                try {
+                    const trackingRow = candidateToLiveTrackingRow(updated);
+                    await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+                    console.log('[SERVER] Google Sheet mis à jour après matching');
+                }
+                catch (e) {
+                    console.error('Sheet Error:', e);
+                }
+            }
+            return res.status(200).json({
+                sessionId: candidate.candidateId,
+                currentBlock: updated?.session.currentBlock || 10,
+                state: 'matching',
+                response: result.response || '',
+                step: result.step,
+                expectsAnswer: false,
+                autoContinue: false
             });
         }
         // PHASE 2 : Déléguer BLOC 1 à l'orchestrateur (LOT 1 : uniquement si BLOC 1 déjà démarré)
@@ -1338,6 +1443,79 @@ app.post("/axiom/stream", async (req, res) => {
             res.end();
             return;
         }
+        // 5.1) GARDE STEP_WAIT_BLOC_3 (attente bouton Continuer)
+        if (candidate.session.ui?.step === STEP_WAIT_BLOC_3 && userMessageText && event !== 'START_BLOC_3') {
+            const payload = {
+                sessionId: candidate.candidateId,
+                currentBlock: candidate.session.currentBlock,
+                state: "wait_continue_button",
+                response: "Pour continuer vers le BLOC 3, clique sur le bouton 'Continuer' ci-dessus.",
+                step: STEP_WAIT_BLOC_3,
+                expectsAnswer: false,
+                autoContinue: false,
+            };
+            writeEvent("done", {
+                type: "done",
+                ...payload,
+            });
+            res.end();
+            return;
+        }
+        // 5.2) HANDLER EXPLICITE START_BLOC_3 (Transition 2B → 3)
+        if (event === 'START_BLOC_3') {
+            console.log('[SERVER] Transition BLOC 3 amorcée');
+            const result = await executeWithAutoContinue(candidate, null, 'START_BLOC_3', onChunk, onUx);
+            const updated = await candidateStore.getAsync(candidate.candidateId);
+            if (updated) {
+                try {
+                    const trackingRow = candidateToLiveTrackingRow(updated);
+                    await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+                }
+                catch (e) {
+                    console.error('Sheet Error:', e);
+                }
+            }
+            writeEvent('done', {
+                type: 'done',
+                sessionId: candidate.candidateId,
+                currentBlock: updated?.session.currentBlock || 3,
+                state: 'collecting',
+                response: streamedText || result.response || '',
+                step: result.step,
+                expectsAnswer: true,
+                autoContinue: false
+            });
+            res.end();
+            return;
+        }
+        // 5.3) HANDLER EXPLICITE START_MATCHING (Génération matching)
+        if (event === 'START_MATCHING') {
+            console.log('[SERVER] Event START_MATCHING reçu — génération matching');
+            const result = await executeWithAutoContinue(candidate, null, 'START_MATCHING', onChunk, onUx);
+            const updated = await candidateStore.getAsync(candidate.candidateId);
+            if (updated) {
+                try {
+                    const trackingRow = candidateToLiveTrackingRow(updated);
+                    await googleSheetsLiveTrackingService.upsertLiveTracking(tenantId, posteId, trackingRow);
+                    console.log('[SERVER] Google Sheet mis à jour après matching');
+                }
+                catch (e) {
+                    console.error('Sheet Error:', e);
+                }
+            }
+            writeEvent('done', {
+                type: 'done',
+                sessionId: candidate.candidateId,
+                currentBlock: updated?.session.currentBlock || 10,
+                state: 'matching',
+                response: streamedText || result.response || '',
+                step: result.step,
+                expectsAnswer: false,
+                autoContinue: false
+            });
+            res.end();
+            return;
+        }
         // 6) BLOC 1 : déléguer à l'orchestrateur avec onChunk
         if (candidate.session.ui?.step === BLOC_01 && candidate.session.currentBlock === 1) {
             if (userMessageText) {
@@ -1533,7 +1711,9 @@ app.post("/axiom/stream", async (req, res) => {
             }
         }
         // 9) Chemin générique — executeWithAutoContinue avec onChunk
+        console.log('[DEBUG_STREAM] Avant executeWithAutoContinue', { event, step: candidate.session.ui?.step, currentBlock: candidate.session.currentBlock });
         const result = await executeWithAutoContinue(candidate, userMessageText, event || null, onChunk, onUx);
+        console.log('[DEBUG_STREAM] Après executeWithAutoContinue', { result_step: result?.step, result_response: result?.response?.substring(0, 50) });
         const candidateIdAfterExecution = candidate.candidateId;
         candidate = candidateStore.get(candidateIdAfterExecution);
         if (!candidate) {
@@ -1603,6 +1783,19 @@ app.post("/axiom/stream", async (req, res) => {
         });
         res.end();
     }
+});
+// SPA fallback — toutes les routes non-API servent le frontend React
+app.get('*', (_req, res) => {
+    const indexPath = join(frontendDist, 'index.html');
+    res.sendFile(indexPath, (err) => {
+        if (err) {
+            // Fallback ui-test si le frontend n'est pas buildé
+            res.sendFile(join(process.cwd(), 'ui-test', 'index.html'), (err2) => {
+                if (err2)
+                    res.status(404).send('Not found');
+            });
+        }
+    });
 });
 const PORT = Number(process.env.PORT) || 3000;
 app.listen(PORT, "0.0.0.0", () => {

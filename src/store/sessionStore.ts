@@ -871,6 +871,25 @@ class CandidateStore {
     return updated;
   }
 
+  async popBlock2BAnswer(candidateId: string): Promise<AxiomCandidate | undefined> {
+    const candidate = this.candidates.get(candidateId);
+    if (!candidate) return undefined;
+    const prev = candidate.block2Answers?.block2B?.answers ?? [];
+    if (prev.length === 0) return candidate;
+    const updated: AxiomCandidate = {
+      ...candidate,
+      block2Answers: {
+        ...(candidate.block2Answers ?? {}),
+        block2A: candidate.block2Answers?.block2A,
+        block2B: { answers: prev.slice(0, -1) },
+      },
+      session: { ...candidate.session, lastActivityAt: new Date() },
+    };
+    this.candidates.set(candidateId, updated);
+    await this.persistAndFlush(candidateId);
+    return updated;
+  }
+
   async setBlock2BCurrentQuestionIndex(candidateId: string, index: number): Promise<AxiomCandidate | undefined> {
     const candidate = this.candidates.get(candidateId);
     if (!candidate) return undefined;

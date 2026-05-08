@@ -704,6 +704,26 @@ class CandidateStore {
         await this.persistAndFlush(candidateId);
         return updated;
     }
+    async popBlock2BAnswer(candidateId) {
+        const candidate = this.candidates.get(candidateId);
+        if (!candidate)
+            return undefined;
+        const prev = candidate.block2Answers?.block2B?.answers ?? [];
+        if (prev.length === 0)
+            return candidate;
+        const updated = {
+            ...candidate,
+            block2Answers: {
+                ...(candidate.block2Answers ?? {}),
+                block2A: candidate.block2Answers?.block2A,
+                block2B: { answers: prev.slice(0, -1) },
+            },
+            session: { ...candidate.session, lastActivityAt: new Date() },
+        };
+        this.candidates.set(candidateId, updated);
+        await this.persistAndFlush(candidateId);
+        return updated;
+    }
     async setBlock2BCurrentQuestionIndex(candidateId, index) {
         const candidate = this.candidates.get(candidateId);
         if (!candidate)
@@ -783,6 +803,14 @@ class CandidateStore {
         this.candidates.set(candidateId, updated);
         this.persistCandidate(candidateId);
         return updatedAnswerMap;
+    }
+    /**
+     * Vide complètement le store (pour tests uniquement)
+     */
+    clear() {
+        if (this.candidates && typeof this.candidates.clear === 'function') {
+            this.candidates.clear();
+        }
     }
 }
 export const candidateStore = new CandidateStore();

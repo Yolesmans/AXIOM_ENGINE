@@ -2,3 +2,59 @@ node_modules
 .env
 .DS_Store
 axiom-engine-485812-c8f3cead037f.json
+
+# Logs serveur
+*.log
+server.pid
+*.pid
+
+# Fichiers de diagnostic/audit (sessions de travail)
+ANALYSE_*.md
+AUDIT_*.md
+CODE_*.md
+CODE_*.txt
+CORRECTIONS_*.md
+CORRECTION_*.md
+DIAGNOSTIC_*.md
+DIAGNOSTIC_*.json
+DIAGNOSTIC_*.png
+FICHIERS_*.txt
+FULLSTACK_*.md
+GUIDE_*.md
+INDEX_*.md
+LANCER_*.md
+LIVRAISON_*.md
+PROCEDURE_*.md
+RAPPORT_*.md
+README_TEST_*.md
+README_VALIDATION*.md
+RESUME_*.md
+STRATEGIE_*.md
+SYNTHESE_VALIDATION*.md
+TESTING.md
+VALIDATION_*.md
+VERIFICATION_*.md
+
+# Captures d'écran de debug
+*.png
+diagnostic-final*.png
+screenshot*.png
+
+# Scripts de test temporaires
+test-*.js
+test-*.sh
+tests/
+run-*.sh
+lancer-*.sh
+validation-*.js
+validation-*.log
+playwright.config.ts
+playwright-report/
+test-results/
+
+# Répertoire Claude
+.claude/
+
+# Firebase config locale (non sensible mais pas nécessaire en repo)
+frontend/firebase-applet-config.json
+frontend/src/firebase-config.json

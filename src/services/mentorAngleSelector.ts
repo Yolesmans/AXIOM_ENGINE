@@ -1,13 +1,5 @@
-import OpenAI from 'openai';
+import { callGemini } from './geminiClient.js';
 import type { InterpretiveStructure } from './interpretiveStructureGenerator.js';
-
-if (!process.env.OPENAI_API_KEY) {
-  throw new Error('OPENAI_API_KEY is required but not found in environment variables');
-}
-
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
 
 /**
  * Sélectionne UN angle mentor unique à partir de l'analyse complète
@@ -33,8 +25,7 @@ export async function selectMentorAngle(
 
   while (retries <= maxRetries) {
     try {
-      const response = await client.chat.completions.create({
-        model: 'gpt-4o-mini',
+      const content = await callGemini({
         messages: [
           {
             role: 'system',
@@ -97,12 +88,10 @@ Produis UNE SEULE PHRASE au format OBLIGATOIRE : "Ce n'est probablement pas X, m
           }
         ],
         temperature: 0.5,
-        max_tokens: 150,
       });
 
-      const content = response.choices[0]?.message?.content;
       if (!content) {
-        throw new Error('No response content from OpenAI');
+        throw new Error('No response content from Gemini');
       }
 
       const mentorAngle = content.trim();

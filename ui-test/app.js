@@ -1,5 +1,8 @@
 // Configuration API
-const API_BASE_URL = "https://axiomengine-production.up.railway.app";
+// Détection automatique environnement : localhost pour tests E2E, prod sinon
+const API_BASE_URL = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+  ? `http://${window.location.hostname}:3000`
+  : "https://axiomengine-production.up.railway.app";
 
 // Build stamp UI (diagnostic prod)
 const FRONT_VERSION = "ui-test-2026-02-11a";
@@ -495,7 +498,7 @@ function displayStartButton() {
   }
 
   buttonContainer.innerHTML = `
-    <button id="mvp-start-button" type="button">
+    <button id="mvp-start-button" type="button" data-testid="start-bloc1-button">
       Je commence mon profil
     </button>
   `;
@@ -529,7 +532,7 @@ function displayContinueButton() {
   }
 
   buttonContainer.innerHTML = `
-    <button id="continue-bloc3-button" type="button">
+    <button id="continue-bloc3-button" type="button" data-testid="continue-bloc3-button">
       Continuer
     </button>
   `;
@@ -597,7 +600,7 @@ function displayFinishButton() {
   }
 
   buttonContainer.innerHTML = `
-    <button id="mvp-finish-button" type="button">
+    <button id="mvp-finish-button" type="button" data-testid="finish-button">
       FIN
     </button>
   `;
@@ -763,6 +766,7 @@ window.addEventListener('DOMContentLoaded', async () => {
                 placeholder="Prénom"
                 required
                 autocomplete="given-name"
+                data-testid="identity-firstname"
               />
               <input
                 type="text"
@@ -770,6 +774,7 @@ window.addEventListener('DOMContentLoaded', async () => {
                 placeholder="Nom"
                 required
                 autocomplete="family-name"
+                data-testid="identity-lastname"
               />
               <input
                 type="email"
@@ -777,8 +782,9 @@ window.addEventListener('DOMContentLoaded', async () => {
                 placeholder="Email"
                 required
                 autocomplete="email"
+                data-testid="identity-email"
               />
-              <button type="submit">Continuer</button>
+              <button type="submit" data-testid="identity-submit-button">Continuer</button>
             </form>
           `;
           messagesContainer.appendChild(formDiv);

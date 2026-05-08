@@ -1,0 +1,40 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:wght@600;700;800&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Playfair Display", ui-serif, Georgia, serif;
+  
+  --color-reveliom-purple: #7B5BF5;
+  --color-reveliom-purple-dark: #5b3fd1;
+  --color-reveliom-light: #FBFBF9;
+  --color-reveliom-muted: #64748b;
+  --color-reveliom-dark: #0f172a;
+
+  @keyframes shimmer {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+  }
+}
+
+@layer utilities {
+  .animate-shimmer {
+    animation: shimmer 2.5s infinite linear;
+  }
+}
+
+@layer base {
+  body {
+    @apply bg-reveliom-light text-reveliom-dark font-sans antialiased selection:bg-reveliom-purple/10 selection:text-reveliom-purple;
+  }
+}
+
+@layer components {
+  .glass-card {
+    @apply bg-white rounded-[2.5rem] border border-slate-200/50 shadow-sm transition-all duration-500;
+  }
+  
+  .pill-tab {
+    @apply px-5 py-2 rounded-full text-sm font-semibold transition-all duration-200;
+  }
+}

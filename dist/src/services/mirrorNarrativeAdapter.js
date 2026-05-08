@@ -1,4 +1,4 @@
-import { callOpenAI } from './openaiClient.js';
+import { callOpenAI } from './geminiClient.js';
 import { validateMentorStyle } from './validateMentorStyle.js';
 /**
  * Adapte un texte d'analyse au style mentor incarné

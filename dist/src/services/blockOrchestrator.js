@@ -1,10 +1,10 @@
 import { candidateStore } from '../store/sessionStore.js';
-import { callOpenAI } from './openaiClient.js';
+import { callOpenAI, callOpenAIStream } from './geminiClient.js';
 import { BLOC_01, BLOC_02, BLOC_03, STEP_WAIT_BLOC_3, executeAxiom } from '../engine/axiomExecutor.js';
 import { STATIC_QUESTIONS } from '../engine/staticQuestions.js';
 // getFullAxiomPrompt n'est pas exporté, on doit le reconstruire
 import { PROMPT_AXIOM_ENGINE, PROMPT_AXIOM_PROFIL } from '../engine/prompts.js';
-import { validateTraitsSpecificity, validateMotifsSpecificity, validateSynthesis2B, validateQuestion2A1, validateQuestion2A3 } from './validators.js';
+import { validateTraitsSpecificity, validateMotifsSpecificity, validateSynthesis2B } from './validators.js';
 import { validateMirrorREVELIOM } from './validateMirrorReveliom.js';
 import { parseMirrorSections } from './parseMirrorSections.js';
 import { generateInterpretiveStructure } from './interpretiveStructureGenerator.js';
@@ -13,27 +13,39 @@ import { renderMentorStyle, transposeToSecondPerson } from './mentorStyleRendere
 function getFullAxiomPrompt() {
     return `${PROMPT_AXIOM_ENGINE}\n\n${PROMPT_AXIOM_PROFIL}`;
 }
-/** Question 2A.1 statique (0 token, pas d'appel LLM, pas de validation/retry) — modèle BLOC 1 */
-const STATIC_QUESTION_2A1 = `Tu préfères qu'on parle de séries ou de films ?
-A. Série
-B. Film`;
+// ─── QUESTIONS BLOC 2A — FORMULATIONS EXACTES DU PROMPT V8 (STATIQUES, 0 TOKEN) ───
+/** Question 2A.1 — Formulation finale recommandée (SUPER-PROMPT V8 page 12) */
+const STATIC_QUESTION_2A1 = `Quand tu es tranquille le soir, posé sur ton canapé, sans contrainte,\ntu as plutôt tendance à lancer quoi instinctivement ?\n\nA. Une série\nB. Un film`;
+/** Question 2A.2 — Si SÉRIE (formulation exacte V8) */
+const STATIC_QUESTION_2A2_SERIE = `Sans trop réfléchir,\nquelles sont les 3 séries que tu préfères en ce moment, tous genres confondus ?`;
+/** Question 2A.2 — Si FILM (formulation exacte V8) */
+const STATIC_QUESTION_2A2_FILM = `Sans trop réfléchir,\nquels sont les 3 films que tu préfères en ce moment, tous genres confondus ?`;
+/** Question 2A.3 — Œuvre noyau (formulation exacte V8) */
+const STATIC_QUESTION_2A3 = `Maintenant, films et séries confondus.\n\nS'il y avait UNE œuvre que tu pourrais revoir\ncomme si c'était la toute première fois,\ncelle qui t'a vraiment marqué,\ntu choisirais laquelle ?`;
 /**
  * Normalise la réponse 2A.1 (Médium) en valeur canonique.
- * Tolérant : A/a/A./Série/série → SERIE ; B/b/B./Film/film → FILM.
+ * Tolérant : A/a/A./Série/série/une série → SERIE ; B/b/B./Film/film/un film → FILM.
  * Retourne null si la réponse n'est pas reconnue.
  */
 function normalize2A1Response(raw) {
     if (!raw || typeof raw !== 'string')
         return null;
     const s = raw.trim().toLowerCase();
-    if (s === 'a' || s === 'a.' || s === 'série' || s === 'serie' || s.startsWith('a.') || s.startsWith('a '))
+    if (s === 'a' || s === 'a.' || s === 'série' || s === 'serie' || s === 'une série' || s === 'une serie' || s.startsWith('a.') || s.startsWith('a '))
         return 'SERIE';
-    if (s === 'b' || s === 'b.' || s === 'film' || s.startsWith('b.') || s.startsWith('b '))
+    if (s === 'b' || s === 'b.' || s === 'film' || s === 'un film' || s.startsWith('b.') || s.startsWith('b '))
+        return 'FILM';
+    // Détection souple
+    if (s.includes('série') || s.includes('serie'))
+        return 'SERIE';
+    if (s.includes('film'))
         return 'FILM';
     return null;
 }
 // Helper pour construire l'historique conversationnel (copié depuis axiomExecutor)
-const MAX_CONV_MESSAGES = 40;
+// 9 blocs × 5Q = 45 échanges + ~9 miroirs + transitions = ~65+ messages minimum
+// → 100 pour garantir la mémoire cumulative complète jusqu'au BLOC 10
+const MAX_CONV_MESSAGES = 100;
 function buildConversationHistory(candidate) {
     const messages = [];
     if (candidate.conversationHistory && candidate.conversationHistory.length > 0) {
@@ -556,125 +568,29 @@ Génère 3 à 5 questions maximum pour le BLOC 1.`,
             currentCandidate = candidateStore.get(candidateId) ?? await candidateStore.getAsync(candidateId);
             if (!currentCandidate)
                 throw new Error(`Candidate ${candidateId} not found`);
+            // FIX BUG 2+7 : Retourner directement la première question 2B (sans debug text)
+            // Le texte "🧠 FIN DU BLOC 2A" ne doit JAMAIS être visible dans le chat
             const result = await this.handleBlock2B(currentCandidate, null, null, onChunk, onUx);
-            const transitionText = "🧠 FIN DU BLOC 2A — PROJECTIONS NARRATIVES\n\nLes préférences sont collectées.\nAucune analyse n'a été produite.\n\nOn passe maintenant au BLOC 2B — Analyse projective des œuvres retenues.\n\n";
-            return { ...result, response: normalizeSingleResponse(transitionText + (result.response || '')) };
+            return result;
         }
         const lastQuestion = currentCandidate.session.ui?.lastQuestion;
         if (lastQuestion)
             return { response: normalizeSingleResponse(lastQuestion), step: BLOC_02, expectsAnswer: true, autoContinue: false };
         return { response: normalizeSingleResponse(STATIC_QUESTION_2A1), step: BLOC_02, expectsAnswer: true, autoContinue: false };
     }
-    async generateQuestion2A1(candidate, retryCount = 0) {
-        const messages = buildConversationHistory(candidate);
-        const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
-        const promptContent = retryCount > 0
-            ? `RÈGLE ABSOLUE AXIOM (RETRY - FORMAT STRICT) :
-Tu es en état BLOC_02 (BLOC 2A - Question 1).
-Génère UNE question simple demandant au candidat son médium préféré (Série ou Film).
-Format OBLIGATOIRE : Question à choix avec EXACTEMENT "A. Série" et "B. Film" sur lignes séparées.
-La question doit être claire et directe.
-IMPORTANT : La question DOIT contenir les deux options "A. Série" et "B. Film" explicitement.`
-            : `RÈGLE ABSOLUE AXIOM :
-Tu es en état BLOC_02 (BLOC 2A - Question 1).
-Génère UNE question simple demandant au candidat son médium préféré (Série ou Film).
-Format : Question à choix avec A. Série / B. Film sur lignes séparées.
-La question doit être claire et directe.`;
-        const completion = await callOpenAI({
-            messages: [
-                { role: 'system', content: FULL_AXIOM_PROMPT },
-                {
-                    role: 'system',
-                    content: promptContent,
-                },
-                ...messages,
-            ],
-        });
-        const question = completion.trim();
-        // Validation avec retry contrôlé
-        const validation = validateQuestion2A1(question);
-        if (!validation.valid && retryCount < 1) {
-            console.warn('[ORCHESTRATOR] Question 2A.1 validation failed, retry:', validation.error);
-            return this.generateQuestion2A1(candidate, retryCount + 1);
-        }
-        if (!validation.valid) {
-            console.warn('[ORCHESTRATOR] Question 2A.1 validation failed after retry, fallback déterministe');
-            return "Tu préfères les séries ou les films ?\n\nA. Série\nB. Film";
-        }
-        return question;
+    async generateQuestion2A1(_candidate, _retryCount = 0) {
+        // Formulation EXACTE du SUPER-PROMPT V8 — 0 token LLM, formulation garantie
+        return STATIC_QUESTION_2A1;
     }
-    async generateQuestion2A2(candidate, mediumAnswer) {
-        const messages = buildConversationHistory(candidate);
-        const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
-        // Déterminer le type de médium (Série ou Film)
-        const isSeries = mediumAnswer.toLowerCase().includes('série') ||
-            mediumAnswer.toLowerCase().includes('serie') ||
-            mediumAnswer.toLowerCase().includes('a.') ||
-            mediumAnswer.toLowerCase().includes('a');
-        const mediumType = isSeries ? 'série' : 'film';
-        const completion = await callOpenAI({
-            messages: [
-                { role: 'system', content: FULL_AXIOM_PROMPT },
-                {
-                    role: 'system',
-                    content: `RÈGLE ABSOLUE AXIOM :
-Tu es en état BLOC_02 (BLOC 2A - Question 2).
-Le candidat a choisi : ${mediumType}.
-Génère UNE question adaptée demandant ses préférences en ${mediumType}s.
-La question doit être personnalisée selon le choix du candidat (séries ou films).
-Format : Question ouverte ou à choix multiples (A/B/C/D/E si choix).
-La question doit être pertinente pour explorer les préférences en ${mediumType}s.`,
-                },
-                ...messages,
-            ],
-        });
-        return completion.trim();
+    async generateQuestion2A2(_candidate, mediumAnswer) {
+        // Formulation EXACTE du SUPER-PROMPT V8 — 0 token LLM, formulation garantie
+        const normalized = normalize2A1Response(mediumAnswer);
+        const isSeries = normalized === 'SERIE';
+        return isSeries ? STATIC_QUESTION_2A2_SERIE : STATIC_QUESTION_2A2_FILM;
     }
-    async generateQuestion2A3(candidate, answers, retryCount = 0) {
-        const messages = buildConversationHistory(candidate);
-        const FULL_AXIOM_PROMPT = getFullAxiomPrompt();
-        const mediumAnswer = answers[0] || '';
-        const preferencesAnswer = answers[1] || '';
-        const promptContent = retryCount > 0
-            ? `RÈGLE ABSOLUE AXIOM (RETRY - FORMAT STRICT) :
-Tu es en état BLOC_02 (BLOC 2A - Question 3).
-Le candidat a choisi : ${mediumAnswer}
-Ses préférences : ${preferencesAnswer}
-Génère UNE question demandant au candidat de choisir UNE œuvre centrale (noyau) parmi ses préférences.
-La question DOIT demander EXACTEMENT UNE œuvre (utilise les mots "une", "un", "seule", "unique").
-La question DOIT mentionner explicitement "œuvre", "série" ou "film".
-Format : Question ouverte demandant le nom de l'œuvre.
-La question doit permettre d'identifier l'œuvre la plus significative pour le candidat.`
-            : `RÈGLE ABSOLUE AXIOM :
-Tu es en état BLOC_02 (BLOC 2A - Question 3).
-Le candidat a choisi : ${mediumAnswer}
-Ses préférences : ${preferencesAnswer}
-Génère UNE question demandant au candidat de choisir UNE œuvre centrale (noyau) parmi ses préférences.
-La question doit être claire et demander une œuvre spécifique (nom d'une série ou d'un film).
-Format : Question ouverte demandant le nom de l'œuvre.
-La question doit permettre d'identifier l'œuvre la plus significative pour le candidat.`;
-        const completion = await callOpenAI({
-            messages: [
-                { role: 'system', content: FULL_AXIOM_PROMPT },
-                {
-                    role: 'system',
-                    content: promptContent,
-                },
-                ...messages,
-            ],
-        });
-        const question = completion.trim();
-        // Validation avec retry contrôlé
-        const validation = validateQuestion2A3(question);
-        if (!validation.valid && retryCount < 1) {
-            console.warn('[ORCHESTRATOR] Question 2A.3 validation failed, retry:', validation.error);
-            return this.generateQuestion2A3(candidate, answers, retryCount + 1);
-        }
-        if (!validation.valid) {
-            console.error('[ORCHESTRATOR] Question 2A.3 validation failed after retry:', validation.error);
-            // Retourner quand même la question (avec warning)
-        }
-        return question;
+    async generateQuestion2A3(_candidate, _answers, _retryCount = 0) {
+        // Formulation EXACTE du SUPER-PROMPT V8 — 0 token LLM, formulation garantie
+        return STATIC_QUESTION_2A3;
     }
     /**
      * MÉCANISME DE RETRY CONTRÔLÉ pour génération BLOC 2B
@@ -848,6 +764,8 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
                     }
                     const normChars = await this.normalizeCharactersLLM(work, userMessage);
                     if (normChars.needsClarification && normChars.message) {
+                        // Undo the premature appendBlock2BAnswer so the next answer doesn't hit the idempotent guard
+                        await candidateStore.popBlock2BAnswer(candidateId);
                         return {
                             response: normalizeSingleResponse(normChars.message),
                             step: BLOC_02,
@@ -859,8 +777,9 @@ La question doit permettre d'identifier l'œuvre la plus significative pour le c
                         candidateStore.setNormalizedCharacters(candidateId, workIndex, normChars.characters);
                         const newQuestions = [];
                         const newMeta = [];
-                        for (const ch of normChars.characters) {
-                            const { question: q } = await this.generateTraitsForCharacterLLM(work, ch.canonicalName);
+                        // PERF : génération traits parallèle (Promise.all) — était séquentielle
+                        const traitResults = await Promise.all(normChars.characters.map(ch => this.generateTraitsForCharacterLLM(work, ch.canonicalName)));
+                        for (const { question: q } of traitResults) {
                             newQuestions.push(q);
                             newMeta.push({ workIndex, slot: 'trait' });
                         }
@@ -1018,17 +937,29 @@ Sinon : {"works":[{"canonicalTitle":"Titre officiel","type":"series" ou "film","
     /** BLOC 2B PREMIUM — Normalisation LLM des personnages (résolution descriptions indirectes). Réponses et messages de clarification en français uniquement. */
     async normalizeCharactersLLM(work, rawAnswer) {
         const completion = await callOpenAI({
+            model: 'gpt-4.1',
             messages: [
                 {
                     role: 'system',
-                    content: `Tu es un assistant francophone. Tu identifies les personnages d'une œuvre à partir d'une réponse utilisateur (noms partiels, descriptions comme "le fils de X").
-Œuvre : ${work}
-RÈGLES : Résous les descriptions en noms canoniques. Corrige les fautes. Maximum 3 personnages.
-Réponds UNIQUEMENT en français par un objet JSON valide : {"characters":[{"canonicalName":"Nom complet","confidence":0.9},...]}
-Si ambiguïté ou réponse insuffisante : {"needsClarification":true,"message":"Message court EN FRANÇAIS pour demander les noms des personnages (ex. : Peux-tu me donner 1 à 3 noms de personnages ?)"}`,
+                    content: `Tu es un expert en fiction (séries, films, livres, manga, anime). Tu identifies les personnages d'une œuvre à partir d'une réponse utilisateur.
+
+🔒 VERROUILLAGE ABSOLU D'UNIVERS : L'œuvre est STRICTEMENT « ${work} ». Tu ne dois JAMAIS retourner un personnage qui n'appartient PAS à « ${work} ». Si l'utilisateur mentionne accidentellement un personnage d'une autre œuvre, ignore-le complètement et demande clarification. Ne confonds JAMAIS les univers.
+
+RÈGLES :
+- Résous les noms partiels, surnoms ou descriptions en noms canoniques officiels (ex: "le boss" dans Peaky Blinders → Tommy Shelby)
+- Corrige les fautes d'orthographe
+- Maximum 3 personnages
+- Tous les personnages retournés DOIVENT exister dans « ${work} »
+
+Réponds UNIQUEMENT en français par un objet JSON valide :
+{"characters":[{"canonicalName":"Nom complet officiel","confidence":0.9},...]}
+
+Si l'utilisateur n'a pas mentionné de personnages de « ${work} » ou si la réponse est insuffisante/ambiguë :
+{"needsClarification":true,"message":"Message court EN FRANÇAIS demandant les noms (max 1-3) dans « ${work} »"}`,
                 },
                 { role: 'user', content: rawAnswer || '(vide)' },
             ],
+            temperature: 0.2,
         });
         const fixMessageFR = (msg) => {
             if (!msg || typeof msg !== 'string')
@@ -1102,6 +1033,7 @@ Ordre : motif #1, personnages #1, motif #2, personnages #2, motif #3, personnage
                 { role: 'system', content: systemPrompt },
                 ...messages,
             ],
+            model: 'gpt-4.1',
             temperature: 0.6,
         });
         let raw = completion.replace(/^```\w*\n?|\n?```$/g, '').trim();
@@ -1192,6 +1124,7 @@ Ordre : motif #1, personnages #1, motif #2, personnages #2, motif #3, personnage
                 { role: 'system', content: retryPrompt },
                 ...messages,
             ],
+            model: 'gpt-4.1',
             temperature: 0.6,
         });
         raw = completion.replace(/^```\w*\n?|\n?```$/g, '').trim();
@@ -1201,11 +1134,9 @@ Ordre : motif #1, personnages #1, motif #2, personnages #2, motif #3, personnage
             return result;
         // P0-2 : FALLBACK 2B ROBUSTE — Validation spécificité motifs obligatoire
         console.warn('[ORCHESTRATOR] BLOC 2B premium: fallback personnalisé (motif LLM + personnages titre)');
-        // Générer motifs avec retry individuel si validation échoue
-        const motifQuestions = [];
-        for (const [idx, workTitle] of [works[2] ?? w2, works[1] ?? w1, works[0] ?? w0].entries()) {
+        // PERF : génération motifs parallèle (Promise.all) — était séquentielle œuvre par œuvre
+        const generateMotifWithRetry = async (workTitle) => {
             let motifQ = await this.generateOneMotifQuestionForWork(workTitle);
-            // Retry individuel si motif ne contient pas 5 options A-E
             if (!this.hasMotifAE(motifQ)) {
                 console.warn(`[ORCHESTRATOR] P0-2: Motif œuvre ${workTitle} invalide, retry`);
                 motifQ = await this.generateOneMotifQuestionForWork(workTitle);
@@ -1214,8 +1145,9 @@ Ordre : motif #1, personnages #1, motif #2, personnages #2, motif #3, personnage
                     motifQ = this.ensureMotifAEFormat('', workTitle);
                 }
             }
-            motifQuestions.push(motifQ);
-        }
+            return motifQ;
+        };
+        const motifQuestions = await Promise.all([works[2] ?? w2, works[1] ?? w1, works[0] ?? w0].map(workTitle => generateMotifWithRetry(workTitle)));
         // Validation spécificité motifs (similarité < 70%)
         const motifsValidation = validateMotifsSpecificity(motifQuestions[0], motifQuestions[1], motifQuestions[2]);
         if (!motifsValidation.valid) {
@@ -1250,25 +1182,90 @@ Ordre : motif #1, personnages #1, motif #2, personnages #2, motif #3, personnage
     /** Génère une seule question motif (avec 5 options A–E) personnalisée pour une œuvre. */
     async generateOneMotifQuestionForWork(work) {
         const title = work || 'N/A';
+        const systemPrompt = `Tu génères une question PERSONNALISÉE pour l'œuvre « ${title} » dans le cadre d'un diagnostic psycho-professionnel en français.
+
+FORMAT DE RÉPONSE ATTENDU (respecte-le à la lettre) :
+Qu'est-ce qui t'attire le PLUS dans « ${title} » ?
+
+A. [proposition spécifique]
+B. [proposition spécifique]
+C. [proposition spécifique]
+D. [proposition spécifique]
+E. [proposition spécifique]
+
+RÈGLES ABSOLUES POUR LES 5 PROPOSITIONS :
+- Chaque proposition = entre 6 et 18 mots, décrivant un aspect précis et évocateur de « ${title} »
+- Les 5 propositions couvrent 5 AXES DIFFÉRENTS de l'œuvre (ex: ambiance, personnages, thèmes, narration, univers visuel, tension dramatique, morale, etc.)
+- Chaque proposition doit être UNIQUE à « ${title} » : impossible de la réutiliser pour une autre œuvre
+- INTERDIT : propositions génériques ou vagues type "Le thème central" / "Les personnages" / "L'intrigue" / "L'univers" / "L'émotion" — ces formulations sont NULLES et REFUSÉES
+- Les propositions doivent être évocatrices, précises, permettre au candidat de se reconnaître
+- Rédige en français courant, naturel, sans jargon
+
+Exemple de BONNES propositions pour Peaky Blinders :
+A. La montée implacable d'une famille ouvrière qui refuse de rester à sa place
+B. Des personnages tiraillés entre la loyauté au clan et leurs propres démons
+C. L'atmosphère sombre et tendue de l'Angleterre d'après-guerre, entre violence et élégance
+D. Les jeux de pouvoir, de trahison et de stratégie qui s'enchaînent sans répit
+E. La façon dont les personnages portent leurs traumatismes sans jamais les nommer
+
+Génère maintenant les 5 propositions SPÉCIFIQUES à « ${title} ».`;
+        // Tentative 1
         try {
             const completion = await callOpenAI({
                 messages: [
-                    {
-                        role: 'system',
-                        content: `Tu génères UNE question pour le bloc 2B : "Qu'est-ce qui t'attire le PLUS dans « ${title} » ?" avec exactement 5 options A, B, C, D, E spécifiques à cette œuvre (thème, personnages, univers, intrigue, émotion). Réponds UNIQUEMENT par la question suivie des 5 lignes A. ... B. ... C. ... D. ... E. ... Sans préambule.`,
-                    },
-                    { role: 'user', content: `Œuvre : ${title}.` },
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: `Œuvre : ${title}. Génère la question et les 5 propositions.` },
                 ],
-                temperature: 0.35,
+                model: 'gpt-4.1',
+                temperature: 0.75,
             });
             const text = completion.trim();
-            if (this.hasMotifAE(text))
+            if (this.hasMotifAE(text) && this.hasMinWordCountInOptions(text))
                 return text;
         }
         catch {
             /* ignore */
         }
+        // Tentative 2 — reformulation plus directive
+        try {
+            const completion2 = await callOpenAI({
+                messages: [
+                    {
+                        role: 'system',
+                        content: `Réponds EXACTEMENT dans ce format, rien d'autre :
+Qu'est-ce qui t'attire le PLUS dans « ${title} » ?
+
+A. [6 à 18 mots décrivant un aspect précis de ${title}]
+B. [6 à 18 mots décrivant un aspect précis de ${title}]
+C. [6 à 18 mots décrivant un aspect précis de ${title}]
+D. [6 à 18 mots décrivant un aspect précis de ${title}]
+E. [6 à 18 mots décrivant un aspect précis de ${title}]
+
+Chaque proposition doit être UNIQUE à ${title}, évocatrice, en français. INTERDIT de répondre "Le thème central", "Les personnages", "L'intrigue", "L'univers" ou tout terme générique.`,
+                    },
+                    { role: 'user', content: title },
+                ],
+                model: 'gpt-4.1',
+                temperature: 0.7,
+            });
+            const text2 = completion2.trim();
+            if (this.hasMotifAE(text2))
+                return text2;
+        }
+        catch {
+            /* ignore */
+        }
         return this.ensureMotifAEFormat('', title);
+    }
+    /** Vérifie que les options A-E ont au moins 4 mots chacune (évite les labels génériques 1 mot) */
+    hasMinWordCountInOptions(text) {
+        const lines = text.split('\n').filter(l => /^\s*[A-E]\.\s/.test(l));
+        if (lines.length < 5)
+            return false;
+        return lines.every(l => {
+            const optText = l.replace(/^\s*[A-E]\.\s*/, '').trim();
+            return optText.split(/\s+/).length >= 4;
+        });
     }
     /** Enlève les crochets autour des titres d'œuvre dans le texte des questions (ex: [Suits] → Suits). */
     stripWorkBracketsFromQuestions(questions, works) {
@@ -1299,7 +1296,14 @@ Ordre : motif #1, personnages #1, motif #2, personnages #2, motif #3, personnage
         if (this.hasMotifAE(question))
             return question;
         const intro = `Qu'est-ce qui t'attire le PLUS dans « ${work} » ?`;
-        const lines = ['A. Le thème central', 'B. Les personnages', 'C. L\'univers', 'D. L\'intrigue', 'E. L\'émotion'];
+        // Fallback avec des propositions ouvertes et non génériques
+        const lines = [
+            `A. L'ambiance générale et l'univers visuel ou sonore de l'œuvre`,
+            `B. La complexité des personnages principaux et leurs relations`,
+            `C. Les tensions dramatiques et la façon dont l'histoire avance`,
+            `D. Les thèmes profonds abordés (pouvoir, loyauté, identité, survie...)`,
+            `E. La façon dont l'œuvre te fait ressentir quelque chose de fort`,
+        ];
         return `${intro}\n\n${lines.join('\n')}`;
     }
     rebuildQuestionsCanonical(questions, canonicalMeta, works) {
@@ -1319,8 +1323,15 @@ Ordre : motif #1, personnages #1, motif #2, personnages #2, motif #3, personnage
     }
     /** BLOC 2B PREMIUM — Génère une question traits + 5 options pour un personnage (nom canonique déjà connu). */
     async generateTraitsForCharacterLLM(work, character, _context) {
-        const defaultQuestion = `Qu'est-ce que tu apprécies le PLUS chez ${character} dans « ${work} » ?\n\nA. Sa présence\nB. Son rôle\nC. Ses choix\nD. Son impact\nE. Son parcours`;
-        const defaultOpts = ['Sa présence', 'Son rôle', 'Ses choix', 'Son impact', 'Son parcours'];
+        const defaultQuestion = `Qu'est-ce que tu apprécies le PLUS chez ${character} dans « ${work} » ?\n\nA. Sa façon de rester lucide même sous une pression extrême\nB. Sa capacité à protéger ceux qu'il aime coûte que coûte\nC. Sa manière de prendre des décisions difficiles sans hésiter\nD. Son refus de se plier aux règles quand l'enjeu est trop important\nE. Sa capacité à inspirer ou transformer ceux qui l'entourent`;
+        const defaultOpts = [
+            'Sa façon de rester lucide même sous une pression extrême',
+            'Sa capacité à protéger ceux qu\'il aime coûte que coûte',
+            'Sa manière de prendre des décisions difficiles sans hésiter',
+            'Son refus de se plier aux règles quand l\'enjeu est trop important',
+            'Sa capacité à inspirer ou transformer ceux qui l\'entourent',
+        ];
+        const hasEnoughWords = (opt) => opt.trim().split(/\s+/).length >= 5;
         const parseResponse = (raw) => {
             try {
                 const cleaned = raw.replace(/^```\w*\n?|\n?```$/g, '').trim();
@@ -1332,33 +1343,80 @@ Ordre : motif #1, personnages #1, motif #2, personnages #2, motif #3, personnage
                     return null;
                 const parsed = JSON.parse(cleaned.slice(start, end + 1));
                 const q = typeof parsed.question === 'string' ? parsed.question : `Qu'est-ce que tu apprécies le PLUS chez ${character} dans « ${work} » ?`;
-                const opts = Array.isArray(parsed.options) && parsed.options.length >= 5 ? parsed.options.slice(0, 5) : defaultOpts;
-                const lines = opts.map((o, i) => `${String.fromCharCode(65 + i)}. ${o}`);
-                return { question: `${q}\n\n${lines.join('\n')}`, options: opts };
+                const rawOpts = Array.isArray(parsed.options) && parsed.options.length >= 5 ? parsed.options.slice(0, 5) : null;
+                // VALIDATION : rejeter si au moins une option a moins de 5 mots (label générique)
+                if (!rawOpts || !rawOpts.every(hasEnoughWords))
+                    return null;
+                const lines = rawOpts.map((o, i) => `${String.fromCharCode(65 + i)}. ${o}`);
+                return { question: `${q}\n\n${lines.join('\n')}`, options: rawOpts };
             }
             catch {
                 return null;
             }
         };
         let completion = await callOpenAI({
+            model: 'gpt-4.1',
             messages: [
                 {
                     role: 'system',
-                    content: `Tu génères une question de type "traits" pour un personnage d'une œuvre. La question doit mentionner explicitement l'œuvre et le personnage (ex: "chez ${character} dans « ${work} »"). Réponds UNIQUEMENT en JSON : {"question":"...","options":["A","B","C","D","E"]}. Les 5 options doivent être spécifiques à ${character} dans ${work}. Pas de markdown.`,
+                    content: `Tu es un expert en fiction (séries TV, films, livres, manga, anime). Tu génères une question de traits pour ${character} dans « ${work} ».
+
+🎯 MISSION : Proposer 5 traits de caractère RÉCURRENTS qui définissent ${character} tout au long de l'œuvre.
+
+🔒 RÈGLE FONDAMENTALE — TRAITS RÉCURRENTS, PAS ÉVÉNEMENTS ISOLÉS :
+Les 5 options décrivent des PATTERNS DE COMPORTEMENT habituels et récurrents de ${character}.
+Ce sont des façons d'ÊTRE et d'AGIR typiques du personnage, observables tout au long de l'œuvre.
+PAS des scènes spécifiques. PAS des événements de l'intrigue. PAS des moments uniques.
+
+❌ INTERDIT — NE JAMAIS FAIRE :
+- Citer un événement précis de l'intrigue (mort d'un personnage, trahison, révélation, épisode final)
+- Mentionner la mort, la disparition ou une crise particulière d'un autre personnage
+- Référencer un arc narratif spécifique, une saison, ou un moment clé
+- Utiliser le nom d'un autre personnage dans le contexte d'un événement précis (ex: "Console X après la mort de Y")
+- Spoiler : ne JAMAIS révéler des événements de l'intrigue
+
+✅ FORMAT OBLIGATOIRE — CE QU'IL FAUT FAIRE :
+- Chaque option = un comportement HABITUEL exprimé comme une phrase active (8 à 16 mots)
+- Précision canonique : spécifique à ${character}, jamais recyclable pour un autre personnage
+- 5 dimensions DIFFÉRENTES : émotionnelle, stratégique, relationnelle, morale, comportementale
+- Basé sur la PERSONNALITÉ globale du personnage, pas un moment isolé
+
+✅ EXEMPLES DE FORMAT CORRECT (généralités comportementales) :
+"Anticipe les besoins des autres avant qu'ils ne les formulent eux-mêmes"
+"Refuse de trahir ses principes, même sous pression extrême"
+"Utilise l'humour pour désamorcer les tensions en toutes circonstances"
+"Maîtrise l'information comme levier de pouvoir silencieux"
+"Confronte les situations difficiles en protégeant les relations importantes"
+"Avance sans demander la permission, quitte à contourner les règles"
+
+❌ EXEMPLES DE FORMAT INTERDIT (événements isolés / spoilers) :
+"Console Harvey après la mort de sa mère avec empathie et tact" ← événement isolé + spoiler
+"Révèle à Mike le secret de Pearson dans le finale" ← moment d'intrigue spécifique
+"Sacrifie sa carrière pour sauver un ami lors de la saison 4" ← arc narratif précis
+
+La question mentionne explicitement le personnage et l'œuvre.
+Réponds UNIQUEMENT en JSON valide : {"question":"...","options":["phrase1","phrase2","phrase3","phrase4","phrase5"]}.
+Pas de markdown, pas de numéros dans les options.`,
                 },
-                { role: 'user', content: `Œuvre : ${work}. Personnage : ${character}.` },
+                { role: 'user', content: `Œuvre : « ${work} ». Personnage : ${character}. Génère les 5 traits canoniques.` },
             ],
-            temperature: 0.4,
+            temperature: 0.7,
         });
         let out = parseResponse(completion);
         if (out)
             return out;
+        // Retry avec format encore plus contraint
         completion = await callOpenAI({
+            model: 'gpt-4.1',
             messages: [
-                { role: 'system', content: `Réponds UNIQUEMENT en JSON : {"question":"Qu'est-ce que tu apprécies chez ${character} dans ${work} ?","options":["opt1","opt2","opt3","opt4","opt5"]}. 5 options spécifiques au personnage.` },
-                { role: 'user', content: `Œuvre : ${work}. Personnage : ${character}.` },
+                {
+                    role: 'system',
+                    content: `Expert en fiction. Réponds UNIQUEMENT en JSON : {"question":"Qu'est-ce que tu apprécies le PLUS chez ${character} dans « ${work} » ?","options":["phrase de 8-16 mots option A","phrase de 8-16 mots option B","phrase de 8-16 mots option C","phrase de 8-16 mots option D","phrase de 8-16 mots option E"]}.
+Les 5 phrases décrivent des TRAITS DE PERSONNALITÉ RÉCURRENTS de ${character} dans « ${work} » — jamais des événements isolés ou des spoilers. Chaque option est unique, spécifique à ce personnage, et décrit un comportement habituel observé tout au long de l'œuvre.`,
+                },
+                { role: 'user', content: `Œuvre : « ${work} ». Personnage : ${character}.` },
             ],
-            temperature: 0.2,
+            temperature: 0.4,
         });
         out = parseResponse(completion);
         if (out)
@@ -1420,6 +1478,10 @@ Génère 5 TRAITS SPÉCIFIQUES À CE PERSONNAGE, qui :
 - correspondent à son rôle réel dans l'œuvre,
 - couvrent des dimensions différentes (émotionnelle, stratégique, relationnelle, morale, comportementale),
 - ne sont PAS recyclables pour un autre personnage.
+
+⚠️ FORMAT TRAITS (CRITIQUE — RÈGLE ABSOLUE) : Chaque option A/B/C/D/E DOIT être une PHRASE VERBALE de 6 à 14 mots.
+✅ EXEMPLES : "Trace son chemin quoi qu'il en coûte, sans jamais reculer" / "N'hésite pas à manipuler pour atteindre ses objectifs" / "Protège farouchement ceux qu'il aime, même au prix de compromis"
+❌ INTERDITS : "Ambitieux" / "Loyal" / "Ingéniosité" / "Charisme" (UN MOT = INVALIDE, réponse rejetée)
 
 ⚠️ CRITIQUE : Les traits pour le Personnage A de l'Œuvre #3 doivent être DIFFÉRENTS des traits pour le Personnage B de l'Œuvre #3, qui doivent être DIFFÉRENTS des traits pour le Personnage A de l'Œuvre #2.
 Chaque personnage a ses propres traits uniques.
@@ -1574,6 +1636,10 @@ Génère 5 TRAITS SPÉCIFIQUES À CE PERSONNAGE, qui :
 - correspondent à son rôle réel dans l'œuvre,
 - couvrent des dimensions différentes (émotionnelle, stratégique, relationnelle, morale, comportementale),
 - ne sont PAS recyclables pour un autre personnage.
+
+⚠️ FORMAT TRAITS (CRITIQUE — RÈGLE ABSOLUE) : Chaque option A/B/C/D/E DOIT être une PHRASE VERBALE de 6 à 14 mots.
+✅ EXEMPLES : "Trace son chemin quoi qu'il en coûte, sans jamais reculer" / "N'hésite pas à manipuler pour atteindre ses objectifs" / "Protège farouchement ceux qu'il aime, même au prix de compromis"
+❌ INTERDITS : "Ambitieux" / "Loyal" / "Ingéniosité" / "Charisme" (UN MOT = INVALIDE, réponse rejetée)
 
 ⚠️ CRITIQUE : Les traits pour le Personnage A de l'Œuvre #3 doivent être DIFFÉRENTS des traits pour le Personnage B de l'Œuvre #3, qui doivent être DIFFÉRENTS des traits pour le Personnage A de l'Œuvre #2.
 Chaque personnage a ses propres traits uniques.
@@ -1805,6 +1871,11 @@ Génère 5 TRAITS SPÉCIFIQUES À CE PERSONNAGE, qui :
 - couvrent des dimensions différentes (émotionnelle, stratégique, relationnelle, morale, comportementale),
 - ne sont PAS recyclables pour un autre personnage.
 
+⚠️ FORMAT TRAITS (CRITIQUE — RÈGLE ABSOLUE) : Chaque option A/B/C/D/E DOIT être une PHRASE VERBALE de 6 à 14 mots.
+La phrase décrit un COMPORTEMENT EN ACTION du personnage — jamais un adjectif ou un nom seul.
+✅ EXEMPLES OBLIGATOIRES : "Trace son chemin quoi qu'il en coûte, sans jamais reculer" / "N'hésite pas à manipuler ceux qui l'entourent pour atteindre son but" / "Protège farouchement ceux qu'il aime, même au prix de compromis moraux"
+❌ EXEMPLES INTERDITS : "Ambitieux" / "Loyal" / "Ingéniosité" / "Charisme" / "Vengeance" (UN MOT = INVALIDE)
+
 Format : A / B / C / D / E (1 seule réponse possible)
 
 ÉTAPE 4 — MICRO-RÉCAP ŒUVRE (factuel, 1-2 lignes) :
@@ -1993,58 +2064,100 @@ Format de sortie OBLIGATOIRE :
      * - Validation simple : structure JSON + marqueurs expérientiels
      */
     async generateMirror2B(candidate, works, coreWork, onChunk, onUx) {
-        const block2B = candidateStore.getBlock2BAnswers(candidate);
-        const block2BAnswers = (block2B?.answers ?? []).map(a => (a || '').trim()).filter(a => a.length > 0);
-        console.log('[BLOC2B][NEW_ARCHITECTURE] Génération miroir en 3 étapes (interprétation + angle + rendu)');
-        console.log('[BLOC2B] Réponses utilisateur:', block2BAnswers.length);
-        // UX FAST — occupation pendant analyse (1 message statique max)
+        console.log('[BLOC2B][MIROIR] Génération miroir projectif enrichi (GPT-4.1 direct)');
+        // UX FAST — occupation pendant analyse
         let occupationTimer = null;
         if (onUx) {
             occupationTimer = setTimeout(() => {
-                onUx('⏳ Je cherche ce qui relie vraiment tes réponses.\n\n');
+                onUx('⏳ Je lis ce que tes choix disent de toi.\n\n');
             }, 1500);
         }
         try {
-            // ÉTAPE 1 — INTERPRÉTATION (FROIDE, LOGIQUE)
-            console.log('[BLOC2B][ETAPE1] Génération structure interprétative...');
-            const additionalContext = `ŒUVRES DU CANDIDAT :
-- Œuvre #3 : ${works[2] || 'N/A'}
-- Œuvre #2 : ${works[1] || 'N/A'}
-- Œuvre #1 : ${works[0] || 'N/A'}
-- Œuvre noyau : ${coreWork}`;
-            const structure = await generateInterpretiveStructure(block2BAnswers, 'block2b', additionalContext);
-            console.log('[BLOC2B][ETAPE1] Structure générée:', {
-                hypothese_centrale: structure.hypothese_centrale.substring(0, 50) + '...',
-                mecanisme: structure.mecanisme.substring(0, 50) + '...',
-            });
-            // ÉTAPE 2 — DÉCISION D'ANGLE (OBLIGATOIRE)
-            console.log('[BLOC2B][ETAPE2] Sélection angle mentor...');
-            const mentorAngle = await selectMentorAngle(structure);
+            // Reconstituer l'historique BLOC 2 (questions + réponses) pour donner un contexte riche au LLM
+            const block2History = (candidate.conversationHistory || [])
+                .filter(m => m.block === 2 && m.content?.trim())
+                .map(m => `${m.role === 'user' ? 'Candidat' : 'REVELIOM'}: ${m.content.trim()}`)
+                .join('\n\n');
+            const block2A = candidate.block2Answers?.block2A;
+            const contextSummary = `ŒUVRES CHOISIES :
+- Médium : ${block2A?.medium || 'N/A'}
+- 3 œuvres favorites : ${block2A?.preference || works.join(', ')}
+- Œuvre noyau (la plus importante) : ${coreWork || block2A?.coreWork || 'N/A'}`;
+            const systemPrompt = `Tu es REVELIOM — un mentor analyste qui lit ce que les projections narratives révèlent sur le fonctionnement d'une personne.
+
+CONTEXTE BLOC 2B :
+Le candidat vient de répondre à des questions sur ses œuvres préférées (films, séries, livres) : pourquoi il les aime, quels personnages le touchent le plus, quels traits spécifiques il admire chez eux.
+
+Ces choix sont des PROJECTIONS INCONSCIENTES : ils révèlent le rapport au pouvoir, à la compétence, à la loyauté, à la responsabilité, à la façon dont la personne veut opérer dans le monde.
+
+⚠️ FORMAT OBLIGATOIRE — 4 SECTIONS :
+
+1️⃣ Lecture implicite
+[CE QUE TU CHOISIS COMME UNIVERS] — 2 phrases qui révèlent ce que le type d'œuvres choisi dit sur le rapport à l'environnement, à l'ambition, à la structure du monde, au type de pouvoir qui attire.
+
+2️⃣ Ce que tes personnages révèlent
+[LES ARCHÉTYPES QUE TU VALORISES] — 2-3 phrases sur l'archétype des personnages choisis : leur position dans le groupe (meneur discret, exécutant brillant, conseiller stratégique, rebelle...), leur rapport à l'autorité et à la loyauté, ce que ça dit sur la façon dont la personne veut elle-même opérer.
+
+3️⃣ Ce que tes traits choisis révèlent
+[LES VALEURS PROFONDES] — 2-3 phrases sur la convergence des traits admirés : ce qu'ils disent sur les vraies valeurs, le mode opératoire implicite préféré, ce qui est profondément recherché sans forcément être formulé.
+
+4️⃣ La lecture unifiée
+[CE QUE TOUT ÇA DIT DE TOI] — 2-3 phrases de synthèse projective : ce que l'ensemble révèle sur le fonctionnement réel, les aspirations profondes, ce qui est recherché professionnellement ou dans les relations.
+
+Terminer par :
+"Dis-moi si ça te parle, ou s'il y a une nuance importante que je n'ai pas vue."
+
+RÈGLES ABSOLUES :
+- Toujours en "tu/ton/ta/tes" (jamais "il/elle/la personne/le candidat")
+- Incarné, précis, profond — pas de coaching générique
+- Chaque section doit être substantielle (pas des platitudes)
+- Révéler le mécanisme de fonctionnement implicite, pas des traits de surface
+- Basé EXACTEMENT sur les données ci-dessous (œuvres, personnages, traits choisis)
+- INTERDICTION de répéter les réponses — les INTERPRÉTER en profondeur`;
+            const userPrompt = `${contextSummary}
+
+ÉCHANGE COMPLET BLOC 2 (questions + réponses du candidat) :
+${block2History || 'Aucun historique disponible'}
+
+Génère le miroir projectif en suivant EXACTEMENT le format en 4 sections (1️⃣ 2️⃣ 3️⃣ 4️⃣).`;
             if (occupationTimer) {
                 clearTimeout(occupationTimer);
                 occupationTimer = null;
             }
-            console.log('[BLOC2B][ETAPE2] Angle mentor sélectionné:', mentorAngle.substring(0, 80) + '...');
-            // ÉTAPE 3 — RENDU MENTOR INCARNÉ (BLOC 2B : pas de format 1️⃣2️⃣3️⃣, pas de révélation anticipée)
-            console.log('[BLOC2B][ETAPE3] Rendu mentor incarné...');
-            const mentorText = await renderMentorStyle(mentorAngle, 'block2b', onChunk);
-            console.log('[BLOC2B][ETAPE3] Texte mentor généré');
-            // VALIDATION FINALE (FORMAT SYNTHÈSE 2B)
-            const validation = validateSynthesis2B(mentorText);
-            if (validation.valid) {
-                console.log('[BLOC2B][SUCCESS] Miroir généré avec succès (nouvelle architecture)');
-                return mentorText;
+            let mentorText = '';
+            if (onChunk) {
+                const { fullText } = await callOpenAIStream({
+                    model: 'gpt-4.1',
+                    messages: [
+                        { role: 'system', content: systemPrompt },
+                        { role: 'user', content: userPrompt },
+                    ],
+                    temperature: 0.75,
+                    max_tokens: 600,
+                }, onChunk);
+                mentorText = fullText.trim();
             }
             else {
-                console.warn('[BLOC2B][WARN] Format synthèse invalide, mais texte servi (fail-soft):', validation.error);
-                return mentorText;
+                const completion = await callOpenAI({
+                    model: 'gpt-4.1',
+                    messages: [
+                        { role: 'system', content: systemPrompt },
+                        { role: 'user', content: userPrompt },
+                    ],
+                    temperature: 0.75,
+                });
+                mentorText = (typeof completion === 'string' ? completion : '').trim();
             }
+            if (!mentorText)
+                throw new Error('Empty mirror text from GPT-4.1');
+            console.log('[BLOC2B][MIROIR] Miroir projectif généré avec succès');
+            return mentorText;
         }
         catch (error) {
             if (occupationTimer)
                 clearTimeout(occupationTimer);
-            console.error('[BLOC2B][ERROR] Erreur nouvelle architecture, fallback ancienne méthode:', error);
-            throw new Error(`Failed to generate mirror with new architecture: ${error}`);
+            console.error('[BLOC2B][MIROIR][ERROR]', error);
+            throw new Error(`Failed to generate BLOC 2B mirror: ${error}`);
         }
     }
 }

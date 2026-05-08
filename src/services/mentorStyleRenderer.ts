@@ -9,6 +9,56 @@ const REVELIOM_BLOCK_TYPES: BlockType[] = ['block1', 'block3', 'block4', 'block5
 const VALIDATION_OUVERTE = 'Dis-moi si ça te parle, ou s\'il y a une nuance importante que je n\'ai pas vue.';
 
 /**
+ * Configuration par bloc — forme et exemple canonique de la déduction.
+ * Chaque bloc a sa propre "structure vivante" pour éviter que tous les miroirs
+ * sonnent pareil avec "Ce moteur tient tant que…".
+ */
+type BlocDeductionConfig = { sujet: string; forme: string; exemple: string };
+
+const BLOC_DEDUCTION_CONFIG: Record<string, BlocDeductionConfig> = {
+  block1: {
+    sujet: 'moteur',
+    forme: '« Ce moteur tient tant que … — lorsque … , … »',
+    exemple: '« Ce moteur tient tant que tu sens que ton action change réellement quelque chose pour quelqu\'un — lorsque ce lien se dilue, ton engagement perd de sa force. »',
+  },
+  block3: {
+    sujet: 'exigence',
+    forme: '« Cette exigence s\'exprime pleinement quand … — elle se retourne contre toi quand … »',
+    exemple: '« Cette exigence s\'exprime pleinement quand tu as la main sur les règles du jeu et que tu peux agir selon tes propres critères — elle se retourne contre toi quand on t\'oblige à faire semblant que les règles ne comptent pas. »',
+  },
+  block4: {
+    sujet: 'compétence',
+    forme: '« Cette compétence s\'active vraiment quand … — elle se neutralise quand … »',
+    exemple: '« Cette compétence s\'active vraiment quand tu sais précisément à quoi elle sert et que le contexte lui laisse une prise réelle — elle se neutralise quand le cadre ne te donne aucun levier concret. »',
+  },
+  block5: {
+    sujet: 'trajectoire',
+    forme: '« Cette trajectoire avance quand … — elle dérive quand … »',
+    exemple: '« Cette trajectoire avance quand ce que tu construis te dépasse et a du sens au-delà de toi — elle dérive quand l\'horizon se réduit à une accumulation de tâches sans direction claire. »',
+  },
+  block6: {
+    sujet: 'cadre pratique',
+    forme: '« Ce cadre te libère quand … — il te pèse quand … »',
+    exemple: '« Ce cadre te libère quand les règles pratiques s\'adaptent à ton rythme réel et te laissent de la respiration — il te pèse quand les contraintes s\'accumulent sans contrepartie visible. »',
+  },
+  block7: {
+    sujet: 'identité professionnelle',
+    forme: '« Cette identité s\'affirme quand … — elle se brouille quand … »',
+    exemple: '« Cette identité s\'affirme quand tu exerces quelque chose que tu maîtrises vraiment et que l\'environnement te reconnaît pour ça — elle se brouille quand le rôle qu\'on t\'assigne ne correspond pas à ce que tu sais réellement faire. »',
+  },
+  block8: {
+    sujet: 'rapport à l\'autorité',
+    forme: '« Ce rapport à l\'autorité fonctionne quand … — il se tend quand … »',
+    exemple: '« Ce rapport à l\'autorité fonctionne quand la confiance se construit dans les deux sens et que le cadre est lisible — il se tend quand la hiérarchie devient un rapport de force plutôt qu\'un appui. »',
+  },
+  block9: {
+    sujet: 'dynamique sociale',
+    forme: '« Cette dynamique sociale s\'épanouit quand … — elle s\'épuise quand … »',
+    exemple: '« Cette dynamique sociale s\'épanouit quand tu peux choisir tes interactions et que l\'environnement te laisse doser ta présence — elle s\'épuise quand le collectif t\'impose un rythme ou une intensité que tu n\'as pas décidés. »',
+  },
+};
+
+/**
  * Transposition 3ᵉ → 2ᵉ personne pour le rendu utilisateur (REVELIOM).
  * Purement stylistique, déterministe, sans impact sémantique.
  * L'angle reste en 3ᵉ personne en interne ; le texte affiché est toujours en "tu".
@@ -219,8 +269,9 @@ Incarnes cet angle en style mentor incarné. Tu n'as pas à expliquer, tu dois i
   throw new Error('Failed to render mentor style after retries');
 }
 
-const REVELIOM_DEDUCTION_SYSTEM = (positionalContext: string, mentorAngle: string) =>
-  `${positionalContext}Tu es un mentor. Tu reçois un ANGLE déjà formulé (lecture en creux : "Ce n'est probablement pas X, mais Y.").
+const REVELIOM_DEDUCTION_SYSTEM = (positionalContext: string, mentorAngle: string, blockType?: BlockType) => {
+  const cfg = (blockType && BLOC_DEDUCTION_CONFIG[blockType]) ?? BLOC_DEDUCTION_CONFIG.block1;
+  return `${positionalContext}Tu es un mentor. Tu reçois un ANGLE déjà formulé (lecture en creux : "Ce n'est probablement pas X, mais Y.").
 
 ⚠️ RÈGLE STRICTE — SECTIONS
 
@@ -232,31 +283,31 @@ const REVELIOM_DEDUCTION_SYSTEM = (positionalContext: string, mentorAngle: strin
 FORMAT OBLIGATOIRE — DÉDUCTION PERSONNALISÉE (NON NÉGOCIABLE)
 ═══════════════════════════════════════════════════════════════════
 
-Ta phrase DOIT suivre EXACTEMENT cette structure :
+Ta phrase DOIT suivre EXACTEMENT cette structure pour ce bloc (${cfg.sujet}) :
 
-« Ce moteur tient tant que … — lorsque … , … »
+${cfg.forme}
 
-• Première partie (après "tant que") : condition concrète où le moteur est vivant — en "tu", langage vécu.
+• Première partie : condition concrète où ce ${cfg.sujet} est vivant — en "tu", langage vécu.
 • Tiret long " — " (obligatoire).
-• Deuxième partie (après "lorsque") : ce qui dilue ou éteint — conséquence sur ton engagement.
+• Deuxième partie : ce qui dilue, éteint ou grippe — conséquence concrète sur ton fonctionnement.
 
 Ton : mentor, causal, incarné, vécu. Jamais psychologisant, jamais RH, jamais abstrait. Toujours en 2ᵉ personne (tu / te / ton).
 
-Exemple CANONIQUE :
-« Ce moteur tient tant que tu sens que ton action change réellement quelque chose pour quelqu'un — lorsque ce lien se dilue, ton engagement perd de sa force. »
+Exemple CANONIQUE pour ce bloc :
+${cfg.exemple}
 
 ❌ INTERDICTIONS ABSOLUES :
 - Ne PAS répéter ni reformuler l'angle (il est déjà en Lecture implicite).
 - Ne PAS lister des traits, ne PAS expliquer psychologiquement, ne PAS neutraliser.
-- Ne PAS produire de phrase qui ne suit pas la forme "Ce moteur tient tant que … — lorsque … , …".
-- Ne PAS employer "quand tu" en début de déduction.
+- Ne PAS produire de phrase qui ne suit pas la forme : ${cfg.forme}
 - Ne PAS employer "il est possible que", "tu sembles", "on voit que".
 - Ne PAS employer de concepts mous : motivation générale, personnalité, équilibre, etc.
 
 Angle (déjà utilisé en Lecture implicite — ne pas recopier) :
 ${mentorAngle}
 
-Produis UNIQUEMENT cette phrase (forme "Ce moteur tient tant que … — lorsque … , …"), sans numéro ni titre.`;
+Produis UNIQUEMENT cette phrase (${cfg.sujet}), sans numéro ni titre.`;
+};
 
 /**
  * Rendu REVELIOM avec Lecture implicite = angle brut (sans reformulation).
@@ -289,7 +340,7 @@ async function renderReveliomWithRawAngle(
         const { fullText: deductionStreamed } = await callOpenAIStream(
           {
             messages: [
-              { role: 'system', content: REVELIOM_DEDUCTION_SYSTEM(positionalContext, mentorAngle) },
+              { role: 'system', content: REVELIOM_DEDUCTION_SYSTEM(positionalContext, mentorAngle, blockType) },
               { role: 'user', content: 'Déduction personnalisée (une phrase, max 25 mots) :' },
             ],
             model: 'gpt-5.4-nano',
@@ -303,7 +354,7 @@ async function renderReveliomWithRawAngle(
       } else {
         const content = await callGemini({
           messages: [
-            { role: 'system', content: REVELIOM_DEDUCTION_SYSTEM(positionalContext, mentorAngle) },
+            { role: 'system', content: REVELIOM_DEDUCTION_SYSTEM(positionalContext, mentorAngle, blockType) },
             { role: 'user', content: 'Déduction personnalisée (une phrase, max 25 mots) :' },
           ],
           temperature: 0.8,

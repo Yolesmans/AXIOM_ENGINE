@@ -2,15 +2,9 @@ import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
-import OpenAI from 'openai';
+import { callGemini } from './geminiClient.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-if (!process.env.OPENAI_API_KEY) {
-    throw new Error('OPENAI_API_KEY is required but not found in environment variables');
-}
-const client = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
-});
 async function loadPromptFile(filename) {
     const promptsDir = join(__dirname, '../prompts');
     const filePath = join(promptsDir, filename);
@@ -40,22 +34,13 @@ export async function executeProfilPrompt(session, answers, systemDirective) {
     const fullSystemPrompt = systemDirective
         ? `${systemPrompt}\n\n${systemDirective}`
         : systemPrompt;
-    const response = await client.chat.completions.create({
-        model: 'gpt-4o-mini',
+    const content = await callGemini({
         messages: [
-            {
-                role: 'system',
-                content: fullSystemPrompt,
-            },
-            {
-                role: 'user',
-                content: userContent,
-            },
+            { role: 'system', content: fullSystemPrompt },
+            { role: 'user', content: userContent },
         ],
         temperature: 0.7,
     });
-    const content = response.choices[0]?.message?.content;
-    // FALLBACK OBLIGATOIRE : forcer une réponse si vide
     if (!content || content.trim() === '') {
         return 'Très bien. Continuons.';
     }
@@ -81,22 +66,13 @@ export async function executeMatchingPrompt(params) {
     const fullSystemPrompt = params.systemDirective
         ? `${systemPrompt}\n\n${params.systemDirective}`
         : systemPrompt;
-    const response = await client.chat.completions.create({
-        model: 'gpt-4o-mini',
+    const content = await callGemini({
         messages: [
-            {
-                role: 'system',
-                content: fullSystemPrompt,
-            },
-            {
-                role: 'user',
-                content: userContent,
-            },
+            { role: 'system', content: fullSystemPrompt },
+            { role: 'user', content: userContent },
         ],
         temperature: 0.7,
     });
-    const content = response.choices[0]?.message?.content;
-    // FALLBACK OBLIGATOIRE : forcer une réponse si vide
     if (!content || content.trim() === '') {
         return 'Très bien. Continuons.';
     }

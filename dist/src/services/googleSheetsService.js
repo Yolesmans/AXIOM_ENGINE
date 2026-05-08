@@ -2,6 +2,8 @@ import { google } from 'googleapis';
 import fs from 'fs';
 import { getPostConfig } from '../store/postRegistry.js';
 import { env } from '../env.js';
+// Mode mock pour tests E2E
+const GOOGLE_SHEETS_MOCK_ENABLED = process.env.GOOGLE_SHEETS_MOCK_ENABLED === 'true';
 function getStatusLabel(state, currentBlock) {
     switch (state) {
         case 'identity':
@@ -377,6 +379,16 @@ class GoogleSheetsLiveTrackingService {
         }
     }
     async updateLiveTracking(tenantId, posteId, row) {
+        // Mode mock pour tests E2E
+        if (GOOGLE_SHEETS_MOCK_ENABLED) {
+            console.log('[GOOGLE_SHEETS_MOCK] MOCK_SHEETS_WRITE_OK', {
+                sessionId: row.candidateId,
+                tenantId,
+                posteId,
+                payloadSize: JSON.stringify(row).length,
+            });
+            return;
+        }
         try {
             await this.initializeAuth();
             if (!this.sheets) {
@@ -419,6 +431,16 @@ class GoogleSheetsLiveTrackingService {
         }
     }
     async upsertLiveTracking(tenantId, posteId, row) {
+        // Mode mock pour tests E2E
+        if (GOOGLE_SHEETS_MOCK_ENABLED) {
+            console.log('[GOOGLE_SHEETS_MOCK] MOCK_SHEETS_WRITE_OK', {
+                sessionId: row.candidateId,
+                tenantId,
+                posteId,
+                payloadSize: JSON.stringify(row).length,
+            });
+            return;
+        }
         let spreadsheetId;
         let sheetName;
         let range;

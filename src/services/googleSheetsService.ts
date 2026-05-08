@@ -5,6 +5,9 @@ import type { LiveTrackingRow } from '../types/liveTracking.js';
 import { getPostConfig } from '../store/postRegistry.js';
 import { env } from '../env.js';
 
+// Mode mock pour tests E2E
+const GOOGLE_SHEETS_MOCK_ENABLED = process.env.GOOGLE_SHEETS_MOCK_ENABLED === 'true';
+
 function getStatusLabel(state: LiveTrackingRow['state'], currentBlock: number | null): string {
   switch (state) {
     case 'identity':
@@ -417,6 +420,17 @@ class GoogleSheetsLiveTrackingService {
   }
 
   async updateLiveTracking(tenantId: string, posteId: string, row: LiveTrackingRow): Promise<void> {
+    // Mode mock pour tests E2E
+    if (GOOGLE_SHEETS_MOCK_ENABLED) {
+      console.log('[GOOGLE_SHEETS_MOCK] MOCK_SHEETS_WRITE_OK', {
+        sessionId: row.candidateId,
+        tenantId,
+        posteId,
+        payloadSize: JSON.stringify(row).length,
+      });
+      return;
+    }
+    
     try {
       await this.initializeAuth();
       if (!this.sheets) {
@@ -463,6 +477,17 @@ class GoogleSheetsLiveTrackingService {
   }
 
   async upsertLiveTracking(tenantId: string, posteId: string, row: LiveTrackingRow): Promise<void> {
+    // Mode mock pour tests E2E
+    if (GOOGLE_SHEETS_MOCK_ENABLED) {
+      console.log('[GOOGLE_SHEETS_MOCK] MOCK_SHEETS_WRITE_OK', {
+        sessionId: row.candidateId,
+        tenantId,
+        posteId,
+        payloadSize: JSON.stringify(row).length,
+      });
+      return;
+    }
+    
     let spreadsheetId: string | undefined;
     let sheetName: string | undefined;
     let range: string | undefined;
